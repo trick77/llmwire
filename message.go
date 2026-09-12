@@ -268,6 +268,11 @@ type EmbedRequest struct {
 	// Dimensions shortens the returned vectors. Only the -3 generation accepts
 	// it; older models reject it outright.
 	Dimensions *int
+
+	// BestEffort demotes a capability refusal into a coercion plus a Warning, as
+	// on a chat request. It cannot rescue a malformed request: an empty input list
+	// or an empty string has nothing to send instead.
+	BestEffort bool
 }
 
 // EmbedResponse is a batch of vectors, in the order of the inputs that produced
