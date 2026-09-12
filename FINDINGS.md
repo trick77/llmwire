@@ -198,9 +198,10 @@ budget cap cannot tolerate; that is now ruled out for both. Z.ai's field is
 confirmed as `prompt_tokens_details.cached_tokens`, and its cache is live: this
 was the first non-zero value seen from it.
 
-The whole run — every probe in this document — cost **30 calls and roughly
-$0.008** at conservative upper-bound rates, well inside the $0.50 circuit
-breaker.
+The original run — every probe above the containment table — cost **30 calls
+and roughly $0.008** at conservative upper-bound rates. The containment probe
+adds **4 calls and roughly $0.025** per run, nearly all of it the ~10k-token
+prompt sent twice per vendor. Both well inside the $0.50 circuit breaker.
 
 ## Still open
 

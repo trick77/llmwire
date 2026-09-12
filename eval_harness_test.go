@@ -203,7 +203,9 @@ func loadDotEnv(path string) {
 		if !ok || v == "" {
 			continue
 		}
-		if _, set := os.LookupEnv(k); !set {
+		// Empty counts as unset, matching how endpoint.client reads it: an
+		// exported-but-empty name in a shell profile must not shadow the file.
+		if os.Getenv(k) == "" {
 			os.Setenv(k, v)
 		}
 	}

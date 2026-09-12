@@ -594,13 +594,15 @@ func TestProbe_CachedTokensAreInsidePromptTokens(t *testing.T) {
 
 			delta := c2 - c1
 			switch {
+			// The two inconclusive outcomes SKIP rather than pass: a green result
+			// must mean the containment rule was actually read off a delta.
 			case c2 == 0:
-				t.Logf("FINDING %s: no cached tokens on the second call. Either the prompt (%d tokens) "+
+				t.Skipf("FINDING %s: no cached tokens on the second call. Either the prompt (%d tokens) "+
 					"is under the cache minimum, the cache is off for this route, or the field is "+
 					"spelled differently — read the raw usage above for the vendor's own name. "+
 					"Inconclusive; the profile keeps the OpenAI-shape assumption.", tc.model, p2)
 			case delta <= 0:
-				t.Logf("FINDING %s: cached did not grow between calls (%d -> %d); the first call was "+
+				t.Skipf("FINDING %s: cached did not grow between calls (%d -> %d); the first call was "+
 					"already served from cache, so containment cannot be read off a delta. prompt "+
 					"%d -> %d. Inconclusive.", tc.model, c1, c2, p1, p2)
 			case p2 == p1:
@@ -621,13 +623,20 @@ func TestProbe_CachedTokensAreInsidePromptTokens(t *testing.T) {
 	}
 }
 
+// cacheProbeNonce makes the prompt unique to one process, so a rerun inside the
+// vendor's cache TTL starts cold again instead of finding call 1 already cached
+// and skipping. Fixed for the process, so the two calls within a run still share
+// a cache key.
+var cacheProbeNonce = time.Now().UnixNano()
+
 // cacheProbePrompt is a fixed prompt comfortably past the documented cache
-// minimums (1024 tokens on the OpenAI shape both vendors mirror). Deterministic
-// bytes, so two calls are the same cache key; numbered lines, so the tokenizer
-// cannot collapse it into a repeat.
+// minimums (1024 tokens on the OpenAI shape both vendors mirror). The same bytes
+// on both calls of a run, so they share a cache key; numbered lines, so the
+// tokenizer cannot collapse it into a repeat.
 func cacheProbePrompt() string {
 	var b strings.Builder
-	b.WriteString("The lines below are filler for a caching measurement. Ignore them and reply with the single word: ok\n\n")
+	fmt.Fprintf(&b, "Measurement %d. The lines below are filler for a caching measurement. "+
+		"Ignore them and reply with the single word: ok\n\n", cacheProbeNonce)
 	for i := 1; i <= 400; i++ {
 		fmt.Fprintf(&b, "Line %d: the quick brown fox number %d jumps over the lazy dog number %d.\n", i, i*7, i*13)
 	}
