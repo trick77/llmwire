@@ -178,6 +178,17 @@ type Embedding struct {
 	// returned vectors. Only the -3 generation does; older models reject it
 	// outright, so this cannot be inferred from the endpoint.
 	Dimensions bool `yaml:"dimensions"`
+	// DefaultDimensions is the length of a vector this model returns when the
+	// dimensions parameter is not sent. Required on an embeddings profile.
+	//
+	// It is here because it is a property of the MODEL, and because the callers
+	// need it before they ever make a call: a vector column, a similarity index
+	// and a stored corpus are all built to one width, and a model swapped for one
+	// of a different width silently invalidates every row already written. An
+	// application carrying its own copy of this number has two sources of truth
+	// for one fact, and nothing to compare them against — which is precisely the
+	// footgun this field removes.
+	DefaultDimensions int `yaml:"default_dimensions"`
 }
 
 // Limits are the model's context and output bounds, in tokens.
@@ -409,6 +420,14 @@ func (p Profile) validate() error {
 		case p.Output.JSONObject || p.Output.JSONSchema || p.Output.StrictSchema:
 			return bad("an embeddings profile must not declare structured output")
 		}
+		// Required, not optional. A caller sizes a vector column and an index to
+		// this number before it ever makes a call, so leaving it absent would push
+		// the figure back into every application that uses the model — which is
+		// the duplication this field exists to end.
+		if p.Embedding.DefaultDimensions <= 0 {
+			return bad("an embeddings profile needs a positive default_dimensions; " +
+				"a caller sizes its vector storage to it before the first call")
+		}
 		if p.Cost != nil {
 			if err := p.Cost.validate(p); err != nil {
 				return err
@@ -418,7 +437,7 @@ func (p Profile) validate() error {
 		// it rather than returning early.
 		return p.validateLimits()
 	}
-	if p.Embedding.Dimensions {
+	if p.Embedding.Dimensions || p.Embedding.DefaultDimensions != 0 {
 		return bad("a chat profile must not declare embedding settings")
 	}
 

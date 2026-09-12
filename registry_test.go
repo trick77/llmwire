@@ -387,8 +387,12 @@ func TestNewRegistry_EmbeddingsProfileRejectsChatCapabilities(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a validation error")
 	}
-	if !strings.Contains(err.Error(), "embeddings profile") {
-		t.Errorf("error = %v", err)
+	// "must not declare", not merely "embeddings profile": every refusal an
+	// embeddings profile can earn mentions the latter, including the missing
+	// default_dimensions this fixture also lacks, so the looser check would pass
+	// with the guard under test deleted.
+	if !strings.Contains(err.Error(), "must not declare") {
+		t.Errorf("error = %v, want the capability guard, not a later check", err)
 	}
 }
 
@@ -748,8 +752,11 @@ func TestNewRegistry_EmbeddingsGuardIsComplete(t *testing.T) {
 			if err == nil {
 				t.Fatalf("an embeddings profile declaring %s should be refused", tc.name)
 			}
-			if !strings.Contains(err.Error(), "embeddings profile") {
-				t.Errorf("error = %v", err)
+			// The guard's own wording, so a deleted case cannot be masked by the
+			// missing-default_dimensions refusal this fixture would otherwise
+			// fall through to — which also says "embeddings profile".
+			if !strings.Contains(err.Error(), "must not declare") {
+				t.Errorf("error = %v, want the %s guard itself", err, tc.name)
 			}
 		})
 	}
@@ -757,11 +764,15 @@ func TestNewRegistry_EmbeddingsGuardIsComplete(t *testing.T) {
 
 // Limits are checked on embeddings profiles too, which an early return skipped.
 func TestNewRegistry_EmbeddingsLimitsAreStillChecked(t *testing.T) {
+	// A valid embedding block, so the limits check is what this fixture reaches:
+	// without it the profile is refused earlier, for a missing default_dimensions,
+	// and the test would pass while proving nothing about limits.
 	doc := `profiles:
   - id: e
     endpoint: embeddings
     wire_model_id: e
     verified: measured
+    embedding: {default_dimensions: 1536}
     limits: {context: 100, max_output: 200}
 `
 	_, err := NewRegistry([]byte(doc))

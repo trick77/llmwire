@@ -321,8 +321,14 @@ profiles:
       context: 8191
     # Only the -3 generation takes the dimensions parameter; older embedding
     # models reject it outright, so this cannot be inferred from the endpoint.
+    #
+    # default_dimensions is what a caller builds its vector column and index to.
+    # Full-length vectors from this model are unit length; a caller that shortens
+    # one by hand must renormalise, which is why the dimensions PARAMETER is the
+    # supported way to get a shorter vector.
     embedding:
       dimensions: true
+      default_dimensions: 1536
     # One lane: there is no completion side to an embeddings call, and the other
     # three lanes must stay ABSENT rather than 0, so nothing reads "measured
     # free" where the truth is "no such lane".
@@ -331,11 +337,8 @@ profiles:
       source_url: https://developers.openai.com/api/docs/pricing
       verified_on: 2026-09-12
     notes: >-
-      1536 dimensions by default. Over-length input is rejected, never
-      truncated: at most 2048 inputs per request and 300000 tokens summed across
-      them. Full-length vectors are unit length; a client that truncates one by
-      hand must renormalise, which is why the dimensions parameter is the
-      supported way to shorten.
+      Over-length input is rejected, never truncated: at most 2048 inputs per
+      request and 300000 tokens summed across them.
 
   - id: text-embedding-3-large
     endpoint: embeddings
@@ -347,8 +350,9 @@ profiles:
       context: 8191
     embedding:
       dimensions: true
+      default_dimensions: 3072
     cost:
       input: 0.13
       source_url: https://developers.openai.com/api/docs/pricing
       verified_on: 2026-09-12
-    notes: 3072 dimensions by default. Same request limits as the -small model.
+    notes: Same request limits as the -small model.

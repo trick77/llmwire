@@ -246,6 +246,7 @@ func TestCostBlock_LoadRefusals(t *testing.T) {
     endpoint: embeddings
     wire_model_id: e
     verified: measured
+    embedding: {default_dimensions: 1536}
     cost:
       input: 0.02
       output: 0.10
@@ -259,6 +260,7 @@ func TestCostBlock_LoadRefusals(t *testing.T) {
     endpoint: embeddings
     wire_model_id: e
     verified: measured
+    embedding: {default_dimensions: 1536}
     cost:
 ` + goodProvenance,
 			want: "input rate is required",
@@ -487,13 +489,66 @@ func TestReasoning_BudgetParamIsControlSpecific(t *testing.T) {
 }
 
 // The embedding block is embeddings-only, the mirror of the guard that keeps
-// chat knobs off an embeddings profile.
+// chat knobs off an embeddings profile. Both sub-keys are checked: a guard that
+// covers one reads as complete while leaving a hole.
 func TestEmbedding_BlockIsRefusedOnAChatProfile(t *testing.T) {
-	_, err := NewRegistry([]byte(chatHead + "    embedding: {dimensions: true}\n"))
-	if err == nil {
-		t.Fatal("a chat profile declaring embedding settings should be refused")
+	for _, block := range []string{
+		"    embedding: {dimensions: true}\n",
+		"    embedding: {default_dimensions: 1536}\n",
+	} {
+		_, err := NewRegistry([]byte(chatHead + block))
+		if err == nil {
+			t.Fatalf("a chat profile declaring %s should be refused", strings.TrimSpace(block))
+		}
+		if !strings.Contains(err.Error(), "must not declare embedding") {
+			t.Errorf("error = %v", err)
+		}
 	}
-	if !strings.Contains(err.Error(), "must not declare embedding") {
+}
+
+// default_dimensions is required, because a caller sizes its vector column and
+// index to it BEFORE the first call. Absent, the number goes back to living in
+// every application that uses the model — two sources of truth for one fact,
+// with nothing to compare them against.
+func TestEmbedding_DefaultDimensionsIsRequired(t *testing.T) {
+	doc := `profiles:
+  - id: e
+    endpoint: embeddings
+    wire_model_id: e
+    verified: measured
+    limits: {context: 8191}
+`
+	_, err := NewRegistry([]byte(doc))
+	if err == nil {
+		t.Fatal("an embeddings profile without default_dimensions should be refused")
+	}
+	if !strings.Contains(err.Error(), "default_dimensions") {
 		t.Errorf("error = %v", err)
+	}
+
+	if _, err := NewRegistry([]byte(doc + "    embedding: {default_dimensions: 768}\n")); err != nil {
+		t.Errorf("a stated default_dimensions should load: %v", err)
+	}
+	if _, err := NewRegistry([]byte(doc + "    embedding: {default_dimensions: -1}\n")); err == nil {
+		t.Error("a negative default_dimensions should be refused")
+	}
+}
+
+// The shipped embedding profiles carry the width their vendor documents. A
+// caller builds storage to this, so a wrong number here is a corpus that has to
+// be rebuilt rather than an error anyone sees at the time.
+func TestDefault_EmbeddingDimensionsMatchTheVendor(t *testing.T) {
+	reg := Default()
+	for id, want := range map[string]int{
+		"text-embedding-3-small": 1536,
+		"text-embedding-3-large": 3072,
+	} {
+		p := mustLookup(t, reg, id)
+		if p.Embedding.DefaultDimensions != want {
+			t.Errorf("%s default_dimensions = %d, want %d", id, p.Embedding.DefaultDimensions, want)
+		}
+		if !p.Embedding.Dimensions {
+			t.Errorf("%s should accept the dimensions parameter", id)
+		}
 	}
 }
