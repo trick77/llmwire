@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Backend (build + test)
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 — hack/patch-coverage.sh diffs the branch against the PR
+      # base, which needs real history. The default shallow checkout leaves the
+      # base ref unresolvable and the gate exits 2.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # go-version-file rather than a pinned version, so the CI toolchain cannot
+      # drift from what the module itself declares.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install diff-cover==10.3.0
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+      # Hooks only protect the machine they are installed on and are never
+      # shared by git, so the same scan runs here over the whole tracked tree.
+      - name: Secret scan
+        run: ./hack/secret-scan.sh
+      - run: go vet ./...
+      - run: go build ./...
+      - run: mkdir -p coverage
+      # The race detector needs cgo, so CGO_ENABLED is forced on for the test
+      # run regardless of what the environment defaults to.
+      #
+      # -coverpkg=./... attributes coverage across package boundaries: code
+      # exercised only by another package's tests is otherwise reported as
+      # uncovered.
+      - run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage/backend.out ./...
+        env:
+          CGO_ENABLED: "1"
+      # Go exposes no line metric — `go tool cover` reports statements only — so
+      # the line percentage comes from a Cobertura conversion of the profile.
+      # That also merges the duplicate blocks -coverpkg emits, one set per test
+      # binary, which a naive sum over the raw profile gets badly wrong.
+      - run: go run github.com/boumenot/gocover-cobertura@v1.5.0 < coverage/backend.out > coverage/backend.xml
+      # A pull_request build checks out the merge ref, so
+      # refs/remotes/origin/<base> is not guaranteed to exist even with
+      # fetch-depth: 0. Fetch it explicitly before the gates diff against it.
+      - name: Fetch base ref
+        run: git fetch --no-tags origin +refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+      # The floor gate runs first: when a PR drops the project below the floor
+      # the absolute number is the more actionable failure, and reporting it
+      # before patch coverage keeps the log readable.
+      - run: ./hack/coverage-gate.sh backend
+      - name: Backend patch coverage
+        run: ./hack/patch-coverage.sh "origin/${{ github.base_ref || 'master' }}"
