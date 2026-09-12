@@ -1,6 +1,7 @@
 package llmwire
 
 import (
+	"bytes"
 	_ "embed"
 	"fmt"
 	"sort"
@@ -77,8 +78,8 @@ func NewRegistry(doc []byte) (*Registry, error) {
 	seen := map[string]bool{}
 
 	for i, node := range file.Profiles {
-		var p Profile
-		if err := node.Decode(&p); err != nil {
+		p, err := decodeStrict(node)
+		if err != nil {
 			return nil, fmt.Errorf("llmwire: profile #%d: %w", i, err)
 		}
 		if p.ID == "" {
@@ -88,14 +89,22 @@ func NewRegistry(doc []byte) (*Registry, error) {
 			return nil, fmt.Errorf("llmwire: duplicate profile id %q", p.ID)
 		}
 		seen[p.ID] = true
-		entries = append(entries, decodedEntry{profile: p, keys: mappingKeys(node)})
+		entries = append(entries, decodedEntry{profile: p, node: node})
 	}
 
 	// Index the unbased profiles, which are the only legal bases.
+	//
+	// Defaults are applied HERE, before anything inherits from them. Resolving
+	// first and defaulting afterwards looks equivalent and is not: a base that
+	// omits wire_model_id would hand the derived entry an empty one, which the
+	// derived entry then fills from its OWN id — so a gateway's registry key
+	// would go on the wire as the model name, with no error anywhere.
 	bases := map[string]Profile{}
 	for _, e := range entries {
 		if e.profile.Base == "" {
-			bases[e.profile.ID] = e.profile
+			base := e.profile
+			applyDefaults(&base)
+			bases[base.ID] = base
 		}
 	}
 
@@ -115,7 +124,7 @@ func NewRegistry(doc []byte) (*Registry, error) {
 				return nil, fmt.Errorf("llmwire: profile %q bases on %q, which does not exist",
 					p.ID, p.Base)
 			}
-			if err := checkDerivedKeys(p.ID, e.keys); err != nil {
+			if err := checkDerivedKeys(p.ID, e.node); err != nil {
 				return nil, fmt.Errorf("llmwire: %w", err)
 			}
 			merged, err := p.resolve(base)
@@ -134,13 +143,13 @@ func NewRegistry(doc []byte) (*Registry, error) {
 	return reg, nil
 }
 
-// decodedEntry pairs a decoded profile with the YAML keys the entry actually
-// set. The key list is kept because distinguishing "said nothing" from "said
-// false" is impossible once a value has been decoded into a struct, and that
-// distinction is what the derived-key check rests on.
+// decodedEntry pairs a decoded profile with the YAML node it came from. The
+// node is kept because distinguishing "said nothing" from "said false" is
+// impossible once a value has been decoded into a struct, and that distinction
+// is what the derived-key check rests on.
 type decodedEntry struct {
 	profile Profile
-	keys    []string
+	node    yaml.Node
 }
 
 // findByID locates a decoded entry, for producing a better error message.
@@ -187,9 +196,12 @@ func applyDefaults(p *Profile) {
 // and fails much later, somewhere unrelated. One widely-used library does
 // exactly that, and it is why a missing model there presents as a mysteriously
 // featureless one.
+// The returned profile is a COPY. The registry is cached for the life of the
+// process and shared by every caller, so returning the stored pointer would make
+// one caller's experiment everyone else's configuration.
 func (r *Registry) Lookup(id string) (*Profile, error) {
 	if p, ok := r.byID[id]; ok {
-		return p, nil
+		return p.clone(), nil
 	}
 	return nil, &UnknownModelError{ID: id, Known: sortedIDs(r.byID)}
 }
@@ -209,17 +221,61 @@ func (e *UnknownModelError) Error() string {
 // Models lists every registered id, sorted.
 func (r *Registry) Models() []string { return sortedIDs(r.byID) }
 
-// mappingKeys returns the keys of a YAML mapping node, which is how a caller
-// tells "the field was omitted" from "the field was set to its zero value".
-func mappingKeys(node yaml.Node) []string {
+// decodeStrict decodes one profile entry, refusing unknown keys.
+//
+// yaml.Node.Decode has no strict mode, so the node is re-encoded and read back
+// through a decoder that does. The round trip is worth it: without it a typo
+// silently becomes a zero value, so "visoin: true" loads clean and leaves
+// vision false. For a package whose entire purpose is that a wrong assumption
+// fails loudly, a mistyped capability turning into an assumed-absent one is the
+// worst available failure.
+func decodeStrict(node yaml.Node) (Profile, error) {
+	raw, err := yaml.Marshal(&node)
+	if err != nil {
+		return Profile{}, fmt.Errorf("re-encoding entry: %w", err)
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	var p Profile
+	if err := dec.Decode(&p); err != nil {
+		return Profile{}, err
+	}
+	return p, nil
+}
+
+// checkDerivedKeys rejects a based profile that sets a capability field.
+//
+// It walks the YAML node rather than the decoded struct, because that is the
+// only way to tell "said nothing" from "said false". Nested keys are walked too:
+// admitting a whole mapping and trusting resolve to copy the fields it knows
+// about would silently discard the rest.
+func checkDerivedKeys(id string, node yaml.Node) error {
 	if node.Kind != yaml.MappingNode {
 		return nil
 	}
-	// Content alternates key, value, key, value.
-	keys := make([]string, 0, len(node.Content)/2)
+	var offending []string
 	for i := 0; i+1 < len(node.Content); i += 2 {
-		keys = append(keys, node.Content[i].Value)
+		key, value := node.Content[i].Value, node.Content[i+1]
+		if !derivedAllowedKeys[key] {
+			offending = append(offending, key)
+			continue
+		}
+		allowedSub, nested := derivedAllowedNestedKeys[key]
+		if !nested || value.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(value.Content); j += 2 {
+			if sub := value.Content[j].Value; !allowedSub[sub] {
+				offending = append(offending, key+"."+sub)
+			}
+		}
 	}
-	sort.Strings(keys)
-	return keys
+	if len(offending) == 0 {
+		return nil
+	}
+	sort.Strings(offending)
+	return fmt.Errorf("profile %q sets %v, but a profile with a base inherits every "+
+		"capability from it and may only override routing. A capability belongs to the "+
+		"model, not to the route: if this deployment really differs, give it its own "+
+		"profile with no base", id, offending)
 }

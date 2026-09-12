@@ -596,3 +596,235 @@ func TestNewRegistry_UnstatedProvenanceDefaultsToSourceDerived(t *testing.T) {
 			got, VerifiedSource)
 	}
 }
+
+// --- regressions from the Phase 1a review -------------------------------------
+
+// A derived profile may set streaming and tools ONLY for the two tighten-only
+// sub-keys. Admitting the whole mapping and trusting resolve to copy the fields
+// it knows about silently DISCARDS the rest: a gateway saying it does not stream
+// would load clean and resolve to streaming.supported=true — a profile
+// asserting a capability the route does not have, which is the exact failure
+// this package exists to prevent.
+func TestNewRegistry_DerivedProfileCannotRestateNestedCapabilities(t *testing.T) {
+	base := `profiles:
+  - id: base-model
+    wire_model_id: base-model
+    max_tokens_param: max_tokens
+    verified: measured
+    tools: {supported: true, format: native, tool_choice_values: [auto]}
+    streaming: {supported: true, accepts_stream_options: true}
+  - id: gw/base-model
+    base: base-model
+`
+	for _, tc := range []struct{ name, extra, wantKey string }{
+		{"turning streaming off", "    streaming: {supported: false}\n", "streaming.supported"},
+		{"withdrawing stream_options", "    streaming: {accepts_stream_options: false}\n", "streaming.accepts_stream_options"},
+		{"turning tools off", "    tools: {supported: false}\n", "tools.supported"},
+		{"changing the tool format", "    tools: {format: xml}\n", "tools.format"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewRegistry([]byte(base + tc.extra))
+			if err == nil {
+				t.Fatal("expected the derived profile to be refused")
+			}
+			if !strings.Contains(err.Error(), tc.wantKey) {
+				t.Errorf("error = %v, want it to name %q", err, tc.wantKey)
+			}
+		})
+	}
+}
+
+// The two sub-keys that ARE allowed must still work.
+func TestNewRegistry_DerivedProfileMayTightenTheTwoAllowedSubKeys(t *testing.T) {
+	doc := `profiles:
+  - id: base-model
+    wire_model_id: base-model
+    max_tokens_param: max_tokens
+    verified: measured
+    tools: {supported: true, format: native, tool_choice_values: [auto]}
+    streaming: {supported: true, accepts_stream_options: true}
+  - id: gw/base-model
+    base: base-model
+    streaming: {needs_include_usage: true}
+    tools: {recover_inline_markup: true}
+`
+	reg, err := NewRegistry([]byte(doc))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	d := mustLookup(t, reg, "gw/base-model")
+	if !d.Streaming.NeedsIncludeUsage {
+		t.Error("needs_include_usage should have been tightened on")
+	}
+	if !d.Tools.RecoverInlineMarkup {
+		t.Error("recover_inline_markup should have been tightened on")
+	}
+	// And the rest of both mappings still comes from the base.
+	if !d.Streaming.Supported || !d.Streaming.AcceptsStreamOptions || !d.Tools.Supported {
+		t.Errorf("base capabilities were lost: %+v %+v", d.Streaming, d.Tools)
+	}
+}
+
+// Defaults must be applied to a base BEFORE anything inherits from it.
+// Resolving first and defaulting afterwards looks equivalent and is not: the
+// derived entry would inherit an empty wire_model_id and then fill it from its
+// OWN id, putting the gateway's registry key on the wire as the model name.
+func TestNewRegistry_BaseDefaultsApplyBeforeInheritance(t *testing.T) {
+	doc := `profiles:
+  - id: real-model
+    max_tokens_param: max_tokens
+    verified: measured
+  - id: gw/real-model
+    base: real-model
+    gateway: litellm
+`
+	reg, err := NewRegistry([]byte(doc))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	d := mustLookup(t, reg, "gw/real-model")
+	if d.WireModelID != "real-model" {
+		t.Errorf("wire_model_id = %q, want %q inherited from the base; "+
+			"defaulting it from the derived id puts the registry key on the wire",
+			d.WireModelID, "real-model")
+	}
+}
+
+// An unknown key must fail the load. Without strict decoding a typo silently
+// becomes a zero value, so a mistyped capability reads as absent — the worst
+// available failure for a package whose purpose is that wrong assumptions fail
+// loudly.
+func TestNewRegistry_UnknownKeyIsRejected(t *testing.T) {
+	for _, tc := range []struct{ name, doc string }{
+		{
+			name: "misspelled capability",
+			doc: `profiles:
+  - {id: a, wire_model_id: a, max_tokens_param: max_tokens, verified: measured, visoin: true}
+`,
+		},
+		{
+			name: "misspelled nested key",
+			doc: `profiles:
+  - id: a
+    wire_model_id: a
+    max_tokens_param: max_tokens
+    verified: measured
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: true
+      control: effort
+      effort_valuez: [low, none]
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewRegistry([]byte(tc.doc))
+			if err == nil {
+				t.Fatal("expected an unknown key to fail the load")
+			}
+		})
+	}
+}
+
+// The embeddings guard covers every generation knob, not a sample of them: a
+// guard that covers most of the set reads as complete while leaving a hole.
+func TestNewRegistry_EmbeddingsGuardIsComplete(t *testing.T) {
+	base := `profiles:
+  - id: e
+    endpoint: embeddings
+    wire_model_id: e
+    verified: measured
+`
+	for _, tc := range []struct{ name, extra string }{
+		{"top_p", "    top_p: {supported: true}\n"},
+		{"temperature", "    temperature: {supported: true}\n"},
+		{"vision", "    vision: true\n"},
+		{"structured output", "    output: {json_object: true}\n"},
+		{"reasoning", "    reasoning: {supported: true, enabled_by_default: true, can_be_disabled: true, control: toggle_object}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewRegistry([]byte(base + tc.extra))
+			if err == nil {
+				t.Fatalf("an embeddings profile declaring %s should be refused", tc.name)
+			}
+			if !strings.Contains(err.Error(), "embeddings profile") {
+				t.Errorf("error = %v", err)
+			}
+		})
+	}
+}
+
+// Limits are checked on embeddings profiles too, which an early return skipped.
+func TestNewRegistry_EmbeddingsLimitsAreStillChecked(t *testing.T) {
+	doc := `profiles:
+  - id: e
+    endpoint: embeddings
+    wire_model_id: e
+    verified: measured
+    limits: {context: 100, max_output: 200}
+`
+	_, err := NewRegistry([]byte(doc))
+	if err == nil {
+		t.Fatal("expected the limits check to run on an embeddings profile")
+	}
+	if !strings.Contains(err.Error(), "exceeds context") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+// The registry is cached for the life of the process and shared by every
+// caller, so a returned profile must be a copy: otherwise one caller's
+// experiment becomes everyone else's configuration.
+func TestLookup_ReturnsACopyNotTheSharedProfile(t *testing.T) {
+	reg := Default()
+
+	first := mustLookup(t, reg, "mimo-v2.5")
+	if !first.Vision {
+		t.Fatal("fixture assumption: mimo-v2.5 has vision")
+	}
+	first.Vision = false
+	first.Reasoning.EffortValues = append(first.Reasoning.EffortValues, "invented")
+	first.Tools.ToolChoiceValues = append(first.Tools.ToolChoiceValues, "required")
+
+	second := mustLookup(t, reg, "mimo-v2.5")
+	if !second.Vision {
+		t.Error("mutating a returned profile changed the registry")
+	}
+	for _, v := range second.Reasoning.EffortValues {
+		if v == "invented" {
+			t.Error("slice backing storage is shared with the registry")
+		}
+	}
+	for _, v := range second.Tools.ToolChoiceValues {
+		if v == "required" {
+			t.Error("tool_choice slice backing storage is shared with the registry")
+		}
+	}
+}
+
+// Provenance is not inherited. A derived profile describes a different ROUTE,
+// which no probe of the base ever exercised, so carrying "measured" across would
+// have it claim evidence that does not exist for it.
+func TestNewRegistry_ProvenanceIsNotInherited(t *testing.T) {
+	doc := `profiles:
+  - id: real-model
+    wire_model_id: real-model
+    max_tokens_param: max_tokens
+    verified: measured
+  - id: gw/real-model
+    base: real-model
+    gateway: litellm
+    wire_model_id: alias/real-model
+`
+	reg, err := NewRegistry([]byte(doc))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := mustLookup(t, reg, "gw/real-model").Verified; got != VerifiedSource {
+		t.Errorf("derived verified = %q, want %q: the route was never probed", got, VerifiedSource)
+	}
+	if got := mustLookup(t, reg, "real-model").Verified; got != VerifiedMeasured {
+		t.Errorf("base verified = %q, want it unchanged", got)
+	}
+}

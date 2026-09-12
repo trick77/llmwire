@@ -249,14 +249,28 @@ var derivedAllowedKeys = map[string]bool{
 	"wire_model_id": true, "base_url_env": true, "api_key_env": true,
 	"endpoint": true, "max_tokens_param": true,
 	"verified": true, "notes": true,
-	// The one capability field a route may tighten: a proxy that strips the
-	// usage chunk from a client which did not ask for it forces the parameter
-	// on, whatever the underlying model needs. It can only be set TRUE here,
-	// checked below.
+	// These two are allowed only for the specific sub-keys in
+	// derivedAllowedNestedKeys. Admitting the whole mapping here and relying on
+	// resolve to copy just the fields it knows about would silently DISCARD
+	// every other sub-key: a gateway entry saying "streaming: {supported:
+	// false}" would load clean and resolve to supported=true, which is exactly
+	// the silent-config failure this package exists to prevent.
 	"streaming": true,
-	// Recovery is defensive, not a capability: switching it on can only cause
-	// more parsing to happen, never claim support the model lacks.
-	"tools": true,
+	"tools":     true,
+}
+
+// Sub-keys a derived profile may set under the two mappings above. Both are
+// TIGHTEN-ONLY: each can be switched on, never off.
+//
+//   - needs_include_usage: a proxy that strips the usage chunk from a client
+//     which did not ask for it forces the parameter on, whatever the underlying
+//     model needs.
+//   - recover_inline_markup: defensive parsing, not a capability. Switching it
+//     on can only cause more recovery to run, never claim support the model
+//     lacks.
+var derivedAllowedNestedKeys = map[string]map[string]bool{
+	"streaming": {"needs_include_usage": true},
+	"tools":     {"recover_inline_markup": true},
 }
 
 // resolve merges a base profile into this one.
@@ -292,9 +306,13 @@ func (p Profile) resolve(base Profile) (Profile, error) {
 	if p.MaxTokensParam != "" {
 		out.MaxTokensParam = p.MaxTokensParam
 	}
-	if p.Verified != "" {
-		out.Verified = p.Verified
-	}
+	// Provenance is deliberately NOT inherited. A derived profile describes a
+	// different ROUTE to the model — a gateway alias, a forced parameter — and
+	// none of that was exercised by whatever probe measured the base. Letting
+	// "measured" carry across would make a profile claim evidence that does not
+	// exist for it. Absent here means the loader defaults it to source-derived,
+	// which is the honest answer until someone probes the route itself.
+	out.Verified = p.Verified
 	if p.Notes != "" {
 		out.Notes = p.Notes
 	}
@@ -308,27 +326,6 @@ func (p Profile) resolve(base Profile) (Profile, error) {
 		out.Tools.RecoverInlineMarkup = true
 	}
 	return out, nil
-}
-
-// checkDerivedKeys rejects a based profile that sets a capability field.
-//
-// keys is the set of YAML keys actually present on the entry, which is the only
-// way to distinguish "said nothing" from "said false".
-func checkDerivedKeys(id string, keys []string) error {
-	var offending []string
-	for _, k := range keys {
-		if !derivedAllowedKeys[k] {
-			offending = append(offending, k)
-		}
-	}
-	if len(offending) == 0 {
-		return nil
-	}
-	sort.Strings(offending)
-	return fmt.Errorf("profile %q sets %v, but a profile with a base inherits every "+
-		"capability from it and may only override routing. A capability belongs to the "+
-		"model, not to the route: if this deployment really differs, give it its own "+
-		"profile with no base", id, offending)
 }
 
 // validate checks a fully-resolved profile for internal contradictions.
@@ -361,11 +358,27 @@ func (p Profile) validate() error {
 
 	if p.Endpoint == EndpointEmbeddings {
 		// An embeddings profile carrying chat capabilities is a copy-paste
-		// error, and one that would otherwise surface as a confusing 400.
-		if p.Reasoning.Supported || p.Tools.Supported || p.Temperature.Supported || p.Vision {
-			return bad("an embeddings profile must not declare reasoning, tools, temperature or vision")
+		// error, and one that would otherwise surface as a confusing 400 from
+		// the wrong route. Every sampling and generation knob is checked, not a
+		// sample of them: a guard that covers most of the set reads as complete
+		// while leaving a hole.
+		switch {
+		case p.Reasoning.Supported:
+			return bad("an embeddings profile must not declare reasoning")
+		case p.Tools.Supported:
+			return bad("an embeddings profile must not declare tools")
+		case p.Temperature.Supported:
+			return bad("an embeddings profile must not declare temperature")
+		case p.TopP.Supported:
+			return bad("an embeddings profile must not declare top_p")
+		case p.Vision:
+			return bad("an embeddings profile must not declare vision")
+		case p.Output.JSONObject || p.Output.JSONSchema || p.Output.StrictSchema:
+			return bad("an embeddings profile must not declare structured output")
 		}
-		return nil
+		// The limits check below applies to both endpoints, so fall through to
+		// it rather than returning early.
+		return p.validateLimits()
 	}
 
 	if p.MaxTokensParam != ParamMaxTokens && p.MaxTokensParam != ParamMaxCompletionTokens {
@@ -436,8 +449,14 @@ func (p Profile) validate() error {
 		return bad("needs_include_usage is true but accepts_stream_options is false; " +
 			"the parameter would have to be sent to an endpoint that rejects it")
 	}
+	return p.validateLimits()
+}
+
+// validateLimits is shared by both endpoint kinds.
+func (p Profile) validateLimits() error {
 	if p.Limits.MaxOutput > 0 && p.Limits.Context > 0 && p.Limits.MaxOutput > p.Limits.Context {
-		return bad("max_output (%d) exceeds context (%d)", p.Limits.MaxOutput, p.Limits.Context)
+		return fmt.Errorf("profile %q: max_output (%d) exceeds context (%d)",
+			p.ID, p.Limits.MaxOutput, p.Limits.Context)
 	}
 	return nil
 }
@@ -464,4 +483,32 @@ func sortedIDs(m map[string]*Profile) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// clone returns a deep-enough copy that a caller mutating the result cannot
+// affect the registry.
+//
+// Registry is cached for the life of the process and its profiles are shared by
+// every caller, so handing out the stored pointer makes one caller's
+// experiment everyone else's configuration. Slices and pointer fields are
+// copied too: a shallow struct copy still shares their backing storage, which
+// would leave exactly the same hole one level down.
+func (p *Profile) clone() *Profile {
+	out := *p
+	out.Reasoning.EffortValues = append([]string(nil), p.Reasoning.EffortValues...)
+	out.Tools.ToolChoiceValues = append([]string(nil), p.Tools.ToolChoiceValues...)
+	out.FinishReasonsExtra = append([]string(nil), p.FinishReasonsExtra...)
+	out.Temperature.ForcedValue = copyFloat(p.Temperature.ForcedValue)
+	out.Temperature.RecommendedValue = copyFloat(p.Temperature.RecommendedValue)
+	out.TopP.ForcedValue = copyFloat(p.TopP.ForcedValue)
+	out.TopP.RecommendedValue = copyFloat(p.TopP.RecommendedValue)
+	return &out
+}
+
+func copyFloat(p *float64) *float64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
