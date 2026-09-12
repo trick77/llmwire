@@ -99,12 +99,12 @@ profiles:
     finish_reasons_extra: [sensitive, model_context_window_exceeded, network_error]
 
     # Published pay-as-you-go USD list rate, per 1M tokens, read from the
-    # vendor's own page. models.dev carries exactly half on every lane, and the
-    # reason is worth keeping: its entry for this model is dated 2026-08-26 —
-    # the model's own release day — and has not been touched since, so it is a
-    # launch-day snapshot presented as current. A backend that sourced its rates
-    # there in August shipped figures at half the real price for two weeks, and
-    # nothing in its table could have revealed that.
+    # vendor's own page. models.dev carries 0.075 / 0.015 / 0.25 — exactly half
+    # on every lane — and the reason is worth keeping: its entry for this model
+    # is dated 2026-08-26, the model's own release day, and has not been touched
+    # since. It is a launch-day snapshot presented as current. A backend that
+    # sourced its rates there in August shipped figures at half the real price
+    # for two weeks, and nothing in its own table could have revealed that.
     #
     # This is what source_url and verified_on are for. A catalogue is a
     # cross-check, never a source.

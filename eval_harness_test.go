@@ -3,6 +3,7 @@ package llmwire
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -269,24 +270,12 @@ func accepted(res StreamResult, err error) (bool, string) {
 	return false, Redact(err.Error())
 }
 
-// asAPIError is errors.As without importing errors into every probe.
+// asAPIError was a hand-rolled errors.As, and its second branch existed only
+// because *RateLimitError embedded an *APIError without unwrapping to one. It
+// does now, so this is errors.As and nothing else — kept as a named function
+// purely so the probes read the same as before.
 func asAPIError(err error, target **APIError) bool {
-	for err != nil {
-		if e, ok := err.(*APIError); ok {
-			*target = e
-			return true
-		}
-		if rl, ok := err.(*RateLimitError); ok {
-			*target = rl.APIError
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
+	return errors.As(err, target)
 }
 
 // --- env helpers ---------------------------------------------------------------
