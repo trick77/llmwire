@@ -1,6 +1,7 @@
 package llmwire
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -144,6 +145,7 @@ type errorEnvelope struct {
 // because a caller that gets nil here would report a failure as a success.
 func parseAPIError(status int, body []byte) *APIError {
 	e := &APIError{StatusCode: status, Class: classify(status)}
+	body = unframeSSE(body)
 
 	var env errorEnvelope
 	if err := json.Unmarshal(body, &env); err == nil {
@@ -186,6 +188,37 @@ func parseAPIError(status int, body []byte) *APIError {
 	// endpoint objected to.
 	e.Message = Redact(truncate(strings.TrimSpace(string(body)), maxErrorBody))
 	return e
+}
+
+// unframeSSE strips an SSE "data:" wrapper from an error body.
+//
+// An endpoint that has already decided to answer in text/event-stream can send
+// its ERROR that way too, even under a non-2xx status. Measured against MiMo:
+// asking mimo-v2.5-pro for image input returns HTTP 404 whose body is the single
+// line
+//
+//	data:{"error":{"code":"404","message":"No endpoints found that support image input",...}}
+//
+// Without this the JSON never parses and the whole envelope degrades to raw
+// text, losing the code that callers are supposed to dispatch on — which is the
+// one field this package insists on.
+//
+// Only a single leading frame is unwrapped, and only when what follows parses as
+// JSON, so an ordinary body that happens to begin with "data:" is left alone.
+func unframeSSE(body []byte) []byte {
+	trimmed := bytes.TrimSpace(body)
+	if !bytes.HasPrefix(trimmed, []byte(dataPrefix)) {
+		return body
+	}
+	// Take the first frame only; an error body may still be newline-terminated.
+	if i := bytes.IndexByte(trimmed, '\n'); i >= 0 {
+		trimmed = trimmed[:i]
+	}
+	payload := bytes.TrimSpace(trimmed[len(dataPrefix):])
+	if !json.Valid(payload) {
+		return body
+	}
+	return payload
 }
 
 // decodeCode renders the provider's code as a string whatever its JSON type.

@@ -263,3 +263,43 @@ func TestTruncate_ShortStringIsUntouched(t *testing.T) {
 		t.Errorf("truncate altered a short string: %q", got)
 	}
 }
+
+// An endpoint already answering in text/event-stream can send its ERROR that
+// way too, under a non-2xx status. Measured against MiMo: asking
+// mimo-v2.5-pro for image input returns HTTP 404 whose body is a single
+// "data:{...}" frame. Without unframing, the code is lost to raw text.
+func TestParseAPIError_SSEFramedErrorBody(t *testing.T) {
+	body := `data:{"error":{"code":"404","message":"No endpoints found that support image input","param":"","type":""}}`
+	got := parseAPIError(404, []byte(body))
+	if got.Code != "404" {
+		t.Errorf("code = %q, want 404 — the data: frame was not unwrapped", got.Code)
+	}
+	if !strings.Contains(got.Message, "No endpoints found") {
+		t.Errorf("message = %q", got.Message)
+	}
+	if strings.Contains(got.Message, "data:") {
+		t.Errorf("message still carries the SSE framing: %q", got.Message)
+	}
+}
+
+// The spaced form, and a trailing newline, must unwrap the same way.
+func TestParseAPIError_SSEFramedVariants(t *testing.T) {
+	for _, body := range []string{
+		"data: {\"error\":{\"code\":\"429\",\"message\":\"slow down\"}}",
+		"data:{\"error\":{\"code\":\"429\",\"message\":\"slow down\"}}\n\n",
+	} {
+		got := parseAPIError(429, []byte(body))
+		if got.Code != "429" {
+			t.Errorf("code = %q for body %q", got.Code, body)
+		}
+	}
+}
+
+// A body that merely begins with "data:" but is not a JSON frame must be left
+// alone, or an ordinary text error would be silently mangled.
+func TestParseAPIError_NonJSONDataPrefixIsNotUnframed(t *testing.T) {
+	got := parseAPIError(500, []byte("data: centre unavailable"))
+	if !strings.Contains(got.Message, "data: centre unavailable") {
+		t.Errorf("message = %q, want the original text preserved", got.Message)
+	}
+}
