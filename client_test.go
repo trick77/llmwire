@@ -445,6 +445,62 @@ func TestErrors_TheConfiguredKeyNeverAppearsWhateverItsShape(t *testing.T) {
 	}
 }
 
+// Two ways the value pass could miss, both from the review of this change:
+// the shape pass eating the middle of a key that contains an sk- run, so the
+// value is no longer in the text; and the 4 KiB cut landing inside the key,
+// so only its head is in the buffer. And the streaming error frame, which is
+// parsed on another path than a status error.
+func TestErrors_TheKeyIsStrippedBeforeTheShapePassAndAcrossTheCut(t *testing.T) {
+	// Assembled at runtime: a literal of this shape is exactly what
+	// hack/secret-scan.sh refuses to let into the tree.
+	key := "gw-" + "sk" + "-" + strings.Repeat("a", 24) + "-tail"
+	filler := strings.Repeat("x", maxErrorBody-10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		switch {
+		case r.Header.Get("Accept") == "text/event-stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(`data: {"error":{"message":"refused ` + auth + `","type":"auth"}}` + "\n\n"))
+		case strings.Contains(r.URL.RawQuery, "straddle"):
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(filler + auth))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"bad key ` + auth + `"}}`))
+		}
+	}))
+	defer srv.Close()
+
+	c := New(Config{BaseURL: srv.URL, APIKey: key})
+	req := ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}}
+
+	// A key with an sk- run in the middle: the shape pass alone would leave
+	// "gw-" and "-tail" around a [REDACTED].
+	_, _, err := c.Chat(context.Background(), req)
+	if err == nil || strings.Contains(err.Error(), "gw-") || strings.Contains(err.Error(), "-tail") {
+		t.Errorf("status error = %v, want the whole key gone, not just its sk- run", err)
+	}
+
+	// The same key straddling the read cap.
+	straddle := New(Config{BaseURL: srv.URL + "?straddle=1", APIKey: key})
+	_, _, err = straddle.Chat(context.Background(), req)
+	if err == nil || strings.Contains(err.Error(), "gw-sk") {
+		t.Errorf("straddling error = %v, want no head of the key left at the cut", err)
+	}
+
+	// The error frame inside a 200 stream.
+	stream, _, err := c.ChatStream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for stream.Next() {
+	}
+	err = stream.Err()
+	if err == nil || strings.Contains(err.Error(), "gw-") || strings.Contains(err.Error(), "-tail") {
+		t.Errorf("stream error = %v, want the whole key gone on the streaming path too", err)
+	}
+}
+
 // net/http puts the full URL, query string included, into every dial failure.
 // A base URL that carries its key there would otherwise reach the log through
 // the one error a caller always prints: "could not connect".

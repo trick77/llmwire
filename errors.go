@@ -173,13 +173,24 @@ type errorEnvelope struct {
 // cannot parse still yields an APIError carrying the (redacted, truncated) text,
 // because a caller that gets nil here would report a failure as a success.
 func parseAPIError(status int, body []byte) *APIError {
+	return parseAPIErrorWith(Redact, status, body)
+}
+
+// redactor is what turns upstream text into loggable text. Redact is the
+// shape-only default; a Client supplies one that also strips its own key by
+// value, and runs that FIRST — the shape pass can eat the middle of a key
+// whose value contains an sk-/tp- run, after which the value pass would find
+// nothing to strip.
+type redactor func(string) string
+
+func parseAPIErrorWith(redact redactor, status int, body []byte) *APIError {
 	e := &APIError{StatusCode: status, Class: classify(status)}
 	body = unframeSSE(body)
 
 	var env errorEnvelope
 	if err := json.Unmarshal(body, &env); err == nil {
 		if env.Error.Message != "" || len(env.Error.Code) > 0 || env.Error.Type != "" {
-			e.Message = Redact(env.Error.Message)
+			e.Message = redact(env.Error.Message)
 			e.Type = env.Error.Type
 			if env.Error.Param != nil {
 				e.Param = *env.Error.Param
@@ -188,7 +199,7 @@ func parseAPIError(status int, body []byte) *APIError {
 			return e
 		}
 		if len(env.Detail) > 0 {
-			e.Message = Redact(renderDetail(env.Detail))
+			e.Message = redact(renderDetail(env.Detail))
 			return e
 		}
 	}
@@ -203,7 +214,7 @@ func parseAPIError(status int, body []byte) *APIError {
 		Code    json.RawMessage `json:"code"`
 	}
 	if err := json.Unmarshal(body, &bare); err == nil && (bare.Message != "" || len(bare.Code) > 0) {
-		e.Message = Redact(bare.Message)
+		e.Message = redact(bare.Message)
 		e.Type = bare.Type
 		if bare.Param != nil {
 			e.Param = *bare.Param
@@ -212,10 +223,12 @@ func parseAPIError(status int, body []byte) *APIError {
 		return e
 	}
 
-	// Unparseable: keep the text, bounded and redacted. A truncated body is far
-	// better than none — this is the only evidence of what an undocumented
-	// endpoint objected to.
-	e.Message = Redact(Truncate(strings.TrimSpace(string(body)), maxErrorBody))
+	// Unparseable: keep the text, redacted and then bounded, in that order: a
+	// cut that lands inside a credential leaves its head behind for a pass
+	// that only knows the whole value. A truncated body is far better than
+	// none — this is the only evidence of what an undocumented endpoint
+	// objected to.
+	e.Message = Truncate(redact(strings.TrimSpace(string(body))), maxErrorBody)
 	return e
 }
 

@@ -41,9 +41,9 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	if err != nil {
 		return nil, warnings, err
 	}
-	resp, err := parseChatResponse(raw)
+	resp, err := parseChatResponseWith(c.redact, raw)
 	if err != nil {
-		return nil, warnings, c.scrub(err)
+		return nil, warnings, err
 	}
 	cost, priceWarnings := priceCall(pl.profile, resp.Usage, hdr, 200, at)
 	resp.Usage.Cost = cost
@@ -83,27 +83,31 @@ type wireChatResponse struct {
 
 // parseChatResponse decodes a completion.
 func parseChatResponse(raw json.RawMessage) (*ChatResponse, error) {
+	return parseChatResponseWith(Redact, raw)
+}
+
+func parseChatResponseWith(redact redactor, raw json.RawMessage) (*ChatResponse, error) {
 	var w wireChatResponse
 	if err := json.Unmarshal(raw, &w); err != nil {
 		// The body goes into the error, redacted and bounded: a compat server
 		// answering with an HTML error page would otherwise produce a bare
 		// "invalid character '<'" and nothing to identify what answered.
 		return nil, fmt.Errorf("llmwire: %w: decoding response: %w (body: %s)",
-			ErrMalformedResponse, err, Redact(Truncate(string(raw), maxErrorBody)))
+			ErrMalformedResponse, err, Truncate(redact(string(raw)), maxErrorBody))
 	}
 
 	// A 200 carrying an error object. Surfaced rather than read as an empty
 	// answer: the same shape inside a stream frame is already handled this way,
 	// and dropping it here would report success with no content.
 	if len(w.Error) > 0 && !isJSONNull(w.Error) {
-		return nil, parseAPIError(0, raw)
+		return nil, parseAPIErrorWith(redact, 0, raw)
 	}
 	// Never index Choices[0]: a choices-less 200 is exactly what the error case
 	// above looks like when the error object is absent too, and an index would
 	// panic instead of saying so.
 	if len(w.Choices) == 0 {
 		return nil, fmt.Errorf("llmwire: %w: response carried no choices and no error (body: %s)",
-			ErrResponseShape, Redact(Truncate(string(raw), maxErrorBody)))
+			ErrResponseShape, Truncate(redact(string(raw)), maxErrorBody))
 	}
 
 	ch := w.Choices[0]
