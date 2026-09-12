@@ -91,6 +91,25 @@ func (p CostProvenance) String() string {
 // stored record would be unreadable exactly where it matters most.
 func (p CostProvenance) MarshalText() ([]byte, error) { return []byte(p.String()), nil }
 
+// UnmarshalText reads back what MarshalText wrote, so a stored Cost round-trips.
+// Without it the name marshals out fine and then fails to decode, which turns
+// "keep a record of what this call cost" into a runtime error at read time.
+//
+// An unrecognised name decodes to Unpriced rather than failing: a record written by
+// a later version that knows a fourth source should read as "provenance unknown",
+// which is true, rather than making the whole record unreadable.
+func (p *CostProvenance) UnmarshalText(text []byte) error {
+	switch string(text) {
+	case "from-table":
+		*p = FromTable
+	case "reported":
+		*p = Reported
+	default:
+		*p = Unpriced
+	}
+	return nil
+}
+
 // rate is a token price in nano-USD per MILLION tokens: 1e-9 dollars, per 1e6
 // tokens. Both scales are needed. Per-million is how every vendor publishes, and
 // nano is the smallest unit any of them quotes — a cache-read lane of $0.0036
@@ -148,6 +167,12 @@ func (r *rate) UnmarshalYAML(node *yaml.Node) error {
 	fracVal, err := parseDigits(frac)
 	if err != nil {
 		return fmt.Errorf("rate %q: %w", node.Value, err)
+	}
+	// Checked here too, not only inside parseDigits: the scaling multiply is where
+	// a plausible-looking integer part overflows, and some wrapped values come back
+	// POSITIVE — a silently wrong rate that the negative-rate check never sees.
+	if whole > (1<<62)/nanoPerUSD {
+		return fmt.Errorf("rate %q is too large to hold in nano-USD", node.Value)
 	}
 	v := whole*nanoPerUSD + fracVal
 	if neg {
@@ -419,12 +444,24 @@ func (b *CostBlock) validateWindows(bad func(string, ...any) error) error {
 			}
 		}
 	}
+	// One zone per block. A cost block belongs to one vendor, and comparing clock
+	// ranges across zones would need every pair mapped onto a common timeline — so
+	// instead of an overlap check that silently skips the cross-zone pairs (leaving
+	// "the first match" a document-order accident for exactly those), mixing zones
+	// is refused outright.
+	for i := range b.Windows {
+		if b.Windows[i].Zone != b.Windows[0].Zone {
+			return bad("windows %q and %q are in different zones (%s, %s); one cost block is one "+
+				"vendor's schedule, and clock ranges in different zones cannot be compared for "+
+				"overlap", b.Windows[0].Name, b.Windows[i].Name, b.Windows[0].Zone, b.Windows[i].Zone)
+		}
+	}
 	// Overlaps are refused so "the first matching window" is a deterministic
 	// rule rather than a document-order accident.
 	for i := range b.Windows {
 		for j := i + 1; j < len(b.Windows); j++ {
 			a, c := &b.Windows[i], &b.Windows[j]
-			if a.Zone != c.Zone || a.fromMin >= c.toMin || c.fromMin >= a.toMin {
+			if a.fromMin >= c.toMin || c.fromMin >= a.toMin {
 				continue
 			}
 			for d := 0; d < 7; d++ {

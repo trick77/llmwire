@@ -72,6 +72,13 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 		out.Usage.Cost.NanoUSD += cost.NanoUSD
 		out.Usage.Cost.Provenance = mergeProvenance(out.Usage.Cost.Provenance, cost.Provenance, start == 0)
 		out.Usage.Cost.AppliedAt = cost.AppliedAt
+		if out.Usage.Cost.Provenance == Unpriced {
+			// A partial sum is not a smaller price, it is an unknown one — and
+			// Cost's own contract is that Unpriced carries 0, because a caller
+			// comparing a total against a budget must not be handed three
+			// batches' worth of a four-batch call.
+			out.Usage.Cost.NanoUSD = 0
+		}
 
 		if t := batchResp.usage.Input.Total; t != nil {
 			inputTotal += *t

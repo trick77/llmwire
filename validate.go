@@ -591,6 +591,20 @@ func (v *validation) checkTools(req ChatRequest) {
 		return
 	}
 
+	// Relaxing to "auto" is only a coercion if this model takes "auto". Every chat
+	// profile in the registry does, but substituting one refused mode for another
+	// would send the 400 this tier policy exists to catch locally — so the
+	// substitute is checked against the same accepted set.
+	if !toolChoiceAccepted(t.ToolChoiceValues, ToolChoiceAuto) {
+		if !v.refuse("tool_choice",
+			fmt.Sprintf("this model accepts tool_choice %v, and %q is not among them, so there is "+
+				"nothing to relax %q to", t.ToolChoiceValues, ToolChoiceAuto, req.ToolChoice.Mode),
+			t.ToolChoiceValues) {
+			v.out.ToolChoice = ToolChoice{}
+		}
+		return
+	}
+
 	// Tier 3: the request still runs, just less constrained. Warned rather than
 	// dropped silently because several of these endpoints DROP the field
 	// themselves without saying so, which is how a caller comes to believe a

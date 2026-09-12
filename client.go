@@ -249,14 +249,20 @@ func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.R
 	}
 	req.Header.Set("Accept", "application/json")
 
-	// The same guard the streaming path uses, for the same reason: without it a
-	// slow endpoint produces a bare "context deadline exceeded" and the reader
-	// cannot tell a model that never answered from one still writing. Non-
-	// streaming calls need this MORE than streams do, not less — the measured
-	// latency on one of these models is 25-64 seconds for a single answer, so the
-	// difference between "no headers yet" and "headers came, body stalled" is the
-	// difference between waiting and investigating.
-	guard := newStallGuard(cancelReq, c.header, stallHeaders)
+	// Bounded by the WHOLE-CALL cap, not by c.header, and that difference is the
+	// point.
+	//
+	// On a non-streaming route the endpoint withholds headers until the entire
+	// answer is ready, so "time until headers" is not "time until the endpoint
+	// starts talking" — it is the model's total latency. profiles.yaml records
+	// single calls on mimo-v2.5-pro at 25-64 seconds against a 60s default header
+	// bound, so arming this with c.header would abort a call the endpoint was about
+	// to answer. The guard is still worth arming: when nothing arrives at all, the
+	// failure says "no response headers" rather than a bare context deadline.
+	//
+	// (The transport's own ResponseHeaderTimeout, set in New to c.header + 30s,
+	// remains the unnamed backstop it has always been on this path.)
+	guard := newStallGuard(cancelReq, c.cap, stallHeaders)
 	defer guard.stop()
 
 	resp, err := c.http.Do(req)

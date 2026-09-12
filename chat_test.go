@@ -291,6 +291,11 @@ func TestChat_StatusErrors(t *testing.T) {
 // A non-streaming call that never gets headers names the bound that fired. Before
 // RawPost armed the guard this was an unnamed context deadline, which is the one
 // thing the split bounds exist to avoid.
+//
+// The bound here is the WHOLE-CALL cap, not the header timeout: on this route the
+// endpoint withholds headers until the answer is complete, so the header bound
+// would be a latency limit in disguise — and profiles.yaml records 25-64s single
+// calls against a 60s default.
 func TestChat_HeaderStallIsNamed(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -305,10 +310,9 @@ func TestChat_HeaderStallIsNamed(t *testing.T) {
 	})
 
 	c := New(Config{
-		BaseURL:       srv.URL,
-		Registry:      Default(),
-		HeaderTimeout: 40 * time.Millisecond,
-		CallTimeout:   10 * time.Second,
+		BaseURL:     srv.URL,
+		Registry:    Default(),
+		CallTimeout: 60 * time.Millisecond,
 	})
 	_, _, err := c.Chat(context.Background(), ChatRequest{
 		Model:    "glm-5.3-flash",
@@ -319,6 +323,42 @@ func TestChat_HeaderStallIsNamed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), stallHeaders) {
 		t.Errorf("error = %v, want it to name %q", err, stallHeaders)
+	}
+}
+
+// A non-streaming answer slower than the HEADER bound but inside the call cap must
+// still succeed. mimo-v2.5-pro measured 25-64 seconds per call against a 60s
+// default header timeout, so binding this route to c.header would abort calls the
+// endpoint was about to answer.
+func TestChat_SlowAnswerIsNotAHeaderStall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Deliberately longer than HeaderTimeout below, shorter than CallTimeout.
+		select {
+		case <-time.After(120 * time.Millisecond):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(goodCompletion))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{
+		BaseURL:       srv.URL,
+		Registry:      Default(),
+		HeaderTimeout: 30 * time.Millisecond,
+		IdleTimeout:   5 * time.Second,
+		CallTimeout:   5 * time.Second,
+	})
+	resp, _, err := c.Chat(context.Background(), ChatRequest{
+		Model:    "glm-5.3-flash",
+		Messages: []Message{User("hi")},
+	})
+	if err != nil {
+		t.Fatalf("a slow but successful answer failed: %v", err)
+	}
+	if resp.Content != "hello" {
+		t.Errorf("content = %q", resp.Content)
 	}
 }
 

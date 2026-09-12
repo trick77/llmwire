@@ -165,6 +165,7 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at time.Time) {
 	stopped := s.stopped
 	s.mu.Unlock()
 
+	var priceWarnings []Warning
 	switch {
 	case stopped:
 		// A caller-initiated Close cancelled the request, and explain() would
@@ -175,15 +176,21 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at time.Time) {
 	case err != nil:
 		err = s.client.explain(s.ctx, s.callCtx, s.guard, err)
 	default:
-		cost, priceWarnings := priceCall(pl.profile, res.Usage, resp.Header, resp.StatusCode, at)
+		var cost Cost
+		cost, priceWarnings = priceCall(pl.profile, res.Usage, resp.Header, resp.StatusCode, at)
 		res.Usage.Cost = cost
-		s.warnings = append(s.warnings, priceWarnings...)
 	}
 
 	s.mu.Lock()
+	// Written under the mutex, all of it. Warnings() is documented as readable
+	// while the stream is still running — it returns the validation warnings until
+	// the pricing ones arrive — so appending outside the lock is a real race
+	// against a caller polling it, not a theoretical one.
+	//
 	// Written before the reader is marked finished, and read only after Next has
-	// observed that flag — so the mutex carries the happens-before edge and the
-	// accessors need no further synchronisation of their own.
+	// observed that flag, so the mutex also carries the happens-before edge for
+	// res and err.
+	s.warnings = append(s.warnings, priceWarnings...)
 	s.res, s.err = res, err
 	s.closed = true
 	s.cond.Broadcast()
