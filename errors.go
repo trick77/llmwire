@@ -47,10 +47,10 @@ var (
 	// ErrUpstream is a 5xx, or a transport failure with no status at all.
 	ErrUpstream = errors.New("upstream failure")
 
-	// ErrMalformedResponse is a 2xx whose body could not be decoded at all —
-	// an HTML error page from a proxy, a truncated body. The wrapped error
-	// carries the decoder's own complaint and a redacted, bounded slice of
-	// the body.
+	// ErrMalformedResponse is a 2xx whose body could not be read as an answer
+	// — an HTML error page from a proxy, a stream that ended without
+	// finish_reason or [DONE]. The wrapped error carries the decoder's own
+	// complaint and, for a body, a redacted and bounded slice of it.
 	ErrMalformedResponse = errors.New("malformed response")
 	// ErrResponseShape is a 2xx that decoded but does not answer the request:
 	// no choices and no error object, the wrong number of embeddings, an

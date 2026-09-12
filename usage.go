@@ -42,7 +42,10 @@ type Usage struct {
 	// (wireUsage.reported). Held here rather than re-derived from the lanes
 	// because the two rules differ on one shape: a bare {"total_tokens":N}
 	// is reported on the wire and yields no lane, since this type has no
-	// total lane. Unexported so a caller-built Usage{} reads as not reported.
+	// total lane. Unexported so a caller-built Usage{} reads as not reported —
+	// which also means it does NOT survive a JSON round trip of this struct.
+	// The tags above exist for logging and fixtures, not for reconstruction;
+	// a Usage rebuilt from JSON answers Reported() false whatever it carries.
 	reported bool
 }
 

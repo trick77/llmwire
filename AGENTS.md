@@ -78,8 +78,9 @@ would drop the param itself — stricter than the wire on purpose: a silently dr
 - **Never retry.** Parse `Retry-After` into a typed error and stop; a library-level
   retry turns a transient outage into a permanent failure for a job queue.
 - A 2xx that is not an answer wraps a sentinel: `ErrMalformedResponse` (undecodable
-  body) or `ErrResponseShape` (decoded, wrong shape: no choices, wrong embedding
-  count/index). Callers `errors.Is`; never make them match the prose.
+  body, or a stream cut before `finish_reason`/`[DONE]`) or `ErrResponseShape`
+  (decoded, wrong shape: no choices, wrong embedding count/index). Callers
+  `errors.Is`; never make them match the prose.
 
 ## Usage and cost
 

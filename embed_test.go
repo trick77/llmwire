@@ -106,6 +106,9 @@ func TestEmbed_BatchesAtSixtyFour(t *testing.T) {
 	if resp.Usage.Input.Total == nil || *resp.Usage.Input.Total != 150 {
 		t.Errorf("input total = %v, want 150", resp.Usage.Input.Total)
 	}
+	if !resp.Usage.Reported() {
+		t.Error("every batch reported usage, so the sum must read as reported")
+	}
 	if resp.Usage.Cost.Provenance != FromTable {
 		t.Errorf("cost = %+v, want from-table", resp.Usage.Cost)
 	}
@@ -265,6 +268,9 @@ func TestEmbed_PartialUsageIsNotSummed(t *testing.T) {
 	}
 	if resp.Usage.Input.Total != nil {
 		t.Errorf("input total = %v, want nil when a batch reported nothing", resp.Usage.Input.Total)
+	}
+	if resp.Usage.Reported() {
+		t.Error("a sum missing a batch must not read as reported")
 	}
 	// And the price is unknown rather than a sum missing a batch.
 	if resp.Usage.Cost.Provenance != Unpriced {

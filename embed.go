@@ -91,6 +91,9 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 		out.Usage.Input.Total = &inputTotal
 		noCache := inputTotal
 		out.Usage.Input.NoCache = &noCache
+		// Built by hand rather than through parseUsage, so the flag it would
+		// have set is set here: a sum of reported batches is reported.
+		out.Usage.reported = true
 	}
 	return out, warnings, nil
 }

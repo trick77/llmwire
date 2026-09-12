@@ -304,8 +304,8 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 		return res, err
 	}
 	if !res.Done && res.FinishReason == "" {
-		return res, fmt.Errorf("stream ended after %d events (%d chars) without finish_reason or %s",
-			res.Events, res.Chars, doneMarker)
+		return res, fmt.Errorf("llmwire: %w: stream ended after %d events (%d chars) without finish_reason or %s",
+			ErrMalformedResponse, res.Events, res.Chars, doneMarker)
 	}
 	return res, nil
 }
