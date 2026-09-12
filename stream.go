@@ -340,15 +340,17 @@ type stallGuard struct {
 
 	mu       sync.Mutex
 	timer    *time.Timer
-	deadline time.Time // when the current arming expires
-	pending  string    // reason the currently-armed deadline would report
-	reason   string    // reason it actually fired with, "" while healthy
+	deadline time.Time     // when the current arming expires
+	pending  string        // reason the currently-armed deadline would report
+	bound    time.Duration // length of the current arming, reported beside pending
+	reason   string        // reason it actually fired with, "" while healthy
+	firedFor time.Duration // the bound that elapsed when it fired
 	fired    bool
 }
 
 // newStallGuard arms the guard for its first deadline. Callers must stop() it.
 func newStallGuard(cancel context.CancelFunc, d time.Duration, reason string) *stallGuard {
-	g := &stallGuard{cancel: cancel, pending: reason, deadline: time.Now().Add(d)}
+	g := &stallGuard{cancel: cancel, pending: reason, bound: d, deadline: time.Now().Add(d)}
 	g.timer = time.AfterFunc(d, g.fire)
 	return g
 }
@@ -366,6 +368,7 @@ func (g *stallGuard) arm(d time.Duration, reason string) {
 		return
 	}
 	g.pending = reason
+	g.bound = d
 	g.deadline = time.Now().Add(d)
 	g.timer.Reset(d)
 }
@@ -394,7 +397,7 @@ func (g *stallGuard) fire() {
 		return
 	}
 	g.fired = true
-	g.reason = g.pending
+	g.reason, g.firedFor = g.pending, g.bound
 	g.mu.Unlock()
 	g.cancel()
 }
@@ -407,11 +410,14 @@ func (g *stallGuard) stop() {
 	g.timer.Stop()
 }
 
-// firedReason returns why the guard cancelled, or "" if it did not. Read after
-// a request error to turn a bare "context canceled" into the bound that caused
-// it.
-func (g *stallGuard) firedReason() string {
+// firedReason returns why the guard cancelled and the bound that elapsed, or ""
+// if it did not fire. Read after a request error to turn a bare "context
+// canceled" into the bound that caused it. The duration comes from the guard,
+// not from the client's configured bounds: RawPost arms the header phase with the
+// whole-call cap, so the client's header bound would name a number that never
+// applied.
+func (g *stallGuard) firedReason() (string, time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.reason
+	return g.reason, g.firedFor
 }

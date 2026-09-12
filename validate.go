@@ -179,18 +179,16 @@ func (c *Client) plan(req ChatRequest, stream bool) (*wirePlan, []Warning, error
 	}
 
 	v := &validation{profile: p, bestEffort: req.BestEffort, out: req.clone()}
-	// Whether this REQUEST will reason, not merely whether the model reasons by
-	// default. The two differ exactly when the caller said something, which is
-	// the case the inert-parameter warning is about.
-	v.reasoningActive = reasoningActive(req.Reasoning, p.Reasoning)
 
 	v.checkMessages(req)
 	v.checkReasoning(req)
-	// Recomputed from the COERCED request, because checkReasoning may just have
-	// dropped the caller's request under BestEffort. A caller who asked a
-	// glm-5.3-flash to stop thinking and was demoted still gets a thinking
-	// model, so their temperature really is inert — and computing this once, up
-	// front, from the original request would say the opposite.
+	// Whether this REQUEST will reason, not merely whether the model reasons by
+	// default. The two differ exactly when the caller said something, which is
+	// the case the inert-parameter warning is about. Computed from the COERCED
+	// request, after checkReasoning, because that check may just have dropped the
+	// caller's knob under BestEffort. A caller who asked a glm-5.3-flash to stop
+	// thinking and was demoted still gets a thinking model, so their temperature
+	// really is inert — and reading the original request would say the opposite.
 	v.reasoningActive = reasoningActive(v.out.Reasoning, p.Reasoning)
 	v.checkSampling("temperature", req.Temperature, p.Temperature, &v.out.Temperature)
 	v.checkSampling("top_p", req.TopP, p.TopP, &v.out.TopP)

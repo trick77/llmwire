@@ -375,13 +375,11 @@ func (c *Client) httpError(resp *http.Response) error {
 // Order matters: the guard is checked first because it cancels reqCtx directly,
 // and a parent that is also done would otherwise mask it.
 func (c *Client) explain(parent, call context.Context, guard *stallGuard, err error) error {
-	if reason := guard.firedReason(); reason != "" {
-		switch reason {
-		case stallHeaders:
-			return fmt.Errorf("llmwire: %s within %s", reason, c.header)
-		default:
-			return fmt.Errorf("llmwire: %s for %s", reason, c.idle)
+	if reason, bound := guard.firedReason(); reason != "" {
+		if reason == stallHeaders {
+			return fmt.Errorf("llmwire: %s within %s", reason, bound)
 		}
+		return fmt.Errorf("llmwire: %s for %s", reason, bound)
 	}
 	if call.Err() != nil && parent.Err() == nil {
 		return fmt.Errorf("llmwire: exceeded the %s call cap", c.cap)

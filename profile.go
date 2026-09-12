@@ -317,7 +317,7 @@ var derivedAllowedNestedKeys = map[string]map[string]bool{
 // Single base, no chains: a base must itself be unbased. Inheritance here
 // expresses "the same model, reached differently", not a type hierarchy, and a
 // chain would make "which rule applied" unanswerable.
-func (p Profile) resolve(base Profile) (Profile, error) {
+func (p Profile) resolve(base Profile) Profile {
 	out := base
 
 	out.ID = p.ID
@@ -369,7 +369,7 @@ func (p Profile) resolve(base Profile) (Profile, error) {
 	if out.Gateway != "" {
 		out.Cost = nil
 	}
-	return out, nil
+	return out
 }
 
 // validate checks a fully-resolved profile for internal contradictions.
