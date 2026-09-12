@@ -45,6 +45,11 @@ const (
 	// DefaultCallTimeout is the backstop for a stream that stays alive forever
 	// without finishing — dribbling frames past any sane answer length.
 	DefaultCallTimeout = 15 * time.Minute
+	// headerBackstopHeadroom is how much later than the stall guard the
+	// transport's own header timeout fires. Large enough that the guard always
+	// wins the race and names the bound; small enough that a request still ends
+	// if the guard somehow never fires at all.
+	headerBackstopHeadroom = 30 * time.Second
 )
 
 // Config configures the transport.
@@ -129,7 +134,17 @@ func New(cfg Config) *Client {
 		// values instead of being silently dropped. Built after the defaults
 		// resolve, so the backstop matches the bound actually configured.
 		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.ResponseHeaderTimeout = cfg.HeaderTimeout
+		// Deliberately LONGER than the guard's own header bound.
+		//
+		// Transport.ResponseHeaderTimeout is a backstop for the case the guard
+		// cannot cover, not a second bound of equal standing: it is an HTTP/1.1
+		// feature and does not apply once a connection is negotiated as HTTP/2,
+		// which is what these endpoints do. Setting the two to the same value
+		// makes them race, and when the transport wins the error is its generic
+		// "timeout awaiting response headers" rather than the guard's named
+		// bound — losing exactly the classification the split bounds exist to
+		// provide. The headroom makes the guard reliably first.
+		tr.ResponseHeaderTimeout = cfg.HeaderTimeout + headerBackstopHeadroom
 		hc = &http.Client{Transport: tr}
 	}
 	headers := make(map[string]string, len(cfg.Headers))
