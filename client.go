@@ -16,9 +16,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -275,7 +277,7 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return StreamResult{}, c.explain(ctx, callCtx, guard, err)
+		return StreamResult{}, c.explain(ctx, callCtx, guard, c.dialError("/chat/completions", err))
 	}
 	defer resp.Body.Close()
 
@@ -299,7 +301,7 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 		}
 	}
 
-	res, err := readStream(resp.Body, guard, &counters, c.idle, sink)
+	res, err := readStream(resp.Body, guard, &counters, c.idle, sink, c.redact)
 	if err != nil {
 		return res, c.explain(ctx, callCtx, guard, err)
 	}
@@ -344,10 +346,9 @@ func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.R
 	resp, err := c.http.Do(req)
 	if err != nil {
 		// Redaction first, then classification: the URL can carry a key in its
-		// query string, and explain returns the original error untouched when no
-		// bound fired.
-		return nil, nil, c.explain(ctx, callCtx, guard,
-			fmt.Errorf("llmwire: %s: %w", RedactURL(c.baseURL+route), err))
+		// query string, and explain returns the error as given when no bound
+		// fired.
+		return nil, nil, c.explain(ctx, callCtx, guard, c.dialError(route, err))
 	}
 	defer resp.Body.Close()
 
@@ -414,8 +415,12 @@ func (c *Client) newRequest(ctx context.Context, route string, body []byte) (*ht
 // because an endpoint returning HTML for a 502 would otherwise pull an entire
 // error page into memory and into the log.
 func (c *Client) httpError(resp *http.Response) error {
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-	apiErr := parseAPIError(resp.StatusCode, raw)
+	// Read past the cap by the key's length: a key straddling the cut would
+	// leave its head in the message, and the value pass needs it whole. The
+	// parser truncates to the cap afterwards, so the extra bytes never reach a
+	// log.
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, int64(maxErrorBody+len(c.apiKey))))
+	apiErr := parseAPIErrorWith(c.redact, resp.StatusCode, raw)
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return newRateLimitError(apiErr, resp.Header)
 	}
@@ -439,8 +444,70 @@ func (c *Client) explain(parent, call context.Context, guard *stallGuard, err er
 	if call.Err() != nil && parent.Err() == nil {
 		return fmt.Errorf("llmwire: exceeded the %s call cap", c.cap)
 	}
+	return c.scrub(err)
+}
+
+// dialError is a transport failure phrased without the URL net/http put in it.
+//
+// Every failure out of http.Client.Do is a *url.Error whose Error() prints the
+// FULL request URL, query string included, and some deployments carry their
+// key there. Wrapping that error with a redacted prefix does not help: the
+// inner text still prints. So the url.Error is taken apart — its operation,
+// the URL through RedactURL, and its cause wrapped with %w so errors.Is on
+// context.DeadlineExceeded or a *net.OpError still holds. What a caller loses
+// is errors.As(*url.Error), which nobody should be reading the URL out of
+// anyway, and with it the net.Error view of a bare context.Canceled cause.
+func (c *Client) dialError(route string, err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		return fmt.Errorf("llmwire: %s %s: %w", uerr.Op, RedactURL(c.baseURL+route), uerr.Err)
+	}
+	return fmt.Errorf("llmwire: %s: %w", RedactURL(c.baseURL+route), err)
+}
+
+// redactKey strips the configured key BY VALUE. Redact knows credentials by
+// shape, and the shapes it knows are the ones the documented endpoints issue;
+// a token-plan host or a self-hosted gateway can issue any string, and an
+// upstream that echoes the Authorization header would put that string into
+// every log line that touches the failure. The client is the one party that
+// knows the key, so it is the one that can remove it whatever it looks like.
+func (c *Client) redactKey(s string) string {
+	if c.apiKey == "" || s == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, c.apiKey, "[REDACTED]")
+}
+
+// redact is the redactor this client hands the parsers: the key by value
+// first, then everything Redact knows by shape. Value first, because the
+// shape pass can eat the middle of a key whose value happens to contain an
+// sk-/tp- run, and the value pass would then find nothing to strip.
+func (c *Client) redact(s string) string {
+	return Redact(c.redactKey(s))
+}
+
+// scrub is the last line: an error built somewhere that had no redactor —
+// a transport failure quoting a response, a decode error — whose text carries
+// the key is wrapped so the text is clean and the chain is kept.
+func (c *Client) scrub(err error) error {
+	if err == nil || c.apiKey == "" {
+		return err
+	}
+	if text := err.Error(); strings.Contains(text, c.apiKey) {
+		return &scrubbedError{msg: c.redactKey(text), err: err}
+	}
 	return err
 }
+
+// scrubbedError is an error whose text was redacted after the fact. It keeps
+// the original as its cause so errors.Is and errors.As see through it.
+type scrubbedError struct {
+	msg string
+	err error
+}
+
+func (e *scrubbedError) Error() string { return e.msg }
+func (e *scrubbedError) Unwrap() error { return e.err }
 
 // Registry exposes the profiles this client validates against, so a caller can
 // ask what a model supports without making a request.

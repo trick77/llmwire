@@ -120,7 +120,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	guard := newStallGuard(cancelReq, c.header, stallHeaders)
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		err = c.explain(ctx, callCtx, guard, err)
+		err = c.explain(ctx, callCtx, guard, c.dialError(routeChat, err))
 		guard.stop()
 		cancelReq()
 		cancelCall()
@@ -156,7 +156,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 // read consumes the stream on its own goroutine and publishes the result.
 func (s *Stream) read(resp *http.Response, pl *wirePlan, at time.Time) {
 	var counters streamCounters
-	res, err := readStream(resp.Body, s.guard, &counters, s.client.idle, s.push)
+	res, err := readStream(resp.Body, s.guard, &counters, s.client.idle, s.push, s.client.redact)
 
 	resp.Body.Close()
 	s.guard.stop()

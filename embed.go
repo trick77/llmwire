@@ -58,7 +58,7 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 			// zeros is a valid-looking vector that means nothing.
 			return nil, warnings, err
 		}
-		batchResp, err := parseEmbedResponse(raw, len(batch))
+		batchResp, err := parseEmbedResponseWith(c.redact, raw, len(batch))
 		if err != nil {
 			return nil, warnings, err
 		}
@@ -197,13 +197,17 @@ type embedBatch struct {
 // shaped output and that no downstream check would ever catch, unlike a missing
 // row. So the index is used, and every way it can be wrong is an error.
 func parseEmbedResponse(raw json.RawMessage, want int) (*embedBatch, error) {
+	return parseEmbedResponseWith(Redact, raw, want)
+}
+
+func parseEmbedResponseWith(redact redactor, raw json.RawMessage, want int) (*embedBatch, error) {
 	var w wireEmbedResponse
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return nil, fmt.Errorf("llmwire: %w: decoding embeddings response: %w (body: %s)",
-			ErrMalformedResponse, err, Redact(Truncate(string(raw), maxErrorBody)))
+			ErrMalformedResponse, err, Truncate(redact(string(raw)), maxErrorBody))
 	}
 	if len(w.Error) > 0 && !isJSONNull(w.Error) {
-		return nil, parseAPIError(0, raw)
+		return nil, parseAPIErrorWith(redact, 0, raw)
 	}
 	if len(w.Data) != want {
 		return nil, fmt.Errorf("llmwire: %w: asked for %d embeddings and got %d", ErrResponseShape, want, len(w.Data))

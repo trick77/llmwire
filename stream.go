@@ -187,7 +187,7 @@ const (
 	evFinish
 )
 
-func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idle time.Duration, sink func(streamEvent)) (StreamResult, error) {
+func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idle time.Duration, sink func(streamEvent), redact redactor) (StreamResult, error) {
 	var (
 		content   strings.Builder
 		reasoning strings.Builder
@@ -235,7 +235,7 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 		// frame carries no choices, so ignoring it yields a clean empty stream
 		// and the caller reports success with no answer.
 		if len(chunk.Error) > 0 && !isJSONNull(chunk.Error) {
-			return res, parseAPIError(0, chunk.Error)
+			return res, parseAPIErrorWith(redact, 0, chunk.Error)
 		}
 
 		emit := func(ev streamEvent) {

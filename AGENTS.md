@@ -74,7 +74,7 @@ would drop the param itself — stricter than the wire on purpose: a silently dr
 - **Parse leniently.** Never `DisallowUnknownFields`; accept `null` where the spec
   says number; `finish_reason` is an open set. An `{"error":…}` under a 200, and a
   200 with no choices, are errors — never an empty success.
-- **Redaction is an invariant**: some deployments carry the key in a query string.
+- **Redaction is an invariant**, by shape (`Redact`) AND by value (`Client.scrub`, the configured key whatever it looks like); a dial failure is taken apart so the `url.Error` text never prints the URL.
 - **Never retry.** Parse `Retry-After` into a typed error and stop; a library-level
   retry turns a transient outage into a permanent failure for a job queue.
 - A 2xx that is not an answer wraps a sentinel: `ErrMalformedResponse` (undecodable

@@ -410,6 +410,129 @@ func TestRawPost_ErrorStatusIsDecodedAndHeadersStillReturned(t *testing.T) {
 	}
 }
 
+// --- redaction by value and by URL -------------------------------------------
+
+// The configured key is not necessarily a shape Redact knows: a token-plan host
+// or a self-hosted gateway issues whatever it likes. An upstream that echoes the
+// Authorization header must not put that value into the error, on any path.
+func TestErrors_TheConfiguredKeyNeverAppearsWhateverItsShape(t *testing.T) {
+	const key = "plan-key-of-no-known-shape"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/embeddings") {
+			// A 200 carrying an error object, the embeddings way.
+			_, _ = w.Write([]byte(`{"error":{"message":"refused ` + r.Header.Get("Authorization") + `"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("upstream refused: " + r.Header.Get("Authorization")))
+	}))
+	defer srv.Close()
+	c := New(Config{BaseURL: srv.URL, APIKey: key})
+
+	_, _, err := c.Chat(context.Background(), ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	if err == nil || strings.Contains(err.Error(), key) {
+		t.Fatalf("Chat error = %v, the key must not be quoted", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Message, "[REDACTED]") {
+		t.Errorf("Chat error = %v, want the key replaced inside the APIError message", err)
+	}
+
+	_, _, err = c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: []string{"x"}})
+	if err == nil || strings.Contains(err.Error(), key) {
+		t.Fatalf("Embed error = %v, the key must not be quoted", err)
+	}
+}
+
+// Two ways the value pass could miss, both from the review of this change:
+// the shape pass eating the middle of a key that contains an sk- run, so the
+// value is no longer in the text; and the 4 KiB cut landing inside the key,
+// so only its head is in the buffer. And the streaming error frame, which is
+// parsed on another path than a status error.
+func TestErrors_TheKeyIsStrippedBeforeTheShapePassAndAcrossTheCut(t *testing.T) {
+	// Assembled at runtime: a literal of this shape is exactly what
+	// hack/secret-scan.sh refuses to let into the tree.
+	key := "gw-" + "sk" + "-" + strings.Repeat("a", 24) + "-tail"
+	filler := strings.Repeat("x", maxErrorBody-10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		switch {
+		case r.Header.Get("Accept") == "text/event-stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(`data: {"error":{"message":"refused ` + auth + `","type":"auth"}}` + "\n\n"))
+		case strings.Contains(r.URL.RawQuery, "straddle"):
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(filler + auth))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"bad key ` + auth + `"}}`))
+		}
+	}))
+	defer srv.Close()
+
+	c := New(Config{BaseURL: srv.URL, APIKey: key})
+	req := ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}}
+
+	// A key with an sk- run in the middle: the shape pass alone would leave
+	// "gw-" and "-tail" around a [REDACTED].
+	_, _, err := c.Chat(context.Background(), req)
+	if err == nil || strings.Contains(err.Error(), "gw-") || strings.Contains(err.Error(), "-tail") {
+		t.Errorf("status error = %v, want the whole key gone, not just its sk- run", err)
+	}
+
+	// The same key straddling the read cap.
+	straddle := New(Config{BaseURL: srv.URL + "?straddle=1", APIKey: key})
+	_, _, err = straddle.Chat(context.Background(), req)
+	if err == nil || strings.Contains(err.Error(), "gw-sk") {
+		t.Errorf("straddling error = %v, want no head of the key left at the cut", err)
+	}
+
+	// The error frame inside a 200 stream.
+	stream, _, err := c.ChatStream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for stream.Next() {
+	}
+	err = stream.Err()
+	if err == nil || strings.Contains(err.Error(), "gw-") || strings.Contains(err.Error(), "-tail") {
+		t.Errorf("stream error = %v, want the whole key gone on the streaming path too", err)
+	}
+}
+
+// net/http puts the full URL, query string included, into every dial failure.
+// A base URL that carries its key there would otherwise reach the log through
+// the one error a caller always prints: "could not connect".
+func TestErrors_ADialFailureNamesTheHostNotTheURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	addr := srv.URL
+	srv.Close() // nothing listens any more
+
+	c := New(Config{BaseURL: addr + "/v1?api_key=querysecret"})
+
+	_, _, err := c.Chat(context.Background(), ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	if err == nil {
+		t.Fatal("expected a dial failure")
+	}
+	if strings.Contains(err.Error(), "querysecret") {
+		t.Errorf("error = %v, the query string must not be quoted", err)
+	}
+	if !strings.Contains(err.Error(), addr) {
+		t.Errorf("error = %v, want scheme://host kept so an operator sees where it failed", err)
+	}
+	// The cause is still there for errors.Is: a net error, not a bare string.
+	var nerr interface{ Timeout() bool }
+	if !errors.As(err, &nerr) {
+		t.Errorf("error = %v, want the transport cause kept in the chain", err)
+	}
+
+	_, _, err = c.ChatStream(context.Background(), ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	if err == nil || strings.Contains(err.Error(), "querysecret") || !strings.Contains(err.Error(), addr) {
+		t.Errorf("ChatStream error = %v, want the same trimming on the streaming path", err)
+	}
+}
+
 // --- config ------------------------------------------------------------------
 
 func TestNew_AppliesDefaults(t *testing.T) {
