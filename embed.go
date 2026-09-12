@@ -196,30 +196,30 @@ type embedBatch struct {
 func parseEmbedResponse(raw json.RawMessage, want int) (*embedBatch, error) {
 	var w wireEmbedResponse
 	if err := json.Unmarshal(raw, &w); err != nil {
-		return nil, fmt.Errorf("llmwire: decoding embeddings response: %w (body: %s)",
-			err, Redact(truncate(string(raw), maxErrorBody)))
+		return nil, fmt.Errorf("llmwire: %w: decoding embeddings response: %w (body: %s)",
+			ErrMalformedResponse, err, Redact(Truncate(string(raw), maxErrorBody)))
 	}
 	if len(w.Error) > 0 && !isJSONNull(w.Error) {
 		return nil, parseAPIError(0, raw)
 	}
 	if len(w.Data) != want {
-		return nil, fmt.Errorf("llmwire: asked for %d embeddings and got %d", want, len(w.Data))
+		return nil, fmt.Errorf("llmwire: %w: asked for %d embeddings and got %d", ErrResponseShape, want, len(w.Data))
 	}
 
 	out := &embedBatch{vectors: make([][]float32, want), usage: parseUsage(w.Usage), model: w.Model}
 	for _, d := range w.Data {
 		if d.Index < 0 || d.Index >= want {
-			return nil, fmt.Errorf("llmwire: embeddings response has index %d outside the batch of %d",
-				d.Index, want)
+			return nil, fmt.Errorf("llmwire: %w: embeddings response has index %d outside the batch of %d",
+				ErrResponseShape, d.Index, want)
 		}
 		if out.vectors[d.Index] != nil {
-			return nil, fmt.Errorf("llmwire: embeddings response repeats index %d", d.Index)
+			return nil, fmt.Errorf("llmwire: %w: embeddings response repeats index %d", ErrResponseShape, d.Index)
 		}
 		out.vectors[d.Index] = d.Embedding
 	}
 	for i, v := range out.vectors {
 		if v == nil {
-			return nil, fmt.Errorf("llmwire: embeddings response has no vector for index %d", i)
+			return nil, fmt.Errorf("llmwire: %w: embeddings response has no vector for index %d", ErrResponseShape, i)
 		}
 	}
 	return out, nil

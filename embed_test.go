@@ -133,21 +133,29 @@ func TestEmbed_ReassemblesByIndex(t *testing.T) {
 // Every way the index can be wrong is an error rather than a plausible-looking
 // slice.
 func TestEmbed_MalformedBatchesAreRefused(t *testing.T) {
-	for _, tc := range []struct{ name, body, want string }{
+	// class is the sentinel a caller dispatches on; nil for the error-object
+	// case, which surfaces as an *APIError rather than a shape failure.
+	for _, tc := range []struct {
+		name, body, want string
+		class            error
+	}{
 		{
-			name: "too few rows",
-			body: `{"model":"m","data":[{"index":0,"embedding":[1]}]}`,
-			want: "asked for 2 embeddings and got 1",
+			name:  "too few rows",
+			body:  `{"model":"m","data":[{"index":0,"embedding":[1]}]}`,
+			want:  "asked for 2 embeddings and got 1",
+			class: ErrResponseShape,
 		},
 		{
-			name: "index outside the batch",
-			body: `{"model":"m","data":[{"index":0,"embedding":[1]},{"index":9,"embedding":[2]}]}`,
-			want: "outside the batch",
+			name:  "index outside the batch",
+			body:  `{"model":"m","data":[{"index":0,"embedding":[1]},{"index":9,"embedding":[2]}]}`,
+			want:  "outside the batch",
+			class: ErrResponseShape,
 		},
 		{
-			name: "duplicate index",
-			body: `{"model":"m","data":[{"index":0,"embedding":[1]},{"index":0,"embedding":[2]}]}`,
-			want: "repeats index",
+			name:  "duplicate index",
+			body:  `{"model":"m","data":[{"index":0,"embedding":[1]},{"index":0,"embedding":[2]}]}`,
+			want:  "repeats index",
+			class: ErrResponseShape,
 		},
 		{
 			name: "error object under a 200",
@@ -155,9 +163,10 @@ func TestEmbed_MalformedBatchesAreRefused(t *testing.T) {
 			want: "too long",
 		},
 		{
-			name: "not JSON at all",
-			body: `<html>502</html>`,
-			want: "502",
+			name:  "not JSON at all",
+			body:  `<html>502</html>`,
+			want:  "502",
+			class: ErrMalformedResponse,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,6 +180,14 @@ func TestEmbed_MalformedBatchesAreRefused(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error = %v, want it to mention %q", err, tc.want)
+			}
+			// Callers classify with errors.Is, never by matching the prose
+			// above — the prose is free to change, the class is not.
+			if tc.class != nil && !errors.Is(err, tc.class) {
+				t.Errorf("errors.Is(%v, %v) = false", err, tc.class)
+			}
+			if tc.class == nil && (errors.Is(err, ErrResponseShape) || errors.Is(err, ErrMalformedResponse)) {
+				t.Errorf("an endpoint's own error object was classed as a shape failure: %v", err)
 			}
 			if resp != nil {
 				t.Error("a failed call returned a partial response")

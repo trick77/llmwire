@@ -88,8 +88,8 @@ func parseChatResponse(raw json.RawMessage) (*ChatResponse, error) {
 		// The body goes into the error, redacted and bounded: a compat server
 		// answering with an HTML error page would otherwise produce a bare
 		// "invalid character '<'" and nothing to identify what answered.
-		return nil, fmt.Errorf("llmwire: decoding response: %w (body: %s)",
-			err, Redact(truncate(string(raw), maxErrorBody)))
+		return nil, fmt.Errorf("llmwire: %w: decoding response: %w (body: %s)",
+			ErrMalformedResponse, err, Redact(Truncate(string(raw), maxErrorBody)))
 	}
 
 	// A 200 carrying an error object. Surfaced rather than read as an empty
@@ -102,8 +102,8 @@ func parseChatResponse(raw json.RawMessage) (*ChatResponse, error) {
 	// above looks like when the error object is absent too, and an index would
 	// panic instead of saying so.
 	if len(w.Choices) == 0 {
-		return nil, fmt.Errorf("llmwire: response carried no choices and no error (body: %s)",
-			Redact(truncate(string(raw), maxErrorBody)))
+		return nil, fmt.Errorf("llmwire: %w: response carried no choices and no error (body: %s)",
+			ErrResponseShape, Redact(Truncate(string(raw), maxErrorBody)))
 	}
 
 	ch := w.Choices[0]

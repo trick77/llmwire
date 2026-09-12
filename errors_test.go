@@ -246,21 +246,21 @@ func TestRedactURL_DropsQueryAndUserinfo(t *testing.T) {
 // would put invalid UTF-8 in a log.
 func TestTruncate_CutsOnARuneBoundary(t *testing.T) {
 	s := strings.Repeat("日", 50)
-	got := truncate(s, 10)
+	got := Truncate(s, 10)
 	if !strings.HasSuffix(got, "…(truncated)") {
-		t.Errorf("truncate did not mark the cut: %q", got)
+		t.Errorf("Truncate did not mark the cut: %q", got)
 	}
 	body := strings.TrimSuffix(got, "…(truncated)")
 	for i, r := range body {
 		if r == '�' {
-			t.Fatalf("truncate produced invalid UTF-8 at byte %d", i)
+			t.Fatalf("Truncate produced invalid UTF-8 at byte %d", i)
 		}
 	}
 }
 
 func TestTruncate_ShortStringIsUntouched(t *testing.T) {
-	if got := truncate("short", 100); got != "short" {
-		t.Errorf("truncate altered a short string: %q", got)
+	if got := Truncate("short", 100); got != "short" {
+		t.Errorf("Truncate altered a short string: %q", got)
 	}
 }
 

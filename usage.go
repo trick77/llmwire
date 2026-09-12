@@ -36,6 +36,38 @@ type Usage struct {
 	// only way to settle whether a zero is the endpoint's answer or a field
 	// name this package does not know about.
 	Raw json.RawMessage `json:"raw,omitempty"`
+
+	// reported is whether the wire object carried any accounting at all, by
+	// the same rule the stream parser uses to pick which usage chunk to keep
+	// (wireUsage.reported). Held here rather than re-derived from the lanes
+	// because the two rules differ on one shape: a bare {"total_tokens":N}
+	// is reported on the wire and yields no lane, since this type has no
+	// total lane. Unexported so a caller-built Usage{} reads as not reported.
+	reported bool
+}
+
+// Reported says the endpoint sent a usage object with something in it, so a
+// zero lane is the endpoint's answer rather than silence. A malformed object
+// keeps its bytes in Raw and is NOT reported. Every consumer that counts
+// "how many of my calls were accounted for" needs exactly this and was
+// re-deriving it from the lane pointers.
+func (u Usage) Reported() bool { return u.reported }
+
+// Total is prompt plus completion — the OpenAI-compatible total_tokens, which
+// parseUsage does not keep as its own lane because it is by definition the sum
+// of two lanes that are. ok is false when neither side was reported; a side
+// that is absent counts as zero, so a completion-only object still totals.
+func (u Usage) Total() (total int64, ok bool) {
+	if u.Input.Total == nil && u.Output.Total == nil {
+		return 0, false
+	}
+	if u.Input.Total != nil {
+		total += *u.Input.Total
+	}
+	if u.Output.Total != nil {
+		total += *u.Output.Total
+	}
+	return total, true
 }
 
 // InputTokens is the prompt side. Total is what the endpoint billed as prompt
@@ -113,7 +145,7 @@ func parseUsage(raw json.RawMessage) Usage {
 		return Usage{Raw: raw}
 	}
 
-	u := Usage{Raw: raw}
+	u := Usage{Raw: raw, reported: w.reported()}
 	u.Input.Total = w.PromptTokens
 	u.Output.Total = w.CompletionTokens
 

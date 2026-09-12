@@ -169,6 +169,9 @@ func TestChat_NoChoicesIsAnErrorNotAPanic(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no choices") {
 		t.Fatalf("error = %v, want it to name the missing choices", err)
 	}
+	if !errors.Is(err, ErrResponseShape) {
+		t.Fatalf("errors.Is(%v, ErrResponseShape) = false", err)
+	}
 }
 
 // Parsed leniently: nulls where the spec says objects, an unknown finish reason,
