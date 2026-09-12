@@ -206,6 +206,9 @@ func TestReadStream_TruncatedStreamIsAnError(t *testing.T) {
 	if !strings.Contains(err.Error(), "without finish_reason") {
 		t.Errorf("error = %v, want it to name the missing terminator", err)
 	}
+	if !errors.Is(err, ErrMalformedResponse) {
+		t.Errorf("errors.Is(%v, ErrMalformedResponse) = false: a cut stream is a body that could not be read to the end", err)
+	}
 	// The partial content is still returned, so a caller can log what arrived.
 	if res.Content != "half an ans" {
 		t.Errorf("content = %q, want the partial text", res.Content)

@@ -107,6 +107,42 @@ func TestParseUsage_MalformedObjectKeepsBytesAndDoesNotPanic(t *testing.T) {
 // The finish_reason chunk commonly carries "usage": null, and the real usage
 // arrives later. "Present" must not be confused with "reported", or the parser
 // keeps the null and discards the accounting.
+// Reported and Total are what every consumer re-derived from the lane
+// pointers. Reported follows the wire rule, so the one shape the lanes cannot
+// see — a bare total_tokens — still counts; Total is the sum of what arrived.
+func TestUsage_ReportedAndTotal(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		reported bool
+		total    int64
+		totalOK  bool
+	}{
+		{"absent", ``, false, 0, false},
+		{"null", `null`, false, 0, false},
+		{"empty object", `{}`, false, 0, false},
+		{"malformed", `{"prompt_tokens":`, false, 0, false},
+		{"both lanes", `{"prompt_tokens":25,"completion_tokens":47,"total_tokens":72}`, true, 72, true},
+		{"explicit zeros", `{"prompt_tokens":0,"completion_tokens":0}`, true, 0, true},
+		{"completion only", `{"completion_tokens":9}`, true, 9, true},
+		{"only total_tokens", `{"total_tokens":5}`, true, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := parseUsage(json.RawMessage(tc.body))
+			if got := u.Reported(); got != tc.reported {
+				t.Errorf("Reported() = %v, want %v", got, tc.reported)
+			}
+			total, ok := u.Total()
+			if total != tc.total || ok != tc.totalOK {
+				t.Errorf("Total() = %d, %v; want %d, %v", total, ok, tc.total, tc.totalOK)
+			}
+		})
+	}
+	if (Usage{}).Reported() {
+		t.Error("a caller-built zero Usage must not read as reported")
+	}
+}
+
 func TestWireUsage_ReportedDistinguishesNullFromPopulated(t *testing.T) {
 	for _, tc := range []struct {
 		name string

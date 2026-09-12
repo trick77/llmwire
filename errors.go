@@ -46,6 +46,18 @@ var (
 	ErrBadRequest = errors.New("bad request")
 	// ErrUpstream is a 5xx, or a transport failure with no status at all.
 	ErrUpstream = errors.New("upstream failure")
+
+	// ErrMalformedResponse is a 2xx whose body could not be read as an answer
+	// — an HTML error page from a proxy, a stream that ended without
+	// finish_reason or [DONE]. The wrapped error carries the decoder's own
+	// complaint and, for a body, a redacted and bounded slice of it.
+	ErrMalformedResponse = errors.New("malformed response")
+	// ErrResponseShape is a 2xx that decoded but does not answer the request:
+	// no choices and no error object, the wrong number of embeddings, an
+	// embedding index outside or repeated within the batch. Distinct from
+	// ErrMalformedResponse because a caller retries the two differently — a
+	// proxy page is transient, a shape the endpoint chose to send is not.
+	ErrResponseShape = errors.New("response shape")
 )
 
 // APIError is a decoded error response. Every field is best-effort: endpoints
@@ -203,7 +215,7 @@ func parseAPIError(status int, body []byte) *APIError {
 	// Unparseable: keep the text, bounded and redacted. A truncated body is far
 	// better than none — this is the only evidence of what an undocumented
 	// endpoint objected to.
-	e.Message = Redact(truncate(strings.TrimSpace(string(body)), maxErrorBody))
+	e.Message = Redact(Truncate(strings.TrimSpace(string(body)), maxErrorBody))
 	return e
 }
 
@@ -343,11 +355,13 @@ func RedactURL(raw string) string {
 	return u.String()
 }
 
-// truncate caps a string at max bytes, cutting on a rune boundary and marking
+// Truncate caps a string at max bytes, cutting on a rune boundary and marking
 // the cut. Byte-offset truncation would split a multi-byte character and put
 // invalid UTF-8 in the log, which is not hypothetical: these endpoints return
-// non-ASCII error text routinely (see the Chinese 1210 body above).
-func truncate(s string, max int) string {
+// non-ASCII error text routinely (see the Chinese 1210 body above). Exported
+// for the same reason Redact is: every consumer logging a raw usage object or
+// an error body needs exactly this and was carrying its own copy.
+func Truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}

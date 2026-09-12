@@ -76,7 +76,7 @@ func TestProbe_MiMoToolCallFormat(t *testing.T) {
 			default:
 				t.Logf("FINDING %s: no tool call of either kind. finish_reason=%q content=%q "+
 					"(model declined the tool; not evidence either way)",
-					model, res.FinishReason, truncate(res.Content, 200))
+					model, res.FinishReason, Truncate(res.Content, 200))
 			}
 		})
 	}
@@ -143,7 +143,7 @@ func TestProbe_MiMoToolFreeCall(t *testing.T) {
 				t.Logf("FINDING %s: inline tool markup LEAKED on a tool-free call, in %s. "+
 					"=> stream gating is CORE; without it this reaches the user as raw XML.",
 					model, channelOf(res))
-				t.Logf("  content=%q", truncate(res.Content, 300))
+				t.Logf("  content=%q", Truncate(res.Content, 300))
 				return
 			}
 			t.Logf("FINDING %s: clean prose on a tool-free call, no markup "+
@@ -191,7 +191,7 @@ func TestProbe_MiMoReasoningReplayRequirement(t *testing.T) {
 	}
 	if len(res1.ToolCalls) == 0 {
 		t.Skipf("model returned no native tool call (content=%q); "+
-			"this probe needs one to build the second turn", truncate(res1.Content, 160))
+			"this probe needs one to build the second turn", Truncate(res1.Content, 160))
 	}
 	call := res1.ToolCalls[0]
 
@@ -389,7 +389,7 @@ func TestProbe_UsageReportingWithoutStreamOptions(t *testing.T) {
 			}
 			without := res.Usage.Input.Total != nil
 			t.Logf("FINDING %s: usage WITHOUT stream_options: reported=%v (raw=%s)",
-				tc.model, without, truncate(string(res.Usage.Raw), 240))
+				tc.model, without, Truncate(string(res.Usage.Raw), 240))
 
 			b2 := probeBody(tc.model, "Reply with the single word: ok")
 			b2[tc.cap] = probeMaxTokens
@@ -579,18 +579,18 @@ func TestProbe_CachedTokensAreInsidePromptTokens(t *testing.T) {
 				}
 				if res.Usage.Input.Total == nil {
 					t.Fatalf("FINDING %s: no prompt_tokens reported (raw=%s); nothing to compare",
-						tc.model, truncate(string(res.Usage.Raw), 240))
+						tc.model, Truncate(string(res.Usage.Raw), 240))
 				}
 				return res, *res.Usage.Input.Total, valueOr(res.Usage.Input.CacheRead, 0)
 			}
 
 			first, p1, c1 := call()
-			t.Logf("call 1: prompt=%d cached=%d raw=%s", p1, c1, truncate(string(first.Usage.Raw), 240))
+			t.Logf("call 1: prompt=%d cached=%d raw=%s", p1, c1, Truncate(string(first.Usage.Raw), 240))
 			// Caches populate asynchronously on some endpoints; a few seconds is
 			// what their docs suggest and costs nothing.
 			time.Sleep(5 * time.Second)
 			second, p2, c2 := call()
-			t.Logf("call 2: prompt=%d cached=%d raw=%s", p2, c2, truncate(string(second.Usage.Raw), 240))
+			t.Logf("call 2: prompt=%d cached=%d raw=%s", p2, c2, Truncate(string(second.Usage.Raw), 240))
 
 			delta := c2 - c1
 			switch {
