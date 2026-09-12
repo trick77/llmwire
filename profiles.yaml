@@ -114,6 +114,10 @@ profiles:
     # becomes a real rate, and the 0 here is an explicit measurement of what the
     # page said on verified_on, not an assumption that the lane is free.
     #
+    # cache_read MEASURED 2026-09-13: cached_tokens sits INSIDE prompt_tokens
+    # (9208 prompt / 0 cached, then 9208 / 9152 on the identical prompt), on
+    # prompt_tokens_details.cached_tokens. The full-rate lane is the difference.
+    #
     # NO WINDOW IS ATTACHED, deliberately. Z.ai documents a Mon-Fri 14:00-18:00
     # Asia/Singapore peak with everything else, weekends included, at 0.5x — but
     # documents it as a COEFFICIENT ON CREDIT BURN, and whether it touches the
@@ -238,6 +242,9 @@ profiles:
       seconds, against 1-5 seconds for glm-5.3-flash on comparable prompts.
       Prompt caching is live and visible — a 258-token prompt reported 192 cached
       — because the endpoint injects its own system message when none is given.
+      Measured 2026-09-13: cached_tokens sits INSIDE prompt_tokens (11131 / 192,
+      then 11131 / 11072 on the identical prompt), so the full-rate lane is the
+      difference and pricing subtracts it.
       reasoning_effort is accepted on chat/completions despite the vendor
       documenting it as a Responses-API parameter; whether it changes anything is
       not established.

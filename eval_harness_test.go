@@ -90,7 +90,17 @@ type meter struct {
 	maxUSD   float64
 }
 
-var theMeter = newMeter()
+// Built in init, AFTER .env is loaded: a package-level initialiser would read
+// the budget variables before the file could supply them, and a ceiling
+// written there would silently run under the default.
+var theMeter *meter
+
+func init() {
+	if os.Getenv(evalEnvVar) == "1" {
+		loadDotEnv(".env")
+	}
+	theMeter = newMeter()
+}
 
 func newMeter() *meter {
 	return &meter{
@@ -164,6 +174,41 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, theMeter.summary())
 	}
 	os.Exit(code)
+}
+
+// loadDotEnv exports KEY=value lines from a gitignored .env into the process,
+// only under the eval gate and only for names not already set, so a value in
+// the real environment always wins. It is the file .env.example describes;
+// sourcing it by hand before every run is what people get wrong. A missing file
+// is nothing: the probes then skip with the usual named reason. CI has no .env.
+//
+// Accepts the common dotenv spellings: an "export " prefix and a value wrapped
+// in matching quotes. Anything else is taken literally, which for a key or a
+// URL means a 401 rather than a named skip, so the file is kept bare.
+func loadDotEnv(path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "export "))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if n := len(v); n >= 2 && (v[0] == '"' || v[0] == '\'') && v[n-1] == v[0] {
+			v = v[1 : n-1]
+		}
+		if !ok || v == "" {
+			continue
+		}
+		// Empty counts as unset, matching how endpoint.client reads it: an
+		// exported-but-empty name in a shell profile must not shadow the file.
+		if os.Getenv(k) == "" {
+			os.Setenv(k, v)
+		}
+	}
 }
 
 // --- gating -------------------------------------------------------------------
