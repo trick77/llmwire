@@ -40,9 +40,9 @@ func TestFromEnv(t *testing.T) {
 		}
 	})
 
-	t.Run("unset api key names the variable", func(t *testing.T) {
+	t.Run("whitespace-only api key names the variable", func(t *testing.T) {
 		t.Setenv("BACKEND_CHAT_BASE_URL", "https://api.example")
-		t.Setenv("BACKEND_CHAT_API_KEY", "")
+		t.Setenv("BACKEND_CHAT_API_KEY", " ")
 		_, err := FromEnv("glm-5.3-flash", Config{})
 		var me *MissingEnvError
 		if !errors.As(err, &me) || me.Var != "BACKEND_CHAT_API_KEY" {

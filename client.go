@@ -205,16 +205,19 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Trimmed: a whitespace-only value (a stray `export X= ` in a .env) would
+	// otherwise build a client that fails later with an opaque dial or 401
+	// instead of the named error here.
 	if cfg.BaseURL == "" {
-		v, ok := os.LookupEnv(p.BaseURLEnv)
-		if p.BaseURLEnv == "" || !ok || v == "" {
+		v := strings.TrimSpace(os.Getenv(p.BaseURLEnv))
+		if v == "" {
 			return nil, &MissingEnvError{Model: model, Var: p.BaseURLEnv, Field: "base_url_env"}
 		}
 		cfg.BaseURL = v
 	}
 	if cfg.APIKey == "" && p.APIKeyEnv != "" {
-		v, ok := os.LookupEnv(p.APIKeyEnv)
-		if !ok || v == "" {
+		v := strings.TrimSpace(os.Getenv(p.APIKeyEnv))
+		if v == "" {
 			return nil, &MissingEnvError{Model: model, Var: p.APIKeyEnv, Field: "api_key_env"}
 		}
 		cfg.APIKey = v
