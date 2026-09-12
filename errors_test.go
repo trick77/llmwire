@@ -303,3 +303,31 @@ func TestParseAPIError_NonJSONDataPrefixIsNotUnframed(t *testing.T) {
 		t.Errorf("message = %q, want the original text preserved", got.Message)
 	}
 }
+
+// A rate limit must answer errors.As for *APIError like every other refusal.
+//
+// Embedding does not give that: errors.As matches the dynamic type or what
+// Unwrap returns, so without Unwrap this check failed for 429 alone and passed
+// everywhere else — the shape of bug that ships, because the failing case is the
+// one that needs a live rate limit to see.
+func TestRateLimitError_UnwrapsToAPIError(t *testing.T) {
+	hdr := http.Header{}
+	hdr.Set("Retry-After", "17")
+	err := error(newRateLimitError(parseAPIError(429, []byte(`{"error":{"message":"slow down","code":"1302"}}`)), hdr))
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatal("a rate limit does not unwrap to *APIError; a caller keying on status loses 429")
+	}
+	if apiErr.StatusCode != 429 || apiErr.Code != "1302" || apiErr.Message != "slow down" {
+		t.Errorf("unwrapped = %+v, want the 429's own status, code and message", apiErr)
+	}
+	// The sentinel and the typed form keep working alongside it.
+	if !errors.Is(err, ErrRateLimited) {
+		t.Error("errors.Is(ErrRateLimited) stopped matching")
+	}
+	var rl *RateLimitError
+	if !errors.As(err, &rl) || rl.RetryAfter != 17*time.Second {
+		t.Errorf("RetryAfter = %v, want 17s", rl.RetryAfter)
+	}
+}
