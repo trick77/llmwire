@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Error handling for OpenAI-compatible endpoints, which agree on the shape of a
@@ -351,11 +352,8 @@ func truncate(s string, max int) string {
 		return s
 	}
 	cut := max
-	for cut > 0 && !utf8RuneStart(s[cut]) {
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
 	return s[:cut] + "…(truncated)"
 }
-
-// utf8RuneStart reports whether b is the first byte of a UTF-8 sequence.
-func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }

@@ -353,7 +353,7 @@ func TestStallGuard_FiresAndNamesItsReason(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("guard did not fire")
 	}
-	if got := g.firedReason(); got != stallHeaders {
+	if got, _ := g.firedReason(); got != stallHeaders {
 		t.Errorf("reason = %q, want %q", got, stallHeaders)
 	}
 }
@@ -369,7 +369,7 @@ func TestStallGuard_ArmChangesTheReasonReported(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("guard did not fire after re-arming")
 	}
-	if got := g.firedReason(); got != stallIdle {
+	if got, _ := g.firedReason(); got != stallIdle {
 		t.Errorf("reason = %q, want %q — naming the bound that actually elapsed is the point", got, stallIdle)
 	}
 }
@@ -390,8 +390,8 @@ func TestStallGuard_ArmPostponesFiring(t *testing.T) {
 		t.Fatal("guard fired despite being re-armed inside its bound")
 	default:
 	}
-	if g.firedReason() != "" {
-		t.Errorf("reason = %q, want empty while healthy", g.firedReason())
+	if got, _ := g.firedReason(); got != "" {
+		t.Errorf("reason = %q, want empty while healthy", got)
 	}
 }
 
@@ -404,7 +404,7 @@ func TestStallGuard_ArmAfterFiringIsIgnored(t *testing.T) {
 	<-fired
 
 	g.arm(time.Hour, stallIdle)
-	if got := g.firedReason(); got != stallHeaders {
+	if got, _ := g.firedReason(); got != stallHeaders {
 		t.Errorf("reason = %q, want it to stay %q after firing", got, stallHeaders)
 	}
 }
@@ -451,7 +451,7 @@ func TestStallGuard_StaleFiringReArmsInsteadOfCancelling(t *testing.T) {
 	if got := cancels.Load(); got != 0 {
 		t.Errorf("cancel called %d times, want 0 — the deadline had moved", got)
 	}
-	if got := g.firedReason(); got != "" {
+	if got, _ := g.firedReason(); got != "" {
 		t.Errorf("reason = %q, want empty: the guard must still read as healthy", got)
 	}
 }
@@ -472,7 +472,7 @@ func TestStallGuard_FiringAfterTheDeadlineCancelsOnce(t *testing.T) {
 	if got := cancels.Load(); got != 1 {
 		t.Errorf("cancel called %d times, want exactly 1", got)
 	}
-	if got := g.firedReason(); got != stallIdle {
+	if got, _ := g.firedReason(); got != stallIdle {
 		t.Errorf("reason = %q, want %q", got, stallIdle)
 	}
 }

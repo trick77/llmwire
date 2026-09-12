@@ -324,6 +324,12 @@ func TestChat_HeaderStallIsNamed(t *testing.T) {
 	if !strings.Contains(err.Error(), stallHeaders) {
 		t.Errorf("error = %v, want it to name %q", err, stallHeaders)
 	}
+	// The duration named must be the one that was armed, the 60ms call cap. This
+	// once reported the client's header bound instead, a number that never applied
+	// on this route.
+	if strings.Contains(err.Error(), DefaultHeaderTimeout.String()) {
+		t.Errorf("error = %v, names the %s header bound, which was never armed here", err, DefaultHeaderTimeout)
+	}
 }
 
 // A non-streaming answer slower than the HEADER bound but inside the call cap must

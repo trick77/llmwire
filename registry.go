@@ -127,11 +127,7 @@ func NewRegistry(doc []byte) (*Registry, error) {
 			if err := checkDerivedKeys(p.ID, e.node); err != nil {
 				return nil, fmt.Errorf("llmwire: %w", err)
 			}
-			merged, err := p.resolve(base)
-			if err != nil {
-				return nil, fmt.Errorf("llmwire: resolving %q: %w", p.ID, err)
-			}
-			p = merged
+			p = p.resolve(base)
 		}
 		applyDefaults(&p)
 		if err := p.validate(); err != nil {
