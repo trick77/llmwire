@@ -91,6 +91,13 @@ bounds, and a failure says which one fired. Completion is asserted by `[DONE]` o
 looks exactly like a finished one. An `error` frame arriving inside a `200` stream
 is surfaced rather than read as an empty answer.
 
+**Can present as opencode.** Some endpoints are sold as one client's backend and
+treat a neutral `User-Agent` as a bot. `Config{EmulateOpenCode: true}` sends
+opencode's client string and its session header pair; headers only, never a
+request body. The session id is the client's own — minted at construction,
+rotated after a 30-minute idle gap, the way a person's session starts and ends —
+and there is deliberately no way to supply one.
+
 ## Scope
 
 One wire protocol: `/chat/completions` and `/embeddings`. Anthropic, Gemini-native

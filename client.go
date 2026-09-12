@@ -88,6 +88,17 @@ type Config struct {
 	// without waiting for it to be upstreamed here, and so tests can drive
 	// validation with a profile that does not exist in the real world.
 	Registry *Registry
+
+	// EmulateOpenCode presents every request as the opencode client: its
+	// User-Agent, and the session header pair it sends. Headers only, never a
+	// request body. It overrides UserAgent, since that string is the whole point;
+	// it does not override a session header set by hand in Headers.
+	//
+	// Some endpoints are sold as one client's backend and treat a neutral
+	// User-Agent as a bot. The session id is the Client's own — minted at
+	// construction, rotated after an idle gap — and there is deliberately no way
+	// to supply one. See identity.go.
+	EmulateOpenCode bool
 }
 
 // DefaultUserAgent is what this package sends when Config.UserAgent is empty.
@@ -105,6 +116,8 @@ type Client struct {
 	cap       time.Duration
 	now       func() time.Time
 	registry  *Registry
+	// session is non-nil only under EmulateOpenCode.
+	session *session
 }
 
 // New builds a Client.
@@ -120,6 +133,10 @@ func New(cfg Config) *Client {
 	}
 	if cfg.UserAgent == "" {
 		cfg.UserAgent = DefaultUserAgent
+	}
+	if cfg.EmulateOpenCode {
+		// After the default, so the emulation is what wins.
+		cfg.UserAgent = OpenCodeUserAgent
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -151,7 +168,7 @@ func New(cfg Config) *Client {
 	for k, v := range cfg.Headers {
 		headers[k] = v
 	}
-	return &Client{
+	c := &Client{
 		baseURL:   strings.TrimRight(cfg.BaseURL, "/"),
 		apiKey:    cfg.APIKey,
 		userAgent: cfg.UserAgent,
@@ -163,6 +180,10 @@ func New(cfg Config) *Client {
 		now:       cfg.Now,
 		registry:  cfg.Registry,
 	}
+	if cfg.EmulateOpenCode {
+		c.session = newSession(cfg.Now)
+	}
+	return c
 }
 
 // Now exposes the client's clock, so pricing and tests share one source of time.
@@ -304,6 +325,29 @@ func (c *Client) newRequest(ctx context.Context, route string, body []byte) (*ht
 	// compressed body to decode ourselves, mid-stream.
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
+	}
+	// After the caller's headers. Read per request rather than fixed at New,
+	// because the id rotates after an idle gap.
+	if c.session != nil {
+		// The client string is the flag's whole meaning, so it wins even over a
+		// User-Agent smuggled in through the generic Headers map — otherwise the
+		// flag would be on and the emulation off, with nothing to say so.
+		req.Header.Set("User-Agent", OpenCodeUserAgent)
+
+		// The session pair is one value under two names; opencode never sends
+		// them apart. A caller who pinned either one by hand keeps their value
+		// — Headers is the escape hatch for what this package does not model —
+		// and it is mirrored into the other, so the pair stays a pair. Only when
+		// neither was set does the client's own session id go out.
+		id := c.session.current()
+		switch pinnedID, pinnedAff := req.Header.Get(HeaderSessionID), req.Header.Get(HeaderSessionAffinity); {
+		case pinnedID != "":
+			id = pinnedID
+		case pinnedAff != "":
+			id = pinnedAff
+		}
+		req.Header.Set(HeaderSessionID, id)
+		req.Header.Set(HeaderSessionAffinity, id)
 	}
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
