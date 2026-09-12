@@ -447,10 +447,15 @@ func TestNew_DefaultHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
 	if !ok {
 		t.Fatalf("transport is %T, want *http.Transport", c.http.Transport)
 	}
-	// Set as a backstop only; the stall guard is the bound actually relied on,
-	// because ResponseHeaderTimeout does not apply over HTTP/2.
-	if tr.ResponseHeaderTimeout != DefaultHeaderTimeout {
-		t.Errorf("ResponseHeaderTimeout = %v, want the configured header bound", tr.ResponseHeaderTimeout)
+	// A backstop only, and deliberately LATER than the guard: the two would
+	// otherwise race, and a transport win reports its own generic timeout
+	// instead of the named bound the split exists to provide.
+	if tr.ResponseHeaderTimeout != DefaultHeaderTimeout+headerBackstopHeadroom {
+		t.Errorf("ResponseHeaderTimeout = %v, want the header bound plus headroom (%v)",
+			tr.ResponseHeaderTimeout, DefaultHeaderTimeout+headerBackstopHeadroom)
+	}
+	if tr.ResponseHeaderTimeout <= DefaultHeaderTimeout {
+		t.Error("the transport backstop must fire after the stall guard, not with it")
 	}
 }
 

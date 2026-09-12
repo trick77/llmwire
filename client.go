@@ -45,6 +45,11 @@ const (
 	// DefaultCallTimeout is the backstop for a stream that stays alive forever
 	// without finishing — dribbling frames past any sane answer length.
 	DefaultCallTimeout = 15 * time.Minute
+	// headerBackstopHeadroom is how much later than the stall guard the
+	// transport's own header timeout fires. Large enough that the guard always
+	// wins the race and names the bound; small enough that a request still ends
+	// if the guard somehow never fires at all.
+	headerBackstopHeadroom = 30 * time.Second
 )
 
 // Config configures the transport.
@@ -77,6 +82,12 @@ type Config struct {
 	// endpoints with off-peak pricing, and a test that only passes during a
 	// particular local window is worse than no test. Defaults to time.Now.
 	Now func() time.Time
+
+	// Registry supplies the model profiles this client validates against.
+	// Defaults to the built-in one. Injectable so a caller can add a deployment
+	// without waiting for it to be upstreamed here, and so tests can drive
+	// validation with a profile that does not exist in the real world.
+	Registry *Registry
 }
 
 // DefaultUserAgent is what this package sends when Config.UserAgent is empty.
@@ -93,6 +104,7 @@ type Client struct {
 	idle      time.Duration
 	cap       time.Duration
 	now       func() time.Time
+	registry  *Registry
 }
 
 // New builds a Client.
@@ -112,6 +124,9 @@ func New(cfg Config) *Client {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.Registry == nil {
+		cfg.Registry = Default()
+	}
 	hc := cfg.HTTPClient
 	if hc == nil {
 		// Clone the stdlib default rather than build a bare Transport, so
@@ -119,7 +134,17 @@ func New(cfg Config) *Client {
 		// values instead of being silently dropped. Built after the defaults
 		// resolve, so the backstop matches the bound actually configured.
 		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.ResponseHeaderTimeout = cfg.HeaderTimeout
+		// Deliberately LONGER than the guard's own header bound.
+		//
+		// Transport.ResponseHeaderTimeout is a backstop for the case the guard
+		// cannot cover, not a second bound of equal standing: it is an HTTP/1.1
+		// feature and does not apply once a connection is negotiated as HTTP/2,
+		// which is what these endpoints do. Setting the two to the same value
+		// makes them race, and when the transport wins the error is its generic
+		// "timeout awaiting response headers" rather than the guard's named
+		// bound — losing exactly the classification the split bounds exist to
+		// provide. The headroom makes the guard reliably first.
+		tr.ResponseHeaderTimeout = cfg.HeaderTimeout + headerBackstopHeadroom
 		hc = &http.Client{Transport: tr}
 	}
 	headers := make(map[string]string, len(cfg.Headers))
@@ -136,6 +161,7 @@ func New(cfg Config) *Client {
 		idle:      cfg.IdleTimeout,
 		cap:       cfg.CallTimeout,
 		now:       cfg.Now,
+		registry:  cfg.Registry,
 	}
 }
 
@@ -280,3 +306,7 @@ func (c *Client) explain(parent, call context.Context, guard *stallGuard, err er
 	}
 	return err
 }
+
+// Registry exposes the profiles this client validates against, so a caller can
+// ask what a model supports without making a request.
+func (c *Client) Registry() *Registry { return c.registry }
