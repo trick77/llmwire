@@ -1,0 +1,276 @@
+# Model profiles.
+#
+# Hardcoded and embedded, never fetched at runtime. Published catalogues
+# (models.dev, LiteLLM's model_prices_and_context_window.json) are an AUTHORING
+# source to cross-check against; a runtime dependency on one buys a network
+# call, a cache, a staleness window and a fallback table, and this file is the
+# fallback table.
+#
+# Every entry marked `verified: measured` was established by a probe in
+# eval_probe_test.go against the live endpoint, and FINDINGS.md records what each
+# one saw. Six of those measurements contradict a vendor doc. Where they
+# disagree, this file follows the measurement.
+#
+# Adding a model: write the entry, run `LLMWIRE_EVAL=1 go test -run Probe`, and
+# set `verified: measured` only for the bits a probe actually established. An
+# unmeasured field is left absent rather than guessed — absent means "assume
+# nothing", not "assume the default".
+
+profiles:
+  # ---------------------------------------------------------------------------
+  # Z.ai, general (pay-as-you-go) host. NOT the Coding Plan host, which is
+  # restricted to that plan's own tools and refuses calls from elsewhere.
+  # ---------------------------------------------------------------------------
+  - id: glm-5.3-flash
+    endpoint: chat
+    wire_model_id: glm-5.3-flash
+    base_url_env: BACKEND_CHAT_BASE_URL
+    api_key_env: BACKEND_CHAT_API_KEY
+    verified: measured
+
+    # MEASURED, and the single most expensive quirk in this file. This endpoint
+    # ACCEPTS max_completion_tokens and then IGNORES it: a request capping at 16
+    # returned 481 completion tokens with finish_reason "stop". No rejection, no
+    # warning, nothing to notice. Sending the wrong parameter name here means
+    # unbounded output, not an error.
+    max_tokens_param: max_tokens
+
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      # MEASURED: thinking:{"type":"disabled"} is refused outright —
+      #   status 400, code 1210
+      #   "This model always engages in thinking and cannot be disabled;
+      #    please use low, high, or max"
+      # Z.ai's own API reference documents the disable toggle as valid. It is
+      # not, on this model. The measurement wins.
+      can_be_disabled: false
+      control: effort
+      # MEASURED, exactly this set. The provider's global enum has seven values;
+      # this model takes three. none, minimal, medium and xhigh are ALL refused
+      # with the same code 1210 and the same message as the disable toggle —
+      # so the code is overloaded across two unrelated conditions, and the
+      # message names only a subset of what it rejects. Dispatching on the prose
+      # would be wrong twice over.
+      effort_values: [low, high, max]
+      # The vendor's documented default and their recommendation for this model.
+      default_effort: max
+      stream_field: reasoning_content
+
+    # Sent explicitly rather than omitted. The endpoint's own fallbacks are
+    # materially lower than the vendor's recommended operating point, so leaving
+    # these out does not mean "the model's defaults" — it means running the
+    # model off the point it was tuned for.
+    temperature:
+      supported: true
+      recommended_value: 1.0
+    top_p:
+      supported: true
+      recommended_value: 0.95
+
+    tools:
+      supported: true
+      format: native
+      # Documented as auto-only. NOT measured: no probe offered a forced choice
+      # to this endpoint, so this follows the doc and is the weakest line here.
+      tool_choice_values: [auto]
+      supports_forced_choice: false
+
+    output:
+      json_object: true
+      # MEASURED: accepted and honoured, despite json_schema being absent from
+      # Z.ai's OpenAPI enum and from their documentation entirely. A third-party
+      # aggregator claimed support and was right.
+      json_schema: true
+      strict_schema: true
+
+    streaming:
+      supported: true
+      # MEASURED both ways: usage arrives without asking, and the parameter is
+      # accepted anyway (its request schema does not list it).
+      needs_include_usage: false
+      accepts_stream_options: true
+
+    limits:
+      context: 1000000
+      max_output: 131072
+
+    vision: true
+    finish_reasons_extra: [sensitive, model_context_window_exceeded, network_error]
+
+    notes: >-
+      A 1024-token cap at reasoning_effort max produced 1022 stream frames and
+      ZERO content characters: the whole budget went to reasoning. The cap counts
+      reasoning tokens, so sizing it tightly on a deep call returns an empty
+      answer with finish_reason "length" and no error.
+
+  # ---------------------------------------------------------------------------
+  # Xiaomi MiMo. Reached here over a Token Plan host, which bills subscription
+  # credits rather than dollars.
+  # ---------------------------------------------------------------------------
+  - id: mimo-v2.5-pro
+    endpoint: chat
+    wire_model_id: mimo-v2.5-pro
+    base_url_env: BACKEND_CHAT_BASE_URL
+    api_key_env: BACKEND_CHAT_API_KEY
+    verified: measured
+
+    # MEASURED: this endpoint honours BOTH max_tokens and max_completion_tokens
+    # — each returned exactly 16 tokens with finish_reason "length". The belief
+    # that only max_completion_tokens works is too strong. The explicit one is
+    # sent because it is the name the vendor documents.
+    max_tokens_param: max_completion_tokens
+
+    reasoning:
+      supported: true
+      # Thinking is ON unless switched off.
+      enabled_by_default: true
+      can_be_disabled: true
+      control: toggle_object
+      stream_field: reasoning_content
+
+    # MEASURED behaviour, documented by the vendor: while thinking is on, these
+    # are accepted and then FORCIBLY overridden to the model's own values. Not
+    # rejected, not honoured. Sending them is harmless; believing they took
+    # effect is not.
+    temperature:
+      supported: true
+      inert_while_reasoning: true
+    top_p:
+      supported: true
+      inert_while_reasoning: true
+
+    tools:
+      supported: true
+      # MEASURED: native tool_calls, both with tools offered and on a forced
+      # tool-free call. The model's own chat template emits XML, but the serving
+      # layer parses it before it reaches a client.
+      #
+      # recover_inline_markup stays OFF here but the capability is retained:
+      # loom observed that markup leaking in production against a longer,
+      # tool-saturated history than a probe reproduces. Failing to reproduce is
+      # not refuting.
+      format: native
+      recover_inline_markup: false
+      # Documented auto-only; anything else is silently DROPPED by the backend
+      # rather than rejected, so a caller asking for a forced call would get an
+      # unforced one with no error.
+      tool_choice_values: [auto]
+      supports_forced_choice: false
+      supports_parallel: true
+
+    output:
+      json_object: true
+      # MEASURED: accepted and honoured, though the vendor documents only
+      # json_object.
+      json_schema: true
+      strict_schema: true
+
+    streaming:
+      supported: true
+      needs_include_usage: false
+      accepts_stream_options: true
+
+    limits:
+      context: 1048576
+      max_output: 131072
+
+    # MEASURED: an image_url part returns HTTP 404, "No endpoints found that
+    # support image input". Its sibling mimo-v2.5 accepts the same part. The
+    # module errors rather than rerouting: they are different models with
+    # different capabilities, and a silent swap would misattribute cost.
+    vision: false
+    finish_reasons_extra: [repetition_truncation]
+
+    notes: >-
+      Latency is what to plan around, not tokens: single calls measured 25-64
+      seconds, against 1-5 seconds for glm-5.3-flash on comparable prompts.
+      Prompt caching is live and visible — a 258-token prompt reported 192 cached
+      — because the endpoint injects its own system message when none is given.
+      reasoning_effort is accepted on chat/completions despite the vendor
+      documenting it as a Responses-API parameter; whether it changes anything is
+      not established.
+
+  - id: mimo-v2.5
+    endpoint: chat
+    wire_model_id: mimo-v2.5
+    base_url_env: BACKEND_CHAT_BASE_URL
+    api_key_env: BACKEND_CHAT_API_KEY
+    verified: measured
+
+    max_tokens_param: max_completion_tokens
+
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: true
+      control: toggle_object
+      stream_field: reasoning_content
+
+    temperature:
+      supported: true
+      inert_while_reasoning: true
+    top_p:
+      supported: true
+      inert_while_reasoning: true
+
+    tools:
+      supported: true
+      format: native
+      recover_inline_markup: false
+      tool_choice_values: [auto]
+      supports_forced_choice: false
+      supports_parallel: true
+
+    output:
+      json_object: true
+      json_schema: true
+      strict_schema: true
+
+    streaming:
+      supported: true
+      needs_include_usage: false
+      accepts_stream_options: true
+
+    limits:
+      context: 1048576
+      max_output: 32768
+
+    # MEASURED: accepts the same image part that 404s on -pro.
+    vision: true
+    finish_reasons_extra: [repetition_truncation]
+
+    notes: >-
+      The vision-capable sibling of mimo-v2.5-pro. Not "the weaker model": it is
+      the same reasoning family and thinks when asked to.
+
+  # ---------------------------------------------------------------------------
+  # OpenAI embeddings.
+  # ---------------------------------------------------------------------------
+  - id: text-embedding-3-small
+    endpoint: embeddings
+    wire_model_id: text-embedding-3-small
+    base_url_env: BACKEND_EMBED_BASE_URL
+    api_key_env: BACKEND_EMBED_API_KEY
+    verified: source-derived
+    limits:
+      # Per-input token ceiling. The API reference says 8192 and the cookbook
+      # says 8191; the lower figure is used, since the cost of being one token
+      # conservative is nothing and the cost of being one over is a 400.
+      context: 8191
+    notes: >-
+      1536 dimensions by default. Over-length input is rejected, never
+      truncated: at most 2048 inputs per request and 300000 tokens summed across
+      them. Full-length vectors are unit length; a client that truncates one by
+      hand must renormalise, which is why the dimensions parameter is the
+      supported way to shorten.
+
+  - id: text-embedding-3-large
+    endpoint: embeddings
+    wire_model_id: text-embedding-3-large
+    base_url_env: BACKEND_EMBED_BASE_URL
+    api_key_env: BACKEND_EMBED_API_KEY
+    verified: source-derived
+    limits:
+      context: 8191
+    notes: 3072 dimensions by default. Same request limits as the -small model.
