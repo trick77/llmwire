@@ -14,6 +14,25 @@ import (
 // "ses_", 12 lowercase hex, 14 base62.
 var sessionIDShape = regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
 
+// The client string is four name/version tokens in the order the SDK composes
+// them. A future bump that drops or reorders one would still pass every test
+// that compares against the constant, so the shape is pinned here.
+func TestOpenCodeUserAgentShape(t *testing.T) {
+	want := []string{"opencode", "ai-sdk/openai-compatible", "ai-sdk/provider-utils", "runtime/bun"}
+	tokens := strings.Split(OpenCodeUserAgent, " ")
+	if len(tokens) != len(want) {
+		t.Fatalf("OpenCodeUserAgent = %q, want %d tokens", OpenCodeUserAgent, len(want))
+	}
+	version := regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+	for i, tok := range tokens {
+		// The name may itself contain a slash; the version is after the last one.
+		idx := strings.LastIndex(tok, "/")
+		if idx < 0 || tok[:idx] != want[i] || !version.MatchString(tok[idx+1:]) {
+			t.Errorf("token %d = %q, want %s/<semver>", i, tok, want[i])
+		}
+	}
+}
+
 func TestNewSessionID_hasTheUpstreamShapeAndIsUnique(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 1000; i++ {

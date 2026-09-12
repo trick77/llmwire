@@ -33,7 +33,20 @@ import (
 // built the request, and the runtime it ran on. Pinned to one release rather
 // than tracking opencode's, since the point is a plausible client, not the
 // latest one.
-const OpenCodeUserAgent = "opencode/1.18.11 ai-sdk/openai-compatible/3.0.20 ai-sdk/provider-utils/5.0.18 runtime/bun/1.3.14"
+//
+// The four tokens must come from ONE opencode release, or the string is a
+// version mix no real client has ever sent. Where each comes from, at the
+// pinned tag of github.com/anomalyco/opencode:
+//
+//	opencode/<v>                   packages/opencode/src/session/llm/request.ts, USER_AGENT
+//	ai-sdk/openai-compatible/<v>   bun.lock, the packages/opencode entry for @ai-sdk/openai-compatible
+//	ai-sdk/provider-utils/<v>      bun.lock, the packages/opencode entry for @ai-sdk/provider-utils
+//	runtime/bun/<v>                package.json, packageManager
+//
+// The order is the SDK's: the openai-compatible provider appends its own
+// token to opencode's, then provider-utils appends its version and the
+// runtime (navigator.userAgent lowercased) as it sends the request.
+const OpenCodeUserAgent = "opencode/1.18.11 ai-sdk/openai-compatible/2.0.41 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14"
 
 // The two headers opencode sends, both carrying the same id. The upstream sends
 // the pair back too; "affinity" is what it is for — pinning the many calls one
