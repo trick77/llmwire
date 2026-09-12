@@ -16,9 +16,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -275,7 +277,7 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return StreamResult{}, c.explain(ctx, callCtx, guard, err)
+		return StreamResult{}, c.explain(ctx, callCtx, guard, c.dialError("/chat/completions", err))
 	}
 	defer resp.Body.Close()
 
@@ -344,10 +346,9 @@ func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.R
 	resp, err := c.http.Do(req)
 	if err != nil {
 		// Redaction first, then classification: the URL can carry a key in its
-		// query string, and explain returns the original error untouched when no
-		// bound fired.
-		return nil, nil, c.explain(ctx, callCtx, guard,
-			fmt.Errorf("llmwire: %s: %w", RedactURL(c.baseURL+route), err))
+		// query string, and explain returns the error as given when no bound
+		// fired.
+		return nil, nil, c.explain(ctx, callCtx, guard, c.dialError(route, err))
 	}
 	defer resp.Body.Close()
 
@@ -416,6 +417,7 @@ func (c *Client) newRequest(ctx context.Context, route string, body []byte) (*ht
 func (c *Client) httpError(resp *http.Response) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	apiErr := parseAPIError(resp.StatusCode, raw)
+	apiErr.Message = c.redactKey(apiErr.Message)
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return newRateLimitError(apiErr, resp.Header)
 	}
@@ -439,8 +441,66 @@ func (c *Client) explain(parent, call context.Context, guard *stallGuard, err er
 	if call.Err() != nil && parent.Err() == nil {
 		return fmt.Errorf("llmwire: exceeded the %s call cap", c.cap)
 	}
+	return c.scrub(err)
+}
+
+// dialError is a transport failure phrased without the URL net/http put in it.
+//
+// Every failure out of http.Client.Do is a *url.Error whose Error() prints the
+// FULL request URL, query string included, and some deployments carry their
+// key there. Wrapping that error with a redacted prefix does not help: the
+// inner text still prints. So the url.Error is taken apart — its operation,
+// the URL through RedactURL, and its cause wrapped with %w so errors.Is on
+// context.DeadlineExceeded or a net.Error still holds. What a caller loses is
+// errors.As(*url.Error), which nobody should be reading the URL out of anyway.
+func (c *Client) dialError(route string, err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		return fmt.Errorf("llmwire: %s %s: %w", uerr.Op, RedactURL(c.baseURL+route), uerr.Err)
+	}
+	return fmt.Errorf("llmwire: %s: %w", RedactURL(c.baseURL+route), err)
+}
+
+// redactKey strips the configured key BY VALUE. Redact knows credentials by
+// shape, and the shapes it knows are the ones the documented endpoints issue;
+// a token-plan host or a self-hosted gateway can issue any string, and an
+// upstream that echoes the Authorization header would put that string into
+// every log line that touches the failure. The client is the one party that
+// knows the key, so it is the one that can remove it whatever it looks like.
+func (c *Client) redactKey(s string) string {
+	if c.apiKey == "" || s == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, c.apiKey, "[REDACTED]")
+}
+
+// scrub applies redactKey to an error on its way out. An *APIError carries the
+// upstream's text in Message and is rewritten in place; any other error whose
+// text carries the key is wrapped so the text is clean and the chain is kept.
+func (c *Client) scrub(err error) error {
+	if err == nil || c.apiKey == "" {
+		return err
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		apiErr.Message = c.redactKey(apiErr.Message)
+		return err
+	}
+	if text := err.Error(); strings.Contains(text, c.apiKey) {
+		return &scrubbedError{msg: c.redactKey(text), err: err}
+	}
 	return err
 }
+
+// scrubbedError is an error whose text was redacted after the fact. It keeps
+// the original as its cause so errors.Is and errors.As see through it.
+type scrubbedError struct {
+	msg string
+	err error
+}
+
+func (e *scrubbedError) Error() string { return e.msg }
+func (e *scrubbedError) Unwrap() error { return e.err }
 
 // Registry exposes the profiles this client validates against, so a caller can
 // ask what a model supports without making a request.

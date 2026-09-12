@@ -60,7 +60,7 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 		}
 		batchResp, err := parseEmbedResponse(raw, len(batch))
 		if err != nil {
-			return nil, warnings, err
+			return nil, warnings, c.scrub(err)
 		}
 		copy(out.Vectors[start:end], batchResp.vectors)
 		out.Model = batchResp.model

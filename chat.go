@@ -43,7 +43,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	}
 	resp, err := parseChatResponse(raw)
 	if err != nil {
-		return nil, warnings, err
+		return nil, warnings, c.scrub(err)
 	}
 	cost, priceWarnings := priceCall(pl.profile, resp.Usage, hdr, 200, at)
 	resp.Usage.Cost = cost

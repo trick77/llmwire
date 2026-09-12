@@ -120,7 +120,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	guard := newStallGuard(cancelReq, c.header, stallHeaders)
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		err = c.explain(ctx, callCtx, guard, err)
+		err = c.explain(ctx, callCtx, guard, c.dialError(routeChat, err))
 		guard.stop()
 		cancelReq()
 		cancelCall()
