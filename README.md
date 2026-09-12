@@ -9,6 +9,15 @@ data rather than scattered through call sites.
 > recovery are still landing. The API is not stable yet.
 
 ```go
+// Base URL and key come from the env vars the model's profile names
+// (BACKEND_CHAT_BASE_URL / BACKEND_CHAT_API_KEY for glm-5.3-flash), so no
+// application repeats that wiring. New(Config{...}) is there for a custom
+// transport or an explicit URL.
+client, err := llmwire.FromEnv("glm-5.3-flash", llmwire.Config{})
+if err != nil {
+    return err // names the missing variable
+}
+
 resp, warnings, err := client.Chat(ctx, llmwire.ChatRequest{
     Model:     "glm-5.3-flash",
     Messages:  []llmwire.Message{llmwire.System("..."), llmwire.User(q)},

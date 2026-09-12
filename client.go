@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -184,6 +185,60 @@ func New(cfg Config) *Client {
 		c.session = newSession(cfg.Now)
 	}
 	return c
+}
+
+// FromEnv builds a Client for one model, taking BaseURL and APIKey from the
+// environment variables that model's profile names (base_url_env and
+// api_key_env in profiles.yaml). A BaseURL or APIKey already set in cfg wins
+// over the environment. The profile carries the names; this is what reads them,
+// so the wiring does not have to be repeated in every application.
+//
+// A named variable that is unset or empty is a MissingEnvError, never a
+// fallback. A profile that names no api_key_env sends no key at all, which is
+// the self-hosted case.
+func FromEnv(model string, cfg Config) (*Client, error) {
+	reg := cfg.Registry
+	if reg == nil {
+		reg = Default()
+	}
+	p, err := reg.Lookup(model)
+	if err != nil {
+		return nil, err
+	}
+	// Trimmed: a whitespace-only value (a stray `export X= ` in a .env) would
+	// otherwise build a client that fails later with an opaque dial or 401
+	// instead of the named error here.
+	if cfg.BaseURL == "" {
+		v := strings.TrimSpace(os.Getenv(p.BaseURLEnv))
+		if v == "" {
+			return nil, &MissingEnvError{Model: model, Var: p.BaseURLEnv, Field: "base_url_env"}
+		}
+		cfg.BaseURL = v
+	}
+	if cfg.APIKey == "" && p.APIKeyEnv != "" {
+		v := strings.TrimSpace(os.Getenv(p.APIKeyEnv))
+		if v == "" {
+			return nil, &MissingEnvError{Model: model, Var: p.APIKeyEnv, Field: "api_key_env"}
+		}
+		cfg.APIKey = v
+	}
+	return New(cfg), nil
+}
+
+// MissingEnvError names the variable a profile expects and the profile field
+// that expects it, so the fix is one export away rather than a search.
+type MissingEnvError struct {
+	Model string
+	// Var is the variable name, or empty when the profile names none.
+	Var   string
+	Field string
+}
+
+func (e *MissingEnvError) Error() string {
+	if e.Var == "" {
+		return fmt.Sprintf("llmwire: model %q has no %s in its profile", e.Model, e.Field)
+	}
+	return fmt.Sprintf("llmwire: model %q needs %s (%s) set in the environment", e.Model, e.Var, e.Field)
 }
 
 // Now exposes the client's clock, so pricing and tests share one source of time.
