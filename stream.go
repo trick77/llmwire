@@ -166,7 +166,28 @@ type streamCounters struct {
 // on a timer would otherwise mask a model that has stalled completely. Reasoning
 // deltas are real data frames, so a legitimately long thinking phase still
 // re-arms the guard and is unaffected by this rule.
-func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idle time.Duration, onDelta func(string)) (StreamResult, error) {
+// streamEvent is one increment the reader hands onward. Every channel the parser
+// understands is represented, not only content: an iterator that could not see
+// reasoning deltas or tool-call fragments would be strictly weaker than the
+// accumulated result it sits in front of, and callers would go back to waiting for
+// the whole answer.
+type streamEvent struct {
+	kind         eventKind
+	text         string
+	toolCall     toolCallDelta
+	finishReason string
+}
+
+type eventKind uint8
+
+const (
+	evContent eventKind = iota
+	evReasoning
+	evToolCall
+	evFinish
+)
+
+func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idle time.Duration, sink func(streamEvent)) (StreamResult, error) {
 	var (
 		content   strings.Builder
 		reasoning strings.Builder
@@ -217,12 +238,15 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 			return res, parseAPIError(0, chunk.Error)
 		}
 
+		emit := func(ev streamEvent) {
+			if sink != nil {
+				sink(ev)
+			}
+		}
 		for _, ch := range chunk.Choices {
 			if ch.Delta.Content != "" {
 				content.WriteString(ch.Delta.Content)
-				if onDelta != nil {
-					onDelta(ch.Delta.Content)
-				}
+				emit(streamEvent{kind: evContent, text: ch.Delta.Content})
 				// Runes, not bytes: these endpoints return non-ASCII routinely,
 				// and a count inflated by UTF-8 encoding misreads as more
 				// output than the model produced.
@@ -230,8 +254,10 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 			}
 			if r := ch.Delta.reasoningText(); r != "" {
 				reasoning.WriteString(r)
+				emit(streamEvent{kind: evReasoning, text: r})
 			}
 			for _, tc := range ch.Delta.ToolCalls {
+				emit(streamEvent{kind: evToolCall, toolCall: tc})
 				acc, seen := tools[tc.Index]
 				if !seen {
 					acc = &ToolCall{}
@@ -254,6 +280,7 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 			}
 			if ch.FinishReason != "" {
 				res.FinishReason = ch.FinishReason
+				emit(streamEvent{kind: evFinish, finishReason: ch.FinishReason})
 			}
 		}
 

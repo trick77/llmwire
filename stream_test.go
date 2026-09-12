@@ -325,8 +325,10 @@ data: {"choices":[{"delta":{"content":"two"},"finish_reason":"stop"}]}
 	defer guard.stop()
 	var counters streamCounters
 	var got []string
-	res, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, func(s string) {
-		got = append(got, s)
+	res, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, func(ev streamEvent) {
+		if ev.kind == evContent {
+			got = append(got, ev.text)
+		}
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

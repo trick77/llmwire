@@ -211,7 +211,19 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	// arrival.
 	guard.arm(c.idle, stallIdle)
 
-	res, err := readStream(resp.Body, guard, &counters, c.idle, onDelta)
+	// Content only, which is what this entry point promises. The parser's sink
+	// carries every channel now, and the iterator in streamiter.go consumes all of
+	// them; RawStream keeps its narrow callback so the probe suite is untouched.
+	var sink func(streamEvent)
+	if onDelta != nil {
+		sink = func(ev streamEvent) {
+			if ev.kind == evContent {
+				onDelta(ev.text)
+			}
+		}
+	}
+
+	res, err := readStream(resp.Body, guard, &counters, c.idle, sink)
 	if err != nil {
 		return res, c.explain(ctx, callCtx, guard, err)
 	}
