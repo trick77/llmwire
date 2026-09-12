@@ -18,14 +18,39 @@ func TestFromEnv(t *testing.T) {
 		}
 	})
 
-	t.Run("explicit cfg wins over the environment", func(t *testing.T) {
+	t.Run("explicit base url leaves the environment alone", func(t *testing.T) {
 		t.Setenv("BACKEND_CHAT_BASE_URL", "https://env.example")
 		t.Setenv("BACKEND_CHAT_API_KEY", "env")
+		c, err := FromEnv("glm-5.3-flash", Config{BaseURL: "https://cfg.example"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Not "env": the profile's key is for the profile's host.
+		if c.baseURL != "https://cfg.example" || c.apiKey != "" {
+			t.Fatalf("got %q %q", c.baseURL, c.apiKey)
+		}
+	})
+
+	t.Run("explicit base url needs no variables at all", func(t *testing.T) {
+		t.Setenv("BACKEND_CHAT_BASE_URL", "")
+		t.Setenv("BACKEND_CHAT_API_KEY", "")
 		c, err := FromEnv("glm-5.3-flash", Config{BaseURL: "https://cfg.example", APIKey: "cfg"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.baseURL != "https://cfg.example" || c.apiKey != "cfg" {
+		if c.apiKey != "cfg" {
+			t.Fatalf("got %q", c.apiKey)
+		}
+	})
+
+	t.Run("explicit api key wins over the environment", func(t *testing.T) {
+		t.Setenv("BACKEND_CHAT_BASE_URL", "https://env.example")
+		t.Setenv("BACKEND_CHAT_API_KEY", "env")
+		c, err := FromEnv("glm-5.3-flash", Config{APIKey: "cfg"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.baseURL != "https://env.example" || c.apiKey != "cfg" {
 			t.Fatalf("got %q %q", c.baseURL, c.apiKey)
 		}
 	})

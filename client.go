@@ -191,9 +191,15 @@ func New(cfg Config) *Client {
 
 // FromEnv builds a Client for one model, taking BaseURL and APIKey from the
 // environment variables that model's profile names (base_url_env and
-// api_key_env in profiles.yaml). A BaseURL or APIKey already set in cfg wins
-// over the environment. The profile carries the names; this is what reads them,
-// so the wiring does not have to be repeated in every application.
+// api_key_env in profiles.yaml). The profile carries the names; this is what
+// reads them, so the wiring does not have to be repeated in every application.
+//
+// A cfg.BaseURL already set means the caller is wiring the endpoint itself,
+// and the environment is not consulted at all: cfg.APIKey goes as given, empty
+// included. The profile's key belongs to the profile's host, and a test fake or
+// a stand-in endpoint must not be handed it just because the model is the same.
+// With cfg.BaseURL empty, a cfg.APIKey already set still wins over the
+// environment.
 //
 // A named variable that is unset or empty is a MissingEnvError, never a
 // fallback. A profile that names no api_key_env sends no key at all, which is
@@ -207,16 +213,17 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.BaseURL != "" {
+		return New(cfg), nil
+	}
 	// Trimmed: a whitespace-only value (a stray `export X= ` in a .env) would
 	// otherwise build a client that fails later with an opaque dial or 401
 	// instead of the named error here.
-	if cfg.BaseURL == "" {
-		v := strings.TrimSpace(os.Getenv(p.BaseURLEnv))
-		if v == "" {
-			return nil, &MissingEnvError{Model: model, Var: p.BaseURLEnv, Field: "base_url_env"}
-		}
-		cfg.BaseURL = v
+	v := strings.TrimSpace(os.Getenv(p.BaseURLEnv))
+	if v == "" {
+		return nil, &MissingEnvError{Model: model, Var: p.BaseURLEnv, Field: "base_url_env"}
 	}
+	cfg.BaseURL = v
 	if cfg.APIKey == "" && p.APIKeyEnv != "" {
 		v := strings.TrimSpace(os.Getenv(p.APIKeyEnv))
 		if v == "" {
