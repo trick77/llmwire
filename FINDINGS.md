@@ -181,6 +181,23 @@ must be priced separately from the first call onward.
 `glm-5.3-flash` reported `cached_tokens: 0` throughout, on prompts too short to
 reach any cache minimum.
 
+**Cached tokens are INSIDE `prompt_tokens` on both vendors** (measured
+2026-09-13, `TestProbe_CachedTokensAreInsidePromptTokens`). The same ~10k-token
+prompt sent twice, five seconds apart:
+
+| model | call 1 prompt / cached | call 2 prompt / cached |
+|---|---|---|
+| mimo-v2.5-pro | 11131 / 192 | 11131 / 11072 |
+| glm-5.3-flash | 9208 / 0 | 9208 / 9152 |
+
+`prompt_tokens` did not move while `cached_tokens` grew to nearly all of it, so
+the full-rate lane is `prompt_tokens - cached_tokens` and pricing subtracts
+correctly. Had a vendor reported cached tokens beside `prompt_tokens`, the
+subtraction would under-count the full-rate lane, which is the one direction a
+budget cap cannot tolerate; that is now ruled out for both. Z.ai's field is
+confirmed as `prompt_tokens_details.cached_tokens`, and its cache is live: this
+was the first non-zero value seen from it.
+
 The whole run — every probe in this document — cost **30 calls and roughly
 $0.008** at conservative upper-bound rates, well inside the $0.50 circuit
 breaker.

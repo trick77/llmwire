@@ -103,7 +103,8 @@ would drop the param itself — stricter than the wire on purpose: a silently dr
 ## Secrets
 
 Keys from the **environment only** — never a literal in a test, fixture or profile;
-a missing key skips with a named reason, never falls back. `.env` is gitignored;
+a missing key skips with a named reason, never falls back. `.env` is gitignored and
+the eval harness loads it under `LLMWIRE_EVAL=1` (real environment wins);
 `hack/secret-scan.sh` runs in the pre-commit hook **and** CI, since a hook protects
 one machine. `.env.example` holds names with empty values. CI holds no key.
 

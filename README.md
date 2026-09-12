@@ -174,7 +174,9 @@ published catalogues disagree with each other and with the endpoints.
 LLMWIRE_EVAL=1 go test -run Eval ./...
 ```
 
-Evals skip unless that variable is set, so they never run in CI. They call real,
+Evals skip unless that variable is set, so they never run in CI. With it set, the
+harness loads a gitignored `.env` (see `.env.example` for the names; a value
+already in the environment wins). They call real,
 paid endpoints, so the suite is bounded by a spend budget, a call ceiling, a
 wall-clock deadline and minimal per-call caps, all fail-closed. It does not retry:
 a failed eval is a finding, not a flake.

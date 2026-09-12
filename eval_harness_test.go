@@ -159,11 +159,39 @@ func (m *meter) summary() string {
 // TestMain prints the spend summary after the run, so the cost of a full pass is
 // a known number rather than a surprise on an invoice.
 func TestMain(m *testing.M) {
+	if os.Getenv(evalEnvVar) == "1" {
+		loadDotEnv(".env")
+	}
 	code := m.Run()
 	if os.Getenv(evalEnvVar) == "1" && theMeter.calls > 0 {
 		fmt.Fprintln(os.Stderr, theMeter.summary())
 	}
 	os.Exit(code)
+}
+
+// loadDotEnv exports KEY=value lines from a gitignored .env into the process,
+// only under the eval gate and only for names not already set, so a value in
+// the real environment always wins. It is the file .env.example describes;
+// sourcing it by hand before every run is what people get wrong. A missing file
+// is nothing: the probes then skip with the usual named reason. CI has no .env.
+func loadDotEnv(path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || v == "" {
+			continue
+		}
+		if _, set := os.LookupEnv(k); !set {
+			os.Setenv(k, v)
+		}
+	}
 }
 
 // --- gating -------------------------------------------------------------------

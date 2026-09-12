@@ -3,6 +3,7 @@ package llmwire
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -541,4 +542,95 @@ func TestProbe_ChatHonoursTheOutputCap(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Cached prompt tokens: are they INSIDE prompt_tokens, or beside it?
+//
+// Pricing subtracts cached_tokens from prompt_tokens to get the full-rate lane,
+// on the strength of the OpenAI shape, where prompt_tokens contains them. The
+// measured MiMo figures (258 prompt, 192 cached) are consistent with that and do
+// not prove it: a vendor reporting cached tokens BESIDE prompt_tokens, the way
+// Anthropic does, would make that subtraction under-count the full-rate lane —
+// which is the one direction a budget cap cannot tolerate. Z.ai has never shown
+// a non-zero cached_tokens at all, so its field name is unconfirmed too.
+//
+// Two identical calls with a prompt past any cache minimum settle it. The prompt
+// is the same bytes both times, so if the second call reports more cached tokens
+// than the first and prompt_tokens does NOT move, cached tokens are inside it.
+// If prompt_tokens drops by the cached delta, they are beside it.
+func TestProbe_CachedTokensAreInsidePromptTokens(t *testing.T) {
+	for _, tc := range []struct {
+		ep    endpoint
+		model string
+		cap   string
+	}{
+		{mimoEndpoint, "mimo-v2.5-pro", "max_completion_tokens"},
+		{zaiEndpoint, "glm-5.3-flash", "max_tokens"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			c := tc.ep.client(t)
+
+			call := func() (StreamResult, int64, int64) {
+				b := probeBody(tc.model, cacheProbePrompt())
+				b[tc.cap] = probeMaxTokens
+				res, err := stream(t, c, b)
+				if ok, why := accepted(res, err); !ok {
+					t.Fatalf("FINDING %s: REJECTED: %s", tc.model, why)
+				}
+				if res.Usage.Input.Total == nil {
+					t.Fatalf("FINDING %s: no prompt_tokens reported (raw=%s); nothing to compare",
+						tc.model, truncate(string(res.Usage.Raw), 240))
+				}
+				return res, *res.Usage.Input.Total, valueOr(res.Usage.Input.CacheRead, 0)
+			}
+
+			first, p1, c1 := call()
+			t.Logf("call 1: prompt=%d cached=%d raw=%s", p1, c1, truncate(string(first.Usage.Raw), 240))
+			// Caches populate asynchronously on some endpoints; a few seconds is
+			// what their docs suggest and costs nothing.
+			time.Sleep(5 * time.Second)
+			second, p2, c2 := call()
+			t.Logf("call 2: prompt=%d cached=%d raw=%s", p2, c2, truncate(string(second.Usage.Raw), 240))
+
+			delta := c2 - c1
+			switch {
+			case c2 == 0:
+				t.Logf("FINDING %s: no cached tokens on the second call. Either the prompt (%d tokens) "+
+					"is under the cache minimum, the cache is off for this route, or the field is "+
+					"spelled differently — read the raw usage above for the vendor's own name. "+
+					"Inconclusive; the profile keeps the OpenAI-shape assumption.", tc.model, p2)
+			case delta <= 0:
+				t.Logf("FINDING %s: cached did not grow between calls (%d -> %d); the first call was "+
+					"already served from cache, so containment cannot be read off a delta. prompt "+
+					"%d -> %d. Inconclusive.", tc.model, c1, c2, p1, p2)
+			case p2 == p1:
+				t.Logf("FINDING %s: INSIDE. cached grew %d -> %d and prompt_tokens stayed at %d. "+
+					"prompt_tokens contains cached_tokens; subtracting is correct.", tc.model, c1, c2, p1)
+			case p1-p2 == delta:
+				t.Errorf("FINDING %s: BESIDE. cached grew %d -> %d and prompt_tokens fell by exactly "+
+					"that (%d -> %d). This vendor reports cached tokens outside prompt_tokens, so "+
+					"NoCache = prompt - cached UNDER-COUNTS the full-rate lane here. Pricing needs a "+
+					"per-profile containment flag before this model's cost figure can be trusted.",
+					tc.model, c1, c2, p1, p2)
+			default:
+				t.Errorf("FINDING %s: AMBIGUOUS. cached grew %d -> %d, prompt_tokens moved %d -> %d, "+
+					"which matches neither containment rule. Record both raw usages above and "+
+					"look for a third field before touching pricing.", tc.model, c1, c2, p1, p2)
+			}
+		})
+	}
+}
+
+// cacheProbePrompt is a fixed prompt comfortably past the documented cache
+// minimums (1024 tokens on the OpenAI shape both vendors mirror). Deterministic
+// bytes, so two calls are the same cache key; numbered lines, so the tokenizer
+// cannot collapse it into a repeat.
+func cacheProbePrompt() string {
+	var b strings.Builder
+	b.WriteString("The lines below are filler for a caching measurement. Ignore them and reply with the single word: ok\n\n")
+	for i := 1; i <= 400; i++ {
+		fmt.Fprintf(&b, "Line %d: the quick brown fox number %d jumps over the lazy dog number %d.\n", i, i*7, i*13)
+	}
+	b.WriteString("\nReply with the single word: ok")
+	return b.String()
 }
