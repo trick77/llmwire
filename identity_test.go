@@ -88,37 +88,60 @@ func TestEmulateOpenCode_sendsTheIdentityAndKeepsOneSession(t *testing.T) {
 	}
 }
 
-// The emulation overrides an explicit UserAgent — the string IS the flag — but
-// never a session header the caller set by hand.
+// The emulation overrides a UserAgent however it was supplied — the string IS the
+// flag, and a User-Agent smuggled through the generic Headers map would
+// otherwise leave the flag on and the emulation off. A session header the
+// caller set by hand survives, and is mirrored into its twin: opencode never
+// sends the pair apart, so a hand-pinned id must not produce the one shape the
+// upstream never sees.
 func TestEmulateOpenCode_precedence(t *testing.T) {
-	var got http.Header
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Clone()
-		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"x"}}]}`))
-	}))
-	defer srv.Close()
+	capture := func(t *testing.T, cfg Config) http.Header {
+		t.Helper()
+		var got http.Header
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got = r.Header.Clone()
+			_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"x"}}]}`))
+		}))
+		defer srv.Close()
+		cfg.BaseURL, cfg.EmulateOpenCode = srv.URL, true
+		if _, _, err := New(cfg).Chat(context.Background(), ChatRequest{
+			Model: "glm-5.3-flash", Messages: []Message{User("hi")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
 
-	c := New(Config{
-		BaseURL:         srv.URL,
-		EmulateOpenCode: true,
-		UserAgent:       "something-else/1.0",
-		Headers:         map[string]string{HeaderSessionID: "ses_pinned_by_hand"},
+	t.Run("flag beats the UserAgent field", func(t *testing.T) {
+		got := capture(t, Config{UserAgent: "something-else/1.0"})
+		if got.Get("User-Agent") != OpenCodeUserAgent {
+			t.Errorf("User-Agent = %q", got.Get("User-Agent"))
+		}
 	})
-	if _, _, err := c.Chat(context.Background(), ChatRequest{
-		Model: "glm-5.3-flash", Messages: []Message{User("hi")},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if got.Get("User-Agent") != OpenCodeUserAgent {
-		t.Errorf("User-Agent = %q; the flag must win over an explicit one", got.Get("User-Agent"))
-	}
-	if got.Get(HeaderSessionID) != "ses_pinned_by_hand" {
-		t.Errorf("%s = %q; a hand-set header must survive", HeaderSessionID, got.Get(HeaderSessionID))
-	}
-	// Only the key the caller set is theirs; the other still gets the minted id.
-	if aff := got.Get(HeaderSessionAffinity); !sessionIDShape.MatchString(aff) {
-		t.Errorf("%s = %q, want a minted id", HeaderSessionAffinity, aff)
-	}
+
+	t.Run("flag beats a User-Agent in Headers too", func(t *testing.T) {
+		got := capture(t, Config{Headers: map[string]string{"User-Agent": "something-else/1.0"}})
+		if got.Get("User-Agent") != OpenCodeUserAgent {
+			t.Errorf("User-Agent = %q; the generic map must not switch the emulation off", got.Get("User-Agent"))
+		}
+	})
+
+	t.Run("a hand-pinned id survives and is mirrored", func(t *testing.T) {
+		got := capture(t, Config{Headers: map[string]string{HeaderSessionID: "ses_pinned_by_hand"}})
+		if got.Get(HeaderSessionID) != "ses_pinned_by_hand" {
+			t.Errorf("%s = %q; a hand-set header must survive", HeaderSessionID, got.Get(HeaderSessionID))
+		}
+		if got.Get(HeaderSessionAffinity) != "ses_pinned_by_hand" {
+			t.Errorf("%s = %q; the pair must carry one value", HeaderSessionAffinity, got.Get(HeaderSessionAffinity))
+		}
+	})
+
+	t.Run("pinning the affinity alone mirrors the other way", func(t *testing.T) {
+		got := capture(t, Config{Headers: map[string]string{HeaderSessionAffinity: "ses_pinned_by_hand"}})
+		if got.Get(HeaderSessionID) != "ses_pinned_by_hand" || got.Get(HeaderSessionAffinity) != "ses_pinned_by_hand" {
+			t.Errorf("pair = %q / %q, want both pinned", got.Get(HeaderSessionID), got.Get(HeaderSessionAffinity))
+		}
+	})
 }
 
 // A session ends when its user steps away. Driven by the injected clock, so the

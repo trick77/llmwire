@@ -326,18 +326,28 @@ func (c *Client) newRequest(ctx context.Context, route string, body []byte) (*ht
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
-	// After the caller's headers, and only where the caller has not spoken:
-	// Headers is the escape hatch for what this package does not model, and the
-	// two session keys are no exception. Read per request rather than fixed at
-	// New, because the id rotates after an idle gap.
+	// After the caller's headers. Read per request rather than fixed at New,
+	// because the id rotates after an idle gap.
 	if c.session != nil {
+		// The client string is the flag's whole meaning, so it wins even over a
+		// User-Agent smuggled in through the generic Headers map — otherwise the
+		// flag would be on and the emulation off, with nothing to say so.
+		req.Header.Set("User-Agent", OpenCodeUserAgent)
+
+		// The session pair is one value under two names; opencode never sends
+		// them apart. A caller who pinned either one by hand keeps their value
+		// — Headers is the escape hatch for what this package does not model —
+		// and it is mirrored into the other, so the pair stays a pair. Only when
+		// neither was set does the client's own session id go out.
 		id := c.session.current()
-		if req.Header.Get(HeaderSessionID) == "" {
-			req.Header.Set(HeaderSessionID, id)
+		switch pinnedID, pinnedAff := req.Header.Get(HeaderSessionID), req.Header.Get(HeaderSessionAffinity); {
+		case pinnedID != "":
+			id = pinnedID
+		case pinnedAff != "":
+			id = pinnedAff
 		}
-		if req.Header.Get(HeaderSessionAffinity) == "" {
-			req.Header.Set(HeaderSessionAffinity, id)
-		}
+		req.Header.Set(HeaderSessionID, id)
+		req.Header.Set(HeaderSessionAffinity, id)
 	}
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
