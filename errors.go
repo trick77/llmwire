@@ -101,6 +101,22 @@ type RateLimitError struct {
 	RetryAfter time.Duration
 }
 
+// Unwrap exposes the embedded *APIError to errors.As.
+//
+// Embedding alone is not enough and the difference is silent: errors.As matches
+// on the dynamic type or on what Unwrap returns, and *RateLimitError is neither
+// an *APIError nor, without this, wrapping one. So
+//
+//	var apiErr *APIError
+//	errors.As(err, &apiErr)
+//
+// returned FALSE for exactly one status — 429 — while succeeding for every other
+// refusal. A caller rendering "failed with status %d" from that check therefore
+// dropped the one status worth retrying on, and the only visible symptom was a
+// differently-worded log line. The first consumer to migrate hit it, and it would
+// have been a per-repo rediscovery otherwise.
+func (e *RateLimitError) Unwrap() error { return e.APIError }
+
 // classify maps an HTTP status onto a sentinel. Deliberately coarse: the
 // interesting distinctions (which param, which code) live in the struct, and a
 // finer taxonomy here would only invite call sites to switch on the wrong thing.
