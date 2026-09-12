@@ -2,6 +2,8 @@ package llmwire
 
 import (
 	"fmt"
+	"math/big"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -33,6 +35,61 @@ import (
 //
 // Integer arithmetic end to end. A float total drifts in the digits displayed,
 // which is exactly where a billing figure is read.
+
+// Cost is what one call cost.
+//
+// A FromTable figure is the vendor's published pay-as-you-go LIST rate in USD. It
+// is a comparable equivalent, NOT an invoice: a call billed as subscription
+// credits on a token-plan host still reports the list rate here, because a credit
+// figure cannot be compared between models and an Unpriced one leaves a budget
+// cap with nothing to check.
+type Cost struct {
+	// NanoUSD is billionths of one US dollar. Integer end to end, because a float
+	// total drifts in the digits displayed — which is where a billing figure is
+	// read.
+	NanoUSD int64 `json:"nano_usd"`
+	// Provenance is what gives NanoUSD its meaning, and its zero value is
+	// Unpriced: a forgotten fill then reads "unknown", never "the table said
+	// zero", which would read as free.
+	Provenance CostProvenance `json:"provenance"`
+	// AppliedAt is the clock value captured at REQUEST START. Which instant bills
+	// is unspecified by both vendors, so this records the one that was used.
+	AppliedAt time.Time `json:"applied_at,omitempty"`
+	// Window and Tier name the multipliers that applied, empty when none did.
+	// Always empty under Reported: a gateway's figure is already final.
+	Window string `json:"window,omitempty"`
+	Tier   string `json:"tier,omitempty"`
+}
+
+// CostProvenance says where a figure came from. There is no unit here: every
+// figure is USD, and a one-value enum would be a switch nobody should write.
+type CostProvenance int
+
+const (
+	// Unpriced is the ZERO VALUE, deliberately: no rate was available. NanoUSD is
+	// 0, and 0 means unknown, never free.
+	Unpriced CostProvenance = iota
+	// FromTable was computed from the embedded list rate. See the Cost doc
+	// comment: a list-rate equivalent, not an invoice.
+	FromTable
+	// Reported came from the gateway, which knows what it actually charged.
+	Reported
+)
+
+func (p CostProvenance) String() string {
+	switch p {
+	case FromTable:
+		return "from-table"
+	case Reported:
+		return "reported"
+	default:
+		return "unpriced"
+	}
+}
+
+// MarshalText renders the provenance as its name. A bare integer in a log or a
+// stored record would be unreadable exactly where it matters most.
+func (p CostProvenance) MarshalText() ([]byte, error) { return []byte(p.String()), nil }
 
 // rate is a token price in nano-USD per MILLION tokens: 1e-9 dollars, per 1e6
 // tokens. Both scales are needed. Per-million is how every vendor publishes, and
@@ -389,6 +446,208 @@ func (b *CostBlock) validateWindows(bad func(string, ...any) error) error {
 			"unconditional multiplier; put that in the lane rates instead")
 	}
 	return nil
+}
+
+// priceCall prices one completed call.
+//
+// One entry point for both lanes, so the rule that a gateway route is NEVER
+// priced from the table is enforced in a single place rather than at four call
+// sites. hdr and status are the response's; at is the clock value captured at
+// request start.
+//
+// The returned Cost is always meaningful — its zero value is Unpriced — and the
+// returned warnings belong on the call's own []Warning.
+func priceCall(p *Profile, u Usage, hdr http.Header, status int, at time.Time) (Cost, []Warning) {
+	unpriced := func(format string, args ...any) (Cost, []Warning) {
+		return Cost{AppliedAt: at}, []Warning{{
+			Kind:    WarnOther,
+			Feature: "cost",
+			Details: fmt.Sprintf(format, args...),
+		}}
+	}
+
+	// Defensive, and load-bearing: a gateway sends the cost header even on some
+	// failures, and "0" under a non-2xx means ERRORED, not free. Callers are not
+	// supposed to price an error path at all, and this is where that can never be
+	// misread.
+	if status < 200 || status >= 300 {
+		return Cost{AppliedAt: at}, nil
+	}
+
+	if p.Gateway != "" {
+		return priceFromGateway(p, hdr, at)
+	}
+	if p.Cost == nil {
+		return unpriced("no verified rate for model %q; the cost is unknown, not zero", p.ID)
+	}
+	// A total that was never reported makes the call unpriceable. Treating a
+	// missing count as zero would under-report, and under-reporting is what
+	// silently raises the ceiling a budget cap enforces.
+	if u.Input.Total == nil {
+		return unpriced("model %q reported no prompt tokens, so the call cannot be priced", p.ID)
+	}
+	if p.Endpoint == EndpointChat && u.Output.Total == nil {
+		return unpriced("model %q reported no completion tokens, so the call cannot be priced", p.ID)
+	}
+
+	b := p.Cost
+	// Cache reads are SUBTRACTED, not added: prompt_tokens already includes
+	// cached_tokens, and parseUsage has derived and clamped NoCache. Reasoning is
+	// never a lane of its own — completion_tokens already contains it, so pricing
+	// Output.Reasoning as well would double-count every call these models make.
+	//
+	// Summed in big.Int, exactly once. The intermediate is tokens x
+	// nano-per-million x permille x permille, which for a million-token prompt at
+	// a dollar per million runs to 1e21 — twenty times past int64. Rounding each
+	// lane to nano first would fit, but it would round four times instead of once
+	// and over-report every call by up to four nano.
+	scaled := new(big.Int)
+	addLane(scaled, u.Input.NoCache, b.Input)
+	addLane(scaled, u.Input.CacheRead, b.CacheRead)
+	addLane(scaled, u.Input.CacheWrite, b.CacheWrite)
+	addLane(scaled, u.Output.Total, b.Output)
+
+	tier, tierPermille := b.selectTier(*u.Input.Total)
+	window, windowPermille := b.selectWindow(at)
+	scaled.Mul(scaled, big.NewInt(int64(tierPermille)))
+	scaled.Mul(scaled, big.NewInt(int64(windowPermille)))
+
+	// ONE rounding site, on the summed total, rounding UP so llmwire never
+	// under-reports. The divisor is the three scales the numerator carries: a
+	// million tokens per rate, and a thousand per multiplier, twice.
+	nano, err := ceilDivBig(scaled, big.NewInt(1_000_000*1_000*1_000))
+	if err != nil {
+		return unpriced("model %q: the call is too large to price: %v", p.ID, err)
+	}
+
+	return Cost{
+		NanoUSD:    nano,
+		Provenance: FromTable,
+		AppliedAt:  at,
+		Window:     window,
+		Tier:       tier,
+	}, nil
+}
+
+// addLane adds one lane's tokens x rate into the running total. A nil count
+// contributes nothing: "not reported" is not "zero", but a lane nobody reported
+// cannot be charged for either.
+func addLane(sum *big.Int, tokens *int64, r *rate) {
+	if tokens == nil || r == nil {
+		return
+	}
+	term := new(big.Int).Mul(big.NewInt(*tokens), big.NewInt(int64(*r)))
+	sum.Add(sum, term)
+}
+
+// ceilDivBig divides, rounding away from zero, and refuses a result that does not
+// fit rather than wrapping — a wrapped total could come out negative, which would
+// credit the caller for tokens they spent.
+func ceilDivBig(n, d *big.Int) (int64, error) {
+	q, m := new(big.Int), new(big.Int)
+	q.DivMod(n, d, m)
+	if m.Sign() != 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	if !q.IsInt64() {
+		return 0, fmt.Errorf("the cost does not fit in nano-USD")
+	}
+	return q.Int64(), nil
+}
+
+// selectTier returns the highest threshold the prompt met.
+//
+// Thresholded on the prompt TOTAL, cached tokens included: vendors price by how
+// much context they had to hold, not by what they ended up billing at full rate.
+func (b *CostBlock) selectTier(inputTotal int64) (string, int32) {
+	name, permille := "", int32(1000)
+	var best int64
+	for _, t := range b.Tiers {
+		if inputTotal >= t.MinInputTokens && t.MinInputTokens > best {
+			best, name, permille = t.MinInputTokens, t.Name, t.MultiplierPermille
+		}
+	}
+	return name, permille
+}
+
+// selectWindow evaluates the instant in each window's OWN zone.
+//
+// Half-open [from, to): 17:59 is inside a window ending at 18:00 and 18:00 is
+// not. Overlaps are refused at load, so "the first match" is deterministic rather
+// than a document-order accident.
+func (b *CostBlock) selectWindow(at time.Time) (string, int32) {
+	for _, w := range b.Windows {
+		local := at.In(w.loc)
+		if !w.days[local.Weekday()] {
+			continue
+		}
+		min := local.Hour()*60 + local.Minute()
+		if min >= w.fromMin && min < w.toMin {
+			return w.Name, w.MultiplierPermille
+		}
+	}
+	if len(b.Windows) == 0 {
+		return "", 1000
+	}
+	return "", b.OutsideWindowsPermille
+}
+
+// litellmCostHeader carries the gateway's own per-call spend.
+const litellmCostHeader = "x-litellm-response-cost"
+
+// priceFromGateway reads a proxy's reported cost.
+//
+// Never falls back to the table: the proxy knows which deployment ran and what it
+// is charged at, and a list rate substituted here would be a confident figure for
+// a call nobody priced. An absent header is normal — a LiteLLM STREAM carries no
+// cost header at all, because the headers are built before the stream is consumed
+// — so that case degrades to Unpriced rather than to a guess.
+func priceFromGateway(p *Profile, hdr http.Header, at time.Time) (Cost, []Warning) {
+	warn := func(format string, args ...any) (Cost, []Warning) {
+		return Cost{AppliedAt: at}, []Warning{{
+			Kind:    WarnOther,
+			Feature: "cost",
+			Details: fmt.Sprintf(format, args...),
+		}}
+	}
+	raw := hdr.Get(litellmCostHeader)
+	if raw == "" {
+		return warn("gateway %q reported no cost for model %q (a stream never does), so the cost "+
+			"is unknown, not zero", p.Gateway, p.ID)
+	}
+	nano, err := parseReportedCost(raw)
+	if err != nil {
+		return warn("gateway %q reported an unusable cost %q: %v", p.Gateway, raw, err)
+	}
+	return Cost{NanoUSD: nano, Provenance: Reported, AppliedAt: at}, nil
+}
+
+// parseReportedCost converts a gateway's decimal cost into nano-USD.
+//
+// big.Rat rather than strconv.ParseFloat, for two reasons. ParseFloat ACCEPTS
+// "NaN" and "±Inf", and a NaN cost makes every `total >= limit` comparison false —
+// silently disabling the budget cap it was supposed to feed. And the gateway sends
+// scientific notation ("1.23e-05"), which big.Rat converts exactly, so the
+// integer does not depend on float rounding of the value under test.
+func parseReportedCost(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	r, ok := new(big.Rat).SetString(s)
+	if !ok {
+		// This is the branch NaN and Inf land in, which is the whole reason for
+		// the type choice.
+		return 0, fmt.Errorf("not a finite decimal number")
+	}
+	if r.Sign() < 0 {
+		return 0, fmt.Errorf("negative cost")
+	}
+	r.Mul(r, new(big.Rat).SetInt64(nanoPerUSD))
+	// Round up, the same direction as the table lane: a sub-nano charge reports 1
+	// rather than disappearing.
+	nano, err := ceilDivBig(r.Num(), r.Denom())
+	if err != nil {
+		return 0, fmt.Errorf("cost %q: %w", s, err)
+	}
+	return nano, nil
 }
 
 // parseClock reads "HH:MM" into minutes since midnight.

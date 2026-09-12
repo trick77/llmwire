@@ -24,6 +24,12 @@ import "encoding/json"
 type Usage struct {
 	Input  InputTokens  `json:"input"`
 	Output OutputTokens `json:"output"`
+	// Cost is what this call cost, priced at the call site with the model that
+	// actually ran. Its zero value means Unpriced, which is why it is a field
+	// rather than a second return: parseUsage and RawStream sit BELOW profile
+	// resolution, so a usage object from either already reads as "not priced"
+	// with nobody having to remember to say so.
+	Cost Cost `json:"cost"`
 	// Raw is the endpoint's own usage object, verbatim and undecoded. Kept
 	// because these endpoints carry fields nobody has modelled yet (image and
 	// video token counts, web-search request counts), and because it is the

@@ -226,27 +226,47 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 // The headers are returned because a gateway reports per-call spend and the
 // real deployment name there and nowhere else.
 func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.RawMessage, http.Header, error) {
-	callCtx, cancel := context.WithTimeout(ctx, c.cap)
-	defer cancel()
+	callCtx, cancelCall := context.WithTimeout(ctx, c.cap)
+	defer cancelCall()
+	reqCtx, cancelReq := context.WithCancel(callCtx)
+	defer cancelReq()
 
-	req, err := c.newRequest(callCtx, route, body)
+	req, err := c.newRequest(reqCtx, route, body)
 	if err != nil {
 		return nil, nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 
+	// The same guard the streaming path uses, for the same reason: without it a
+	// slow endpoint produces a bare "context deadline exceeded" and the reader
+	// cannot tell a model that never answered from one still writing. Non-
+	// streaming calls need this MORE than streams do, not less — the measured
+	// latency on one of these models is 25-64 seconds for a single answer, so the
+	// difference between "no headers yet" and "headers came, body stalled" is the
+	// difference between waiting and investigating.
+	guard := newStallGuard(cancelReq, c.header, stallHeaders)
+	defer guard.stop()
+
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("llmwire: %s: %w", RedactURL(c.baseURL+route), err)
+		// Redaction first, then classification: the URL can carry a key in its
+		// query string, and explain returns the original error untouched when no
+		// bound fired.
+		return nil, nil, c.explain(ctx, callCtx, guard,
+			fmt.Errorf("llmwire: %s: %w", RedactURL(c.baseURL+route), err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, resp.Header, c.httpError(resp)
 	}
+	// Headers are in, so the bound that matters from here is silence on the body.
+	guard.arm(c.idle, stallIdle)
+
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, resp.Header, fmt.Errorf("llmwire: reading response: %w", err)
+		return nil, resp.Header, c.explain(ctx, callCtx, guard,
+			fmt.Errorf("llmwire: reading response: %w", err))
 	}
 	return raw, resp.Header, nil
 }
