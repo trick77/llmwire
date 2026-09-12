@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # The module itself, at the repo root: this is a library, so there is no
+  # backend/ui split and no Containerfile to track.
+  #
+  # Only one direct dependency exists (gopkg.in/yaml.v3) and that is deliberate,
+  # so a PR here is rare and worth reading rather than rubber-stamping.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions. The release workflow mints a semver tag on any merge touching
+  # **.go, go.mod or go.sum, so an action bump alone does not cut a release.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
