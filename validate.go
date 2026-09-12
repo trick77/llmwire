@@ -114,13 +114,44 @@ func (e *UnsupportedError) Error() string {
 // and it lets a service check its configuration at boot rather than on the first
 // user request.
 func (c *Client) Validate(req ChatRequest) ([]Warning, error) {
-	_, warnings, err := c.plan(req)
+	_, warnings, err := c.plan(req, false)
 	return warnings, err
 }
 
-// plan resolves a request against its profile: the profile it will use, the
-// warnings it produces, and any refusal.
-func (c *Client) plan(req ChatRequest) (*Profile, []Warning, error) {
+// wirePlan is what plan produces and the renderer consumes: the request with
+// every capability decision ALREADY APPLIED, plus the two wire-level knobs that
+// are not request fields at all.
+//
+// A coerced request rather than a list of decisions, deliberately. A parallel
+// decision struct duplicates the request's shape and lets the two drift, and
+// worse, it leaves the renderer free to re-derive a decision from the profile —
+// which is how a policy comes to live in two places and disagree with itself.
+// Here there is nothing else to read.
+//
+// The invariant, which a reviewer can check by grepping render.go for
+// ".Supported": the renderer reads WIRE-NAME profile fields only — WireModelID,
+// MaxTokensParam, Reasoning.Control, Reasoning.BudgetParam, Streaming — and never
+// a capability field. Capabilities were decided here.
+type wirePlan struct {
+	profile *Profile
+	req     ChatRequest
+	stream  bool
+	// capParam is which output-cap parameter this endpoint honours. Copied so
+	// the renderer never reaches back into the profile for it: one endpoint
+	// accepts the wrong name and silently ignores it, returning thirty times the
+	// requested tokens, so this is the single most expensive field to get wrong.
+	capParam string
+	// includeUsage says to send stream_options.include_usage.
+	includeUsage bool
+}
+
+// plan resolves a request against its profile and returns it coerced, ready to
+// render.
+//
+// stream is a parameter rather than a ChatRequest field on purpose: a request
+// that could carry Stream: true and be handed to Chat would be a contradiction
+// with no correct resolution, and the method the caller chose is never ambiguous.
+func (c *Client) plan(req ChatRequest, stream bool) (*wirePlan, []Warning, error) {
 	p, err := c.registry.Lookup(req.Model)
 	if err != nil {
 		return nil, nil, err
@@ -134,8 +165,18 @@ func (c *Client) plan(req ChatRequest) (*Profile, []Warning, error) {
 			Reason:  fmt.Sprintf("this is an %s model and cannot take a chat request", p.Endpoint),
 		}
 	}
+	if stream && !p.Streaming.Supported {
+		// Also not demotable: the caller chose a method, and there is nothing to
+		// demote a method to. (No profile in the registry reaches this branch
+		// today; it exists so adding a non-streaming model is data, not code.)
+		return nil, nil, &UnsupportedError{
+			Model:   p.ID,
+			Feature: "streaming",
+			Reason:  "this model does not stream; use Chat instead",
+		}
+	}
 
-	v := &validation{profile: p, bestEffort: req.BestEffort}
+	v := &validation{profile: p, bestEffort: req.BestEffort, out: req.clone()}
 	// Whether this REQUEST will reason, not merely whether the model reasons by
 	// default. The two differ exactly when the caller said something, which is
 	// the case the inert-parameter warning is about.
@@ -143,15 +184,32 @@ func (c *Client) plan(req ChatRequest) (*Profile, []Warning, error) {
 
 	v.checkMessages(req)
 	v.checkReasoning(req)
-	v.checkSampling("temperature", req.Temperature, p.Temperature)
-	v.checkSampling("top_p", req.TopP, p.TopP)
+	// Recomputed from the COERCED request, because checkReasoning may just have
+	// dropped the caller's request under BestEffort. A caller who asked a
+	// glm-5.3-flash to stop thinking and was demoted still gets a thinking
+	// model, so their temperature really is inert — and computing this once, up
+	// front, from the original request would say the opposite.
+	v.reasoningActive = reasoningActive(v.out.Reasoning, p.Reasoning)
+	v.checkSampling("temperature", req.Temperature, p.Temperature, &v.out.Temperature)
+	v.checkSampling("top_p", req.TopP, p.TopP, &v.out.TopP)
 	v.checkTools(req)
 	v.checkResponseFormat(req)
+	v.checkMaxTokens(req)
 
 	if v.err != nil {
 		return nil, nil, v.err
 	}
-	return p, v.warnings, nil
+	return &wirePlan{
+		profile:  p,
+		req:      v.out,
+		stream:   stream,
+		capParam: p.MaxTokensParam,
+		// Sent only where the endpoint needs it AND accepts it. A gateway that
+		// strips the usage chunk from a client which did not ask forces
+		// needs_include_usage on for its own route, which is what that
+		// tighten-only profile key exists for.
+		includeUsage: stream && p.Streaming.NeedsIncludeUsage && p.Streaming.AcceptsStreamOptions,
+	}, v.warnings, nil
 }
 
 // reasoningActive reports whether a request will actually make the model think.
@@ -184,8 +242,13 @@ func reasoningActive(want ReasoningRequest, r Reasoning) bool {
 // and a list of complaints about a request that was rejected on its first
 // problem is mostly noise about parameters that were never really evaluated.
 type validation struct {
-	profile         *Profile
-	bestEffort      bool
+	profile    *Profile
+	bestEffort bool
+	// out is the request as it will be sent: a deep copy, coerced in place as
+	// each check decides. Deep because Validate is exported — a validation call
+	// that stripped an image from the caller's own slice would be a data-loss
+	// bug in a function documented as read-only.
+	out             ChatRequest
 	reasoningActive bool
 	warnings        []Warning
 	err             error
@@ -256,7 +319,31 @@ func (v *validation) checkMessages(req ChatRequest) {
 				nil) {
 				return
 			}
+			// Demoted: send the turn without its image. Dropping the parts
+			// wholesale would take the text with it, so only image parts go.
+			v.dropImages(i)
 		}
+	}
+}
+
+// dropImages strips the image parts from one coerced message.
+//
+// When nothing but images remains, Parts is emptied and the renderer falls back
+// to Text — which may be empty. Whether these endpoints accept an empty content
+// string is UNMEASURED; no probe has sent one. The fallback ships because the
+// alternative is inventing a refusal for a 400 nobody has seen, and it is a
+// probe candidate.
+func (v *validation) dropImages(i int) {
+	m := &v.out.Messages[i]
+	kept := m.Parts[:0]
+	for _, part := range m.Parts {
+		if part.Kind != PartImage {
+			kept = append(kept, part)
+		}
+	}
+	m.Parts = kept
+	if len(m.Parts) == 0 {
+		m.Parts = nil
 	}
 }
 
@@ -266,12 +353,18 @@ func (v *validation) checkReasoning(req ChatRequest) {
 	}
 	r := v.profile.Reasoning
 
+	// Every refusal below is followed by dropReasoning on the demoted path. A
+	// bare refuse() whose return is ignored would leave the coerced request
+	// carrying the very knob that was just refused, and the renderer would send
+	// it — turning a caught error into the 400 this package exists to prevent.
 	switch want := req.Reasoning.(type) {
 	case reasoningOff:
 		// A model that never reasons already satisfies "do not reason". Refusing
 		// would force model-agnostic callers to branch per model to ask for the
-		// thing they are already getting.
+		// thing they are already getting. The knob is still dropped: there is no
+		// wire spelling for disabling what does not exist.
 		if !r.Supported {
+			v.dropReasoning()
 			return
 		}
 		if !r.CanBeDisabled {
@@ -279,45 +372,63 @@ func (v *validation) checkReasoning(req ChatRequest) {
 			// registry refuses the disable toggle with an error code it also
 			// uses for unrelated failures, while its vendor's own reference
 			// documents the toggle as valid.
-			v.refuse("reasoning", "thinking cannot be disabled on this model", r.EffortValues)
+			if !v.refuse("reasoning", "thinking cannot be disabled on this model", r.EffortValues) {
+				v.dropReasoning()
+			}
 			return
 		}
 		if r.Control == ControlEffort && !r.Accepts("none") {
-			v.refuse("reasoning",
+			if !v.refuse("reasoning",
 				`this model disables thinking by a means other than reasoning_effort "none"`,
-				r.EffortValues)
+				r.EffortValues) {
+				v.dropReasoning()
+			}
 		}
 
 	case reasoningEffort:
 		if !r.Supported {
-			v.refuse("reasoning", "this model does not reason", nil)
+			if !v.refuse("reasoning", "this model does not reason", nil) {
+				v.dropReasoning()
+			}
 			return
 		}
 		if r.Control != ControlEffort {
-			v.refuse("reasoning", reasoningControlMismatch(r.Control, "an effort level"),
-				reasoningControlHint(r.Control))
+			if !v.refuse("reasoning", reasoningControlMismatch(r.Control, "an effort level"),
+				reasoningControlHint(r.Control)) {
+				v.dropReasoning()
+			}
 			return
 		}
 		if !r.Accepts(want.level) {
 			// The accepted set is per-model and narrower than the vendor's
 			// global enum, so naming it is the difference between a fixable
 			// error and a guess.
-			v.refuse("reasoning_effort",
+			if !v.refuse("reasoning_effort",
 				fmt.Sprintf("effort %q is not accepted by this model", want.level),
-				r.EffortValues)
+				r.EffortValues) {
+				v.dropReasoning()
+			}
 		}
 
 	case reasoningBudget:
 		if !r.Supported {
-			v.refuse("reasoning", "this model does not reason", nil)
+			if !v.refuse("reasoning", "this model does not reason", nil) {
+				v.dropReasoning()
+			}
 			return
 		}
 		if r.Control != ControlBudget {
-			v.refuse("reasoning", reasoningControlMismatch(r.Control, "a token budget"),
-				reasoningControlHint(r.Control))
+			if !v.refuse("reasoning", reasoningControlMismatch(r.Control, "a token budget"),
+				reasoningControlHint(r.Control)) {
+				v.dropReasoning()
+			}
 		}
 	}
 }
+
+// dropReasoning removes the reasoning knob from the coerced request, leaving the
+// model at its own default.
+func (v *validation) dropReasoning() { v.out.Reasoning = nil }
 
 // reasoningControlMismatch phrases a control mismatch in terms of what a CALLER
 // would write, rather than leaking the profile's internal constant name.
@@ -356,18 +467,36 @@ func reasoningControlHint(c ReasoningControl) []string {
 
 // checkSampling covers the three ways a sampling parameter can fail to mean what
 // the caller thinks, which a single "supported" bool cannot express.
-func (v *validation) checkSampling(name string, want *float64, s Sampling) {
+// out points at the coerced request's field for this parameter, so the resolved
+// value and any drop land where the renderer will read them.
+func (v *validation) checkSampling(name string, want *float64, s Sampling, out **float64) {
 	if want == nil {
+		// The caller expressed no preference, so the vendor's tuned operating
+		// point is sent instead of nothing. Silent, and lossless relative to
+		// what the caller said: omitting the parameter does NOT mean "the
+		// model's default" on every endpoint — at least one falls back
+		// materially below the value the model was tuned for, so an omission
+		// would quietly run the model off its recommended point.
+		if s.Supported && s.RecommendedValue != nil {
+			*out = copyFloat(s.RecommendedValue)
+		}
 		return
 	}
 	if !s.Supported {
-		v.refuse(name, fmt.Sprintf("%s is not supported by this model", name), nil)
+		if !v.refuse(name, fmt.Sprintf("%s is not supported by this model", name), nil) {
+			*out = nil
+		}
 		return
 	}
 	if s.ForcedValue != nil && *want != *s.ForcedValue {
-		v.refuse(name,
+		if !v.refuse(name,
 			fmt.Sprintf("%s must be %g on this model; any other value is rejected", name, *s.ForcedValue),
-			[]string{fmt.Sprintf("%g", *s.ForcedValue)})
+			[]string{fmt.Sprintf("%g", *s.ForcedValue)}) {
+			// Demoted to the one value the endpoint takes, not dropped: the
+			// caller asked for a specific parameter, and the forced value is the
+			// nearest thing the model will accept.
+			*out = copyFloat(s.ForcedValue)
+		}
 		return
 	}
 	if s.InertWhileReasoning && v.reasoningActive {
@@ -380,11 +509,28 @@ func (v *validation) checkSampling(name string, want *float64, s Sampling) {
 	}
 }
 
+// checkMaxTokens warns when the cap exceeds what the model can produce.
+//
+// A warning, not a refusal: every endpoint measured clamps silently rather than
+// erroring, so the request works and only the caller's expectation is wrong. The
+// cap is still sent verbatim — rewriting it would hide the profile's limit behind
+// a number the caller never chose.
+func (v *validation) checkMaxTokens(req ChatRequest) {
+	max := v.profile.Limits.MaxOutput
+	if req.MaxTokens == nil || max <= 0 || int64(*req.MaxTokens) <= max {
+		return
+	}
+	v.warn(WarnCompatibility, "max_tokens",
+		fmt.Sprintf("%d exceeds this model's output limit of %d, which the endpoint clamps silently",
+			*req.MaxTokens, max))
+}
+
 func (v *validation) checkTools(req ChatRequest) {
 	if len(req.Tools) == 0 {
 		if req.ToolChoice.Mode != ToolChoiceUnset {
 			v.warn(WarnUnsupported, "tool_choice",
 				"a tool choice was set but no tools were offered, so it was dropped")
+			v.out.ToolChoice = ToolChoice{}
 		}
 		return
 	}
@@ -393,6 +539,11 @@ func (v *validation) checkTools(req ChatRequest) {
 		if v.refuse("tools", "this model does not support tool calling", nil) {
 			return
 		}
+		// Demoted: the tools go with the choice. Sending a tool_choice for tools
+		// the endpoint never received is a 400 on every implementation.
+		v.out.Tools = nil
+		v.out.ToolChoice = ToolChoice{}
+		return
 	}
 	for i, tool := range req.Tools {
 		// Structural: a nameless tool cannot be called by any endpoint.
@@ -424,11 +575,17 @@ func (v *validation) checkTools(req ChatRequest) {
 	// model is told exists, which can change the answer even when no tool would
 	// have been called. The caller is told to do it, and keeps the decision.
 	if req.ToolChoice.Mode == ToolChoiceNone {
-		v.refuse("tool_choice",
+		if !v.refuse("tool_choice",
 			fmt.Sprintf("this model accepts tool_choice %v and cannot be told %q; "+
 				"omit Tools from the request to guarantee no tool call",
 				t.ToolChoiceValues, ToolChoiceNone),
-			t.ToolChoiceValues)
+			t.ToolChoiceValues) {
+			// Demoted: the field is dropped, not relaxed to "auto". The tools
+			// stay offered, because withholding them changes what the model is
+			// told exists — and that is the caller's decision, not this
+			// package's, even under BestEffort.
+			v.out.ToolChoice = ToolChoice{}
+		}
 		return
 	}
 
@@ -439,6 +596,7 @@ func (v *validation) checkTools(req ChatRequest) {
 	v.warn(WarnCompatibility, "tool_choice",
 		fmt.Sprintf("this model accepts tool_choice %v; %q was relaxed to %q",
 			t.ToolChoiceValues, req.ToolChoice.Mode, ToolChoiceAuto))
+	v.out.ToolChoice = ToolChoice{Mode: ToolChoiceAuto}
 }
 
 func toolChoiceAccepted(accepted []string, mode ToolChoiceMode) bool {
@@ -457,7 +615,9 @@ func (v *validation) checkResponseFormat(req ChatRequest) {
 		return
 	case FormatJSONObject:
 		if !v.profile.Output.JSONObject {
-			v.refuse("response_format", "this model does not support JSON object output", nil)
+			if !v.refuse("response_format", "this model does not support JSON object output", nil) {
+				v.out.ResponseFormat = ResponseFormat{}
+			}
 		}
 	case FormatJSONSchema:
 		// Structural: a schema format with no schema is malformed, and no
@@ -472,7 +632,9 @@ func (v *validation) checkResponseFormat(req ChatRequest) {
 		}
 		if !v.profile.Output.JSONSchema {
 			if !v.profile.Output.JSONObject {
-				v.refuse("response_format", "this model supports no structured output", nil)
+				if !v.refuse("response_format", "this model supports no structured output", nil) {
+					v.out.ResponseFormat = ResponseFormat{}
+				}
 				return
 			}
 			// Approximate but honourable: the reply is still constrained to
@@ -480,6 +642,10 @@ func (v *validation) checkResponseFormat(req ChatRequest) {
 			v.warn(WarnCompatibility, "response_format",
 				"this model does not support json_schema; downgraded to json_object, "+
 					"so the schema is not enforced")
+			// The downgrade is recorded as DATA, not only as prose in the
+			// warning: the renderer emits whatever Kind says and never re-derives
+			// the decision from the profile.
+			v.out.ResponseFormat = ResponseFormat{Kind: FormatJSONObject}
 			return
 		}
 		// StrictSchema describes exactly this field — whether "strict": true is
@@ -490,11 +656,16 @@ func (v *validation) checkResponseFormat(req ChatRequest) {
 			v.warn(WarnCompatibility, "response_format",
 				"this model does not accept strict schema adherence; the flag was dropped, "+
 					"so the schema is requested but not enforced")
+			v.out.ResponseFormat.Strict = false
 		}
 	default:
-		v.refuse("response_format",
+		if !v.refuse("response_format",
 			fmt.Sprintf("unknown response format %q", f.Kind),
-			[]string{string(FormatText), string(FormatJSONObject), string(FormatJSONSchema)})
+			[]string{string(FormatText), string(FormatJSONObject), string(FormatJSONSchema)}) {
+			// Nothing to coerce an unrecognised kind TO, so it is dropped
+			// entirely rather than guessed at.
+			v.out.ResponseFormat = ResponseFormat{}
+		}
 	}
 }
 

@@ -223,6 +223,44 @@ type ChatRequest struct {
 	BestEffort bool
 }
 
+// clone copies a request deeply enough that coercing the copy cannot touch the
+// caller's own slices and maps.
+//
+// Validation coerces: it drops an image part, relaxes a tool choice, fills in a
+// recommended temperature. Doing that in place would mean a call documented as
+// read-only quietly editing the caller's request — and with Validate exported,
+// checking a request at boot would mutate the very thing being checked.
+//
+// Tool.Parameters and the values inside ExtraBody are NOT deep-copied: nothing in
+// this package writes through them, and copying an arbitrary caller-supplied
+// JSON tree would be both expensive and lossy.
+func (r ChatRequest) clone() ChatRequest {
+	out := r
+	if r.Messages != nil {
+		out.Messages = make([]Message, len(r.Messages))
+		copy(out.Messages, r.Messages)
+		for i := range out.Messages {
+			out.Messages[i].Parts = append([]Part(nil), r.Messages[i].Parts...)
+			out.Messages[i].ToolCalls = append([]ToolCall(nil), r.Messages[i].ToolCalls...)
+		}
+	}
+	out.Tools = append([]Tool(nil), r.Tools...)
+	out.Stop = append([]string(nil), r.Stop...)
+	out.Temperature = copyFloat(r.Temperature)
+	out.TopP = copyFloat(r.TopP)
+	if r.MaxTokens != nil {
+		v := *r.MaxTokens
+		out.MaxTokens = &v
+	}
+	if r.ExtraBody != nil {
+		out.ExtraBody = make(map[string]any, len(r.ExtraBody))
+		for k, v := range r.ExtraBody {
+			out.ExtraBody[k] = v
+		}
+	}
+	return out
+}
+
 // EmbedRequest is one embeddings request.
 type EmbedRequest struct {
 	Model  string
