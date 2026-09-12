@@ -87,6 +87,12 @@ type Reasoning struct {
 	// on every model measured so far, "reasoning" on some servers. Empty means
 	// reasoning is not streamed separately.
 	StreamField string `yaml:"stream_field"`
+	// BudgetParam is the wire key a token budget is sent under, and is required
+	// when Control is ControlBudget. There is no default because the vendors
+	// that take a budget disagree on the name, and guessing it would send a key
+	// the endpoint ignores — the same silent failure max_tokens_param exists to
+	// prevent. Must be empty for every other control.
+	BudgetParam string `yaml:"budget_param"`
 }
 
 // Accepts reports whether effort is in the model's accepted set.
@@ -164,6 +170,16 @@ type Streaming struct {
 	AcceptsStreamOptions bool `yaml:"accepts_stream_options"`
 }
 
+// Embedding describes embeddings-only behaviour. Separate from the chat
+// capabilities so a chat profile declaring it fails the load, the same way an
+// embeddings profile declaring tools does.
+type Embedding struct {
+	// Dimensions: the model accepts the dimensions parameter, which shortens the
+	// returned vectors. Only the -3 generation does; older models reject it
+	// outright, so this cannot be inferred from the endpoint.
+	Dimensions bool `yaml:"dimensions"`
+}
+
 // Limits are the model's context and output bounds, in tokens.
 type Limits struct {
 	Context   int64 `yaml:"context"`
@@ -207,6 +223,13 @@ type Profile struct {
 	Streaming   Streaming `yaml:"streaming"`
 	Limits      Limits    `yaml:"limits"`
 	Vision      bool      `yaml:"vision"`
+	Embedding   Embedding `yaml:"embedding"`
+
+	// Cost is the published pay-as-you-go rate, or nil when no rate has been
+	// verified for this model. Nil is not "free": pricing reports Unpriced and
+	// warns, because a zero nobody can explain is worse than a missing number.
+	// Absent for every gateway route by construction — see CostBlock.
+	Cost *CostBlock `yaml:"cost"`
 
 	// FinishReasonsExtra are vendor-specific finish_reason values beyond the
 	// OpenAI vocabulary. Recorded for documentation: the parser treats the field
@@ -325,6 +348,16 @@ func (p Profile) resolve(base Profile) (Profile, error) {
 	if p.Tools.RecoverInlineMarkup {
 		out.Tools.RecoverInlineMarkup = true
 	}
+
+	// A gateway route inherits no price. The proxy reports its own per-call
+	// spend, and it knows things this table cannot: which deployment actually
+	// ran, and what it is charged at. Inheriting the base's list rate would
+	// produce a confident figure for a call nobody priced — so the block is
+	// dropped rather than carried, and a gateway entry stating one of its own is
+	// refused by CostBlock.validate.
+	if out.Gateway != "" {
+		out.Cost = nil
+	}
 	return out, nil
 }
 
@@ -376,9 +409,17 @@ func (p Profile) validate() error {
 		case p.Output.JSONObject || p.Output.JSONSchema || p.Output.StrictSchema:
 			return bad("an embeddings profile must not declare structured output")
 		}
+		if p.Cost != nil {
+			if err := p.Cost.validate(p); err != nil {
+				return err
+			}
+		}
 		// The limits check below applies to both endpoints, so fall through to
 		// it rather than returning early.
 		return p.validateLimits()
+	}
+	if p.Embedding.Dimensions {
+		return bad("a chat profile must not declare embedding settings")
 	}
 
 	if p.MaxTokensParam != ParamMaxTokens && p.MaxTokensParam != ParamMaxCompletionTokens {
@@ -387,6 +428,18 @@ func (p Profile) validate() error {
 	}
 
 	r := p.Reasoning
+	// budget_param is the wire NAME of the budget knob, so it is meaningful for
+	// exactly one control and nowhere else. Checked in both directions: missing
+	// where it is required leaves the renderer with no key to send, and present
+	// anywhere else is a profile describing a knob the model does not have.
+	if r.Control == ControlBudget && r.Supported {
+		if r.BudgetParam == "" {
+			return bad("reasoning control is %q but budget_param is empty; there is no default, "+
+				"because the vendors that take a budget disagree on the name", ControlBudget)
+		}
+	} else if r.BudgetParam != "" {
+		return bad("budget_param is set but reasoning control is %q, which takes no budget", r.Control)
+	}
 	if !r.Supported {
 		if r.Control != "" && r.Control != ControlNone {
 			return bad("reasoning is unsupported but control is %q", r.Control)
@@ -449,6 +502,11 @@ func (p Profile) validate() error {
 		return bad("needs_include_usage is true but accepts_stream_options is false; " +
 			"the parameter would have to be sent to an endpoint that rejects it")
 	}
+	if p.Cost != nil {
+		if err := p.Cost.validate(p); err != nil {
+			return err
+		}
+	}
 	return p.validateLimits()
 }
 
@@ -502,6 +560,7 @@ func (p *Profile) clone() *Profile {
 	out.Temperature.RecommendedValue = copyFloat(p.Temperature.RecommendedValue)
 	out.TopP.ForcedValue = copyFloat(p.TopP.ForcedValue)
 	out.TopP.RecommendedValue = copyFloat(p.TopP.RecommendedValue)
+	out.Cost = p.Cost.clone()
 	return &out
 }
 

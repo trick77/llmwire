@@ -98,6 +98,32 @@ profiles:
     vision: true
     finish_reasons_extra: [sensitive, model_context_window_exceeded, network_error]
 
+    # Published pay-as-you-go USD list rate, per 1M tokens, read from the
+    # vendor's own page. models.dev carries 0.075/0.25 for this model — exactly
+    # half — which is why source_url is mandatory: the two disagree and only the
+    # recorded origin settles which figure a number came from. The vendor page
+    # wins.
+    #
+    # cache_write is 0 because the vendor lists cached-input storage as
+    # "Limited-time Free". That is a promotion, not a property: when it ends this
+    # becomes a real rate, and the 0 here is an explicit measurement of what the
+    # page said on verified_on, not an assumption that the lane is free.
+    #
+    # NO WINDOW IS ATTACHED, deliberately. Z.ai documents a Mon-Fri 14:00-18:00
+    # Asia/Singapore peak with everything else, weekends included, at 0.5x — but
+    # documents it as a COEFFICIENT ON CREDIT BURN, and whether it touches the
+    # USD lane is unverified (FINDINGS.md, "Still open"). Attaching 0.5x would
+    # halve reported spend on the only priced chat model here, and a halved
+    # figure silently doubles what a fail-closed budget cap permits. Assumption
+    # until measured: the USD lane bills at list around the clock.
+    cost:
+      input: 0.15
+      cache_read: 0.03
+      cache_write: 0
+      output: 0.50
+      source_url: https://docs.z.ai/guides/overview/pricing
+      verified_on: 2026-09-12
+
     notes: >-
       A 1024-token cap at reasoning_effort max produced 1022 stream frames and
       ZERO content characters: the whole budget went to reasoning. The cap counts
@@ -182,6 +208,26 @@ profiles:
     vision: false
     finish_reasons_extra: [repetition_truncation]
 
+    # Published pay-as-you-go USD list rate per 1M tokens, from the vendor's own
+    # page. THIS IS NOT AN INVOICE: this deployment is reached over a Token Plan
+    # host that bills subscription credits, and llmwire reports the list USD rate
+    # anyway, because a credit figure is not comparable between models and
+    # reporting nothing leaves a budget cap with nothing to check.
+    #
+    # A third-party integration doc quoted 1.00/3.00 for this model; the vendor
+    # page says 0.435/0.87 and models.dev agrees with the vendor. Recorded
+    # because it is the second price conflict in this file.
+    #
+    # cache_write 0: the vendor lists cache writes as "Limited-time Free" — a
+    # promotion as of verified_on, not a property of the lane.
+    cost:
+      input: 0.435
+      cache_read: 0.0036
+      cache_write: 0
+      output: 0.87
+      source_url: https://mimo.mi.com/docs/en-US/price/pay-as-you-go
+      verified_on: 2026-09-12
+
     notes: >-
       Latency is what to plan around, not tokens: single calls measured 25-64
       seconds, against 1-5 seconds for glm-5.3-flash on comparable prompts.
@@ -240,6 +286,16 @@ profiles:
     vision: true
     finish_reasons_extra: [repetition_truncation]
 
+    # Same page and same caveats as mimo-v2.5-pro above: list USD rate, not the
+    # credit invoice this route actually bills, and cache_write is a promotion.
+    cost:
+      input: 0.14
+      cache_read: 0.0028
+      cache_write: 0
+      output: 0.28
+      source_url: https://mimo.mi.com/docs/en-US/price/pay-as-you-go
+      verified_on: 2026-09-12
+
     notes: >-
       The vision-capable sibling of mimo-v2.5-pro. Not "the weaker model": it is
       the same reasoning family and thinks when asked to.
@@ -258,6 +314,17 @@ profiles:
       # says 8191; the lower figure is used, since the cost of being one token
       # conservative is nothing and the cost of being one over is a 400.
       context: 8191
+    # Only the -3 generation takes the dimensions parameter; older embedding
+    # models reject it outright, so this cannot be inferred from the endpoint.
+    embedding:
+      dimensions: true
+    # One lane: there is no completion side to an embeddings call, and the other
+    # three lanes must stay ABSENT rather than 0, so nothing reads "measured
+    # free" where the truth is "no such lane".
+    cost:
+      input: 0.02
+      source_url: https://developers.openai.com/api/docs/pricing
+      verified_on: 2026-09-12
     notes: >-
       1536 dimensions by default. Over-length input is rejected, never
       truncated: at most 2048 inputs per request and 300000 tokens summed across
@@ -273,4 +340,10 @@ profiles:
     verified: source-derived
     limits:
       context: 8191
+    embedding:
+      dimensions: true
+    cost:
+      input: 0.13
+      source_url: https://developers.openai.com/api/docs/pricing
+      verified_on: 2026-09-12
     notes: 3072 dimensions by default. Same request limits as the -small model.

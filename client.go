@@ -211,7 +211,19 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	// arrival.
 	guard.arm(c.idle, stallIdle)
 
-	res, err := readStream(resp.Body, guard, &counters, c.idle, onDelta)
+	// Content only, which is what this entry point promises. The parser's sink
+	// carries every channel now, and the iterator in streamiter.go consumes all of
+	// them; RawStream keeps its narrow callback so the probe suite is untouched.
+	var sink func(streamEvent)
+	if onDelta != nil {
+		sink = func(ev streamEvent) {
+			if ev.kind == evContent {
+				onDelta(ev.text)
+			}
+		}
+	}
+
+	res, err := readStream(resp.Body, guard, &counters, c.idle, sink)
 	if err != nil {
 		return res, c.explain(ctx, callCtx, guard, err)
 	}
@@ -226,27 +238,53 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 // The headers are returned because a gateway reports per-call spend and the
 // real deployment name there and nowhere else.
 func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.RawMessage, http.Header, error) {
-	callCtx, cancel := context.WithTimeout(ctx, c.cap)
-	defer cancel()
+	callCtx, cancelCall := context.WithTimeout(ctx, c.cap)
+	defer cancelCall()
+	reqCtx, cancelReq := context.WithCancel(callCtx)
+	defer cancelReq()
 
-	req, err := c.newRequest(callCtx, route, body)
+	req, err := c.newRequest(reqCtx, route, body)
 	if err != nil {
 		return nil, nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 
+	// Bounded by the WHOLE-CALL cap, not by c.header, and that difference is the
+	// point.
+	//
+	// On a non-streaming route the endpoint withholds headers until the entire
+	// answer is ready, so "time until headers" is not "time until the endpoint
+	// starts talking" — it is the model's total latency. profiles.yaml records
+	// single calls on mimo-v2.5-pro at 25-64 seconds against a 60s default header
+	// bound, so arming this with c.header would abort a call the endpoint was about
+	// to answer. The guard is still worth arming: when nothing arrives at all, the
+	// failure says "no response headers" rather than a bare context deadline.
+	//
+	// (The transport's own ResponseHeaderTimeout, set in New to c.header + 30s,
+	// remains the unnamed backstop it has always been on this path.)
+	guard := newStallGuard(cancelReq, c.cap, stallHeaders)
+	defer guard.stop()
+
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("llmwire: %s: %w", RedactURL(c.baseURL+route), err)
+		// Redaction first, then classification: the URL can carry a key in its
+		// query string, and explain returns the original error untouched when no
+		// bound fired.
+		return nil, nil, c.explain(ctx, callCtx, guard,
+			fmt.Errorf("llmwire: %s: %w", RedactURL(c.baseURL+route), err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, resp.Header, c.httpError(resp)
 	}
+	// Headers are in, so the bound that matters from here is silence on the body.
+	guard.arm(c.idle, stallIdle)
+
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, resp.Header, fmt.Errorf("llmwire: reading response: %w", err)
+		return nil, resp.Header, c.explain(ctx, callCtx, guard,
+			fmt.Errorf("llmwire: reading response: %w", err))
 	}
 	return raw, resp.Header, nil
 }
