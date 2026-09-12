@@ -290,6 +290,7 @@ func TestEmbed_DimensionsFollowsTheProfile(t *testing.T) {
     endpoint: embeddings
     wire_model_id: old-embed
     verified: source-derived
+    embedding: {default_dimensions: 1536}
     limits: {context: 8191}
 `)
 
