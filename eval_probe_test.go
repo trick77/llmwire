@@ -1,6 +1,7 @@
 package llmwire
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -480,6 +481,64 @@ func TestProbe_MiMoProRejectsImageInput(t *testing.T) {
 			}
 			t.Logf("FINDING: %s ACCEPTS image input (finish_reason=%q) => vision: true",
 				model, res.FinishReason)
+		})
+	}
+}
+
+// The regression test for the trap this library exists to defuse, driven through
+// the PUBLIC call surface rather than a hand-built body.
+//
+// glm-5.3-flash accepts max_completion_tokens and silently ignores it: the probe
+// above measured a cap of 16 returning 481 completion tokens with finish_reason
+// "stop". Chat writes the cap once and the profile chooses the spelling, so this
+// asserts the OUTCOME rather than the parameter name — if the profile, the plan or
+// the renderer regresses, the count comes back over the cap and this fails.
+func TestProbe_ChatHonoursTheOutputCap(t *testing.T) {
+	for _, tc := range []struct {
+		ep    endpoint
+		model string
+	}{
+		{zaiEndpoint, "glm-5.3-flash"},
+		{mimoEndpoint, "mimo-v2.5-pro"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			c := tc.ep.client(t)
+			theMeter.reserve(t, tc.model)
+
+			capTokens := probeMaxTokens
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			resp, warnings, err := c.Chat(ctx, ChatRequest{
+				Model:     tc.model,
+				Messages:  []Message{User("Count slowly from one to fifty in words.")},
+				MaxTokens: &capTokens,
+			})
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			theMeter.record(tc.model, resp.Usage)
+			for _, w := range warnings {
+				t.Logf("warning: %s", w)
+			}
+
+			got := valueOr(resp.Usage.Output.Total, -1)
+			t.Logf("FINDING: %s capped at %d returned %d completion tokens "+
+				"(finish_reason=%q, cost=%d nano-USD via %s)",
+				tc.model, capTokens, got, resp.FinishReason,
+				resp.Usage.Cost.NanoUSD, resp.Usage.Cost.Provenance)
+			if got < 0 {
+				t.Fatalf("no completion tokens reported, so the cap cannot be verified")
+			}
+			// Some allowance over the cap: endpoints round to a token boundary and
+			// one of them counts reasoning against the same budget. Thirty times
+			// over, which is what the wrong parameter name produced, is not
+			// rounding.
+			if got > int64(capTokens)*2 {
+				t.Errorf("cap of %d was IGNORED: %d completion tokens came back. The output-cap "+
+					"parameter for this model is wrong in profiles.yaml, or the renderer stopped "+
+					"reading it", capTokens, got)
+			}
 		})
 	}
 }

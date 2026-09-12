@@ -33,7 +33,9 @@ import (
 //
 // Warnings ride back with a SUCCESSFUL response rather than being logged,
 // because Go has no warnings mechanism: a log line is invisible to the caller
-// and an error is too blunt for something that worked.
+// and an error is too blunt for something that worked. Chat, ChatStream and Embed
+// each return them beside their result; on a stream the pricing warnings can only
+// exist once usage has arrived, so Stream.Warnings() carries the complete set.
 //
 // BestEffort demotes tier 1 to tier 3 for a single call. It is per-request on
 // purpose. A process-wide equivalent exists in at least one popular library and

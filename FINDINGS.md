@@ -189,9 +189,13 @@ breaker.
 
 - **Everything LiteLLM.** No instance was reachable. Header names, the cost-header
   parsing and the error shapes remain source-derived at v1.100.1 and unverified.
-- **Token Plan credit rates.** Not published per token in any form verified here,
-  and a probe cannot read a credit balance. The MiMo profiles reached over a
-  Token Plan host therefore ship `Unpriced` rather than a guessed conversion.
+- ~~**Token Plan credit rates.**~~ **Closed by policy, not by measurement.** Credits
+  are not converted at all: llmwire reports the vendor's published pay-as-you-go USD
+  rate for every model, including one reached over a Token Plan host, and labels it
+  a list-rate equivalent rather than an invoice. The MiMo rates in `profiles.yaml`
+  come from the vendor's own page (0.435/0.87 for `mimo-v2.5-pro`, contradicting a
+  third-party doc's 1.00/3.00). What a credit invoice actually charges is still
+  unknown and is now deliberately out of scope.
 - **Whether off-peak multipliers apply to the USD lane** as well as to credit
   burn. Both vendors document them as credit coefficients.
 - **Whether inline tool markup can still appear at all.** Neither probe
