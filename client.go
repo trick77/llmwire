@@ -77,6 +77,12 @@ type Config struct {
 	// endpoints with off-peak pricing, and a test that only passes during a
 	// particular local window is worse than no test. Defaults to time.Now.
 	Now func() time.Time
+
+	// Registry supplies the model profiles this client validates against.
+	// Defaults to the built-in one. Injectable so a caller can add a deployment
+	// without waiting for it to be upstreamed here, and so tests can drive
+	// validation with a profile that does not exist in the real world.
+	Registry *Registry
 }
 
 // DefaultUserAgent is what this package sends when Config.UserAgent is empty.
@@ -93,6 +99,7 @@ type Client struct {
 	idle      time.Duration
 	cap       time.Duration
 	now       func() time.Time
+	registry  *Registry
 }
 
 // New builds a Client.
@@ -111,6 +118,9 @@ func New(cfg Config) *Client {
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.Registry == nil {
+		cfg.Registry = Default()
 	}
 	hc := cfg.HTTPClient
 	if hc == nil {
@@ -136,6 +146,7 @@ func New(cfg Config) *Client {
 		idle:      cfg.IdleTimeout,
 		cap:       cfg.CallTimeout,
 		now:       cfg.Now,
+		registry:  cfg.Registry,
 	}
 }
 
@@ -280,3 +291,7 @@ func (c *Client) explain(parent, call context.Context, guard *stallGuard, err er
 	}
 	return err
 }
+
+// Registry exposes the profiles this client validates against, so a caller can
+// ask what a model supports without making a request.
+func (c *Client) Registry() *Registry { return c.registry }
