@@ -64,8 +64,10 @@ var (
 // populate different subsets, and an absent field must read as "not reported"
 // rather than as an empty value that means something.
 type APIError struct {
-	// StatusCode is the HTTP status, or 0 when the failure happened before a
-	// response (dial, TLS, a stall guard firing).
+	// StatusCode is the HTTP status, or 0 for an error object inside a
+	// SUCCESSFUL response: a 2xx whose body is {"error":…}, or an error frame
+	// in a stream. A dial or TLS failure and a stall guard firing are not
+	// APIErrors; they carry no body to decode.
 	StatusCode int
 	// Code is the provider's own error code, ALWAYS held as a string. MiMo and
 	// LiteLLM send it as a JSON string; Z.ai's schema declares it an integer
@@ -88,7 +90,7 @@ func (e *APIError) Error() string {
 	if e.StatusCode != 0 {
 		fmt.Fprintf(&b, "status %d", e.StatusCode)
 	} else {
-		b.WriteString("no response")
+		b.WriteString("error in a 2xx response")
 	}
 	if e.Code != "" {
 		fmt.Fprintf(&b, " code %s", e.Code)
@@ -383,4 +385,58 @@ func Truncate(s string, max int) string {
 		cut--
 	}
 	return s[:cut] + "…(truncated)"
+}
+
+// JSONObject returns the first brace-balanced JSON object in s, or false when
+// there is none. It is the salvage step before json.Unmarshal on a reply that
+// was asked for JSON: models fence it in ```json, lead with "Sure, here it
+// is:", or trail a sentence after the closing brace, and every consumer was
+// carrying its own strip-the-fence helper — three of them in one program,
+// each slightly different. This one is the string-aware form: a brace inside
+// a JSON string does not count, an escaped quote does not close the string.
+//
+// It is the FIRST object, not first-brace-to-last-brace: a reply that says
+// "{...} or, if you prefer, {...}" yields the first and parses, where the
+// widest cut would include the prose and fail. What it does not do is repair:
+// an unbalanced object is reported as none, and the caller's parse failure
+// path is the right place for that.
+//
+// Consider ChatRequest.ResponseFormat first. On one model a prompt asking for
+// JSON parsed 0 times out of 8 and the response format 8 out of 8 — but a
+// fenced reply still arrives with the format set on some endpoints, so the
+// salvage stays useful behind it.
+func JSONObject(s string) (string, bool) {
+	start := strings.IndexByte(s, '{')
+	if start == -1 {
+		return "", false
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1], true
+			}
+		}
+	}
+	return "", false
 }

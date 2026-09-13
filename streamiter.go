@@ -257,6 +257,27 @@ func (s *Stream) Err() error {
 	return s.err
 }
 
+// Collect drains the stream: every content delta goes to onDelta as it
+// arrives, in order, and the assembled result comes back once the stream
+// ends. It is the loop every consumer that does not need the event kinds was
+// writing by hand — Next, switch on Kind, keep the finish reason, then read
+// Usage — and getting subtly different: one forgot the usage frame follows
+// the finish, another read Usage before Next returned false.
+//
+// The result is returned WITH the error. A stream cut after its usage frame,
+// or after content the reader has already seen, was paid for; a caller that
+// accounts per call needs the figures whether or not the read completed, and
+// gates on Usage.Total() — Reported() is true for an object with nothing
+// countable in it. onDelta may be nil.
+func (s *Stream) Collect(onDelta func(string)) (StreamResult, error) {
+	for s.Next() {
+		if ev := s.Event(); ev.Kind == EventContent && ev.Text != "" && onDelta != nil {
+			onDelta(ev.Text)
+		}
+	}
+	return s.Result(), s.Err()
+}
+
 // Result returns the accumulated answer: content, reasoning, assembled tool calls,
 // finish reason and usage. Valid once Next has returned false.
 func (s *Stream) Result() StreamResult {

@@ -107,6 +107,13 @@ request body. The session id is the client's own — minted at construction,
 rotated after a 30-minute idle gap, the way a person's session starts and ends —
 and there is deliberately no way to supply one.
 
+**Carries the small helpers every consumer was copying.** `Stream.Collect(onDelta)`
+drains a stream into its result. `JSONObject(s)` cuts the first brace-balanced
+object out of a reply that was asked for JSON and came back fenced or wrapped in
+prose. `Registry.LookupEmbedding(id)` is `Lookup` that refuses a chat model, for
+an embeddings client built from a constant. `Redact` and `Truncate` are exported
+for the same reason.
+
 ## Scope
 
 One wire protocol: `/chat/completions` and `/embeddings`. Anthropic, Gemini-native
