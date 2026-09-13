@@ -501,6 +501,12 @@ func (p Profile) validate() error {
 				return bad("default_effort %q is not in effort_values %v", r.DefaultEffort, r.EffortValues)
 			}
 		case ControlToggleObject:
+			// Levels beside a toggle only make sense on a model that is
+			// thinking to begin with: there is no on-switch constructor, so a
+			// level sent to a model that is off would be inert.
+			if len(r.EffortValues) > 0 && !r.EnabledByDefault {
+				return bad("effort_values is set on a %s model that is not enabled_by_default; a level cannot switch thinking on", ControlToggleObject)
+			}
 			if r.DefaultEffort != "" && !r.Accepts(r.DefaultEffort) {
 				return bad("default_effort %q is not in effort_values %v", r.DefaultEffort, r.EffortValues)
 			}

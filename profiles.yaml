@@ -185,8 +185,10 @@ profiles:
       # the set is enforced by the endpoint: low, medium and high return 200,
       # xhigh is a 400 "Invalid request parameters". Whether the level changes
       # how much this deployment thinks is not shown by the probe: a small
-      # arithmetic prompt answered in 9 completion tokens at every level, with
-      # no reasoning at all. See mimo-v2.5 for the sibling that did move.
+      # arithmetic prompt answered in 9 completion tokens at every level AND
+      # with no level sent (the control), so this prompt simply did not make
+      # Pro think; sending a level does not switch thinking off. See mimo-v2.5
+      # for the sibling that did move.
       effort_values: [low, medium, high]
       # MEASURED: reasoning arrived on this delta field on every probe.
       stream_field: reasoning_content

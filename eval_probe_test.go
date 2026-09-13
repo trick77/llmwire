@@ -345,12 +345,17 @@ func TestProbe_MiMoAcceptsReasoningEffort(t *testing.T) {
 // show: at a trivial prompt every level reasons the same handful of tokens.
 func TestProbe_MiMoReasoningEffortValues(t *testing.T) {
 	c := mimoEndpoint.client(t)
+	// "" is the control: the same prompt with no level sent, so a model that
+	// stops thinking when a level arrives is told apart from one that never
+	// thought about this prompt.
 	for _, model := range []string{"mimo-v2.5-pro", "mimo-v2.5"} {
-		for _, effort := range []string{"low", "medium", "high", "xhigh"} {
+		for _, effort := range []string{"", "low", "medium", "high", "xhigh"} {
 			t.Run(model+"/"+effort, func(t *testing.T) {
 				b := probeBody(model, "A train leaves at 09:40 and arrives at 13:05 the same day. "+
 					"How many minutes is the journey? Reply with the number only.")
-				b["reasoning_effort"] = effort
+				if effort != "" {
+					b["reasoning_effort"] = effort
+				}
 				b["max_completion_tokens"] = 4096
 				res, err := stream(t, c, b)
 				ok, why := accepted(res, err)
