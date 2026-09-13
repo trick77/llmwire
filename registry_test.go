@@ -838,3 +838,23 @@ func TestNewRegistry_ProvenanceIsNotInherited(t *testing.T) {
 		t.Errorf("base verified = %q, want it unchanged", got)
 	}
 }
+
+func TestLookupEmbedding_RefusesAChatModel(t *testing.T) {
+	r := Default()
+	if _, err := r.LookupEmbedding("glm-5.3-flash"); err == nil {
+		t.Fatal("want an error for a chat profile")
+	} else if !strings.Contains(err.Error(), "glm-5.3-flash") || !strings.Contains(err.Error(), "embeddings") {
+		t.Errorf("error = %v, want it to name the id and the endpoint", err)
+	}
+	var unknown *UnknownModelError
+	if _, err := r.LookupEmbedding("no-such-model"); !errors.As(err, &unknown) {
+		t.Errorf("unknown id: err = %v, want *UnknownModelError", err)
+	}
+	p, err := r.LookupEmbedding("text-embedding-3-small")
+	if err != nil {
+		t.Fatalf("LookupEmbedding: %v", err)
+	}
+	if p.Endpoint != EndpointEmbeddings || p.Embedding.DefaultDimensions <= 0 {
+		t.Errorf("profile = %+v, want an embeddings profile with a width", p)
+	}
+}

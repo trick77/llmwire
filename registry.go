@@ -202,6 +202,22 @@ func (r *Registry) Lookup(id string) (*Profile, error) {
 	return nil, &UnknownModelError{ID: id, Known: sortedIDs(r.byID)}
 }
 
+// LookupEmbedding is Lookup for a model that must be an embeddings model. An
+// embeddings client that is handed a chat id fails at its first request with
+// a body about messages; this fails at construction, naming the id, which is
+// where a build-time constant is checked. The width is guaranteed by the
+// profile: an embeddings profile without default_dimensions does not load.
+func (r *Registry) LookupEmbedding(id string) (*Profile, error) {
+	p, err := r.Lookup(id)
+	if err != nil {
+		return nil, err
+	}
+	if p.Endpoint != EndpointEmbeddings {
+		return nil, fmt.Errorf("llmwire: model %q is a %s model, not embeddings", id, p.Endpoint)
+	}
+	return p, nil
+}
+
 // UnknownModelError names what was asked for and what is available, because an
 // error that does not say which ids exist leaves the reader to guess at a typo.
 type UnknownModelError struct {

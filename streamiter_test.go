@@ -381,3 +381,77 @@ func TestChatStream_NonStreamingModelIsRefused(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// Collect is the whole stream at once: every content delta to the callback in
+// order, then the result the caller would otherwise assemble by hand.
+func TestChatStream_CollectDrainsToTheResult(t *testing.T) {
+	srv := flushingServer(t, []string{
+		`data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}`,
+		`data: {"choices":[{"delta":{"content":"hel"}}]}`,
+		`data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"length"}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}`,
+		"data: [DONE]",
+	}, 0)
+	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	defer s.Close()
+
+	var deltas []string
+	res, err := s.Collect(func(text string) { deltas = append(deltas, text) })
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if fmt.Sprint(deltas) != fmt.Sprint([]string{"hel", "lo"}) {
+		t.Errorf("deltas = %q", deltas)
+	}
+	if res.Content != "hello" || res.FinishReason != "length" || res.Reasoning != "thinking" {
+		t.Errorf("result = %+v", res)
+	}
+	if total, ok := res.Usage.Total(); !ok || total != 12 {
+		t.Errorf("usage total = %d, %v; want 12", total, ok)
+	}
+}
+
+// A stream that breaks still hands back what arrived: the deltas were
+// delivered as they came, and the result carries whatever usage was read, so
+// a caller can account for a call that was paid for and then cut.
+func TestChatStream_CollectReturnsTheErrorWithThePartialResult(t *testing.T) {
+	srv := flushingServer(t, []string{
+		`data: {"choices":[{"delta":{"content":"partial"}}]}`,
+	}, 0)
+	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	defer s.Close()
+
+	var got string
+	res, err := s.Collect(func(text string) { got += text })
+	if !errors.Is(err, ErrMalformedResponse) {
+		t.Fatalf("err = %v, want ErrMalformedResponse for a stream cut before finish_reason", err)
+	}
+	if got != "partial" || res.Content != "partial" {
+		t.Errorf("delivered %q, result %q; want the partial content in both", got, res.Content)
+	}
+	if res.Usage.Reported() {
+		t.Error("usage reported on a stream that carried none")
+	}
+}
+
+func TestChatStream_CollectWithoutACallbackStillCollects(t *testing.T) {
+	srv := flushingServer(t, []string{
+		`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+		"data: [DONE]",
+	}, 0)
+	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	defer s.Close()
+	res, err := s.Collect(nil)
+	if err != nil || res.Content != "ok" {
+		t.Errorf("result = %+v, err = %v", res, err)
+	}
+}

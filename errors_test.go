@@ -331,3 +331,41 @@ func TestRateLimitError_UnwrapsToAPIError(t *testing.T) {
 		t.Errorf("RetryAfter = %v, want 17s", rl.RetryAfter)
 	}
 }
+
+func TestAPIError_StatusZeroIsAnErrorBodyUnderA2xx(t *testing.T) {
+	// Every status-0 APIError comes from an error object inside a successful
+	// response: a 200 whose JSON is {"error":…}, or an error frame in a
+	// stream. "no response" described a dial failure this type never carries.
+	e := &APIError{Code: "1210", Message: "busy"}
+	if got, want := e.Error(), "llmwire: error in a 2xx response code 1210: busy"; got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestJSONObject(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+		ok             bool
+	}{
+		{"plain", `{"a":1}`, `{"a":1}`, true},
+		{"fenced", "```json\n{\"a\":1}\n```", `{"a":1}`, true},
+		{"prose around", "Sure, here it is: {\"a\":1} — done.", `{"a":1}`, true},
+		{"nested", `x {"a":{"b":[1,{"c":2}]}} y`, `{"a":{"b":[1,{"c":2}]}}`, true},
+		{"braces inside strings", `{"a":"}{","b":"\"}"} }`, `{"a":"}{","b":"\"}"}`, true},
+		{"first object wins", `{"a":1} {"b":2}`, `{"a":1}`, true},
+		{"prose brace before the object", `wrap it in {braces}: {"a":1}`, `{"a":1}`, true},
+		{"prose quote before the object", `use a "{" to open: {"a":1}`, `{"a":1}`, true},
+		{"balanced but not JSON", `{not json}`, "", false},
+		{"unbalanced", `{"a":1`, "", false},
+		{"no object", "nothing here", "", false},
+		{"empty", "", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := JSONObject(c.in)
+			if got != c.want || ok != c.ok {
+				t.Errorf("JSONObject(%q) = %q, %v; want %q, %v", c.in, got, ok, c.want, c.ok)
+			}
+		})
+	}
+}

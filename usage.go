@@ -50,7 +50,10 @@ type Usage struct {
 }
 
 // Reported says the endpoint sent a usage object with something in it, so a
-// zero lane is the endpoint's answer rather than silence. A malformed object
+// zero lane is the endpoint's answer rather than silence. It is NOT "this
+// call can be counted": a bare {"total_tokens":N} or an empty details object
+// is reported and yields no lane. A consumer recording per-call figures gates
+// on Total()'s ok, or a call arrives in its ledger as 0/0 and reads as free. A malformed object
 // keeps its bytes in Raw and is NOT reported. Every consumer that counts
 // "how many of my calls were accounted for" needs exactly this and was
 // re-deriving it from the lane pointers.
