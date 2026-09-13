@@ -252,11 +252,23 @@ func TestRegistry_providerHostIsValidated(t *testing.T) {
 		"no host":     "providers:\n  v:\n    base_url: https:///v1\n",
 		"unknown key": "providers:\n  v:\n    url: https://vendor.example/v1\n",
 		"bad name":    "providers:\n  Vendor-1:\n    base_url: https://vendor.example/v1\n",
+		"chat route":  "providers:\n  v:\n    base_url: https://vendor.example/v1/chat/completions\n",
+		"embed route": "providers:\n  v:\n    base_url: https://vendor.example/v1/embeddings/\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NewRegistry([]byte(doc + chatHead)); err == nil {
 				t.Fatal("must be refused at load")
 			}
 		})
+	}
+}
+
+// A typo in provider: must fail the load, not surface later as a missing
+// environment variable that sends the operator to the wrong file.
+func TestRegistry_profileProviderMustExistWhenProvidersAreDeclared(t *testing.T) {
+	_, err := NewRegistry([]byte("providers:\n  openai:\n    base_url: https://vendor.example/v1\n" +
+		chatHead + "    provider: opeanai\n"))
+	if err == nil || !strings.Contains(err.Error(), "opeanai") {
+		t.Fatalf("got %v, want a load error naming the typo", err)
 	}
 }

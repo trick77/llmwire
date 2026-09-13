@@ -163,9 +163,17 @@ func NewRegistry(doc []byte) (*Registry, error) {
 			return nil, fmt.Errorf("llmwire: %w", err)
 		}
 		// Resolved here, after the base merge, because provider REPLACES on a
-		// derived profile and the URL follows the provider. A provider with no
-		// entry is the same as an entry with no base_url: the environment
-		// supplies it.
+		// derived profile and the URL follows the provider. A document with no
+		// providers: section at all is allowed (every host from the
+		// environment); one that HAS the section must name every provider a
+		// profile uses, or a typo in `provider:` would surface as a missing
+		// environment variable and send the operator to the wrong file.
+		if p.Provider != "" && len(providers) > 0 {
+			if _, ok := providers[p.Provider]; !ok {
+				return nil, fmt.Errorf("llmwire: profile %q names provider %q, which is not in providers: (known: %v)",
+					p.ID, p.Provider, sortedProviderNames(providers))
+			}
+		}
 		p.BaseURL = providers[p.Provider].BaseURL
 		stored := p
 		reg.byID[p.ID] = &stored
@@ -256,6 +264,9 @@ func (pv Provider) validate() error {
 		return fmt.Errorf("base_url %q has no host", pv.BaseURL)
 	case u.RawQuery != "" || u.Fragment != "" || u.User != nil:
 		return fmt.Errorf("base_url %q must be a bare root: no query, fragment or credentials", pv.BaseURL)
+	case strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/chat/completions"),
+		strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/embeddings"):
+		return fmt.Errorf("base_url %q ends in a route; the client appends /chat/completions and /embeddings itself", pv.BaseURL)
 	}
 	return nil
 }
