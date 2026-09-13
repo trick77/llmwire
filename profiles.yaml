@@ -181,12 +181,14 @@ profiles:
       # tool-free call. The model's own chat template emits XML, but the serving
       # layer parses it before it reaches a client.
       #
-      # recover_inline_markup stays OFF here but the capability is retained:
-      # loom observed that markup leaking in production against a longer,
-      # tool-saturated history than a probe reproduces. Failing to reproduce is
-      # not refuting.
+      # recover_inline_markup is ON although no probe reproduces the leak: loom
+      # captured it in production against a long, tool-saturated history, as
+      # <tool_call>…</tool_call> blocks and as an invented
+      # <tool_invocation name=… arguments={…} /> form, on tool-free calls too.
+      # Failing to reproduce is not refuting. Recovery only acts when the
+      # markup appears, so a clean answer costs nothing.
       format: native
-      recover_inline_markup: false
+      recover_inline_markup: true
       # Documented auto-only; anything else is silently DROPPED by the backend
       # rather than rejected, so a caller asking for a forced call would get an
       # unforced one with no error.
@@ -274,7 +276,8 @@ profiles:
     tools:
       supported: true
       format: native
-      recover_inline_markup: false
+      # Same serving layer as -pro; see the note there.
+      recover_inline_markup: true
       tool_choice_values: [auto]
       supports_forced_choice: false
       supports_parallel: true
