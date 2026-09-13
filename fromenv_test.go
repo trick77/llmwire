@@ -7,8 +7,8 @@ import (
 
 func TestFromEnv(t *testing.T) {
 	t.Run("reads both variables and trims the slash", func(t *testing.T) {
-		t.Setenv("BACKEND_CHAT_BASE_URL", "https://api.example/v4/")
-		t.Setenv("BACKEND_CHAT_API_KEY", "k")
+		t.Setenv("ZAI_BASE_URL", "https://api.example/v4/")
+		t.Setenv("ZAI_API_KEY", "k")
 		c, err := FromEnv("glm-5.3-flash", Config{})
 		if err != nil {
 			t.Fatal(err)
@@ -19,8 +19,8 @@ func TestFromEnv(t *testing.T) {
 	})
 
 	t.Run("explicit base url leaves the environment alone", func(t *testing.T) {
-		t.Setenv("BACKEND_CHAT_BASE_URL", "https://env.example")
-		t.Setenv("BACKEND_CHAT_API_KEY", "env")
+		t.Setenv("ZAI_BASE_URL", "https://env.example")
+		t.Setenv("ZAI_API_KEY", "env")
 		c, err := FromEnv("glm-5.3-flash", Config{BaseURL: "https://cfg.example"})
 		if err != nil {
 			t.Fatal(err)
@@ -32,8 +32,8 @@ func TestFromEnv(t *testing.T) {
 	})
 
 	t.Run("explicit base url needs no variables at all", func(t *testing.T) {
-		t.Setenv("BACKEND_CHAT_BASE_URL", "")
-		t.Setenv("BACKEND_CHAT_API_KEY", "")
+		t.Setenv("ZAI_BASE_URL", "")
+		t.Setenv("ZAI_API_KEY", "")
 		c, err := FromEnv("glm-5.3-flash", Config{BaseURL: "https://cfg.example", APIKey: "cfg"})
 		if err != nil {
 			t.Fatal(err)
@@ -44,8 +44,8 @@ func TestFromEnv(t *testing.T) {
 	})
 
 	t.Run("explicit api key wins over the environment", func(t *testing.T) {
-		t.Setenv("BACKEND_CHAT_BASE_URL", "https://env.example")
-		t.Setenv("BACKEND_CHAT_API_KEY", "env")
+		t.Setenv("ZAI_BASE_URL", "https://env.example")
+		t.Setenv("ZAI_API_KEY", "env")
 		c, err := FromEnv("glm-5.3-flash", Config{APIKey: "cfg"})
 		if err != nil {
 			t.Fatal(err)
@@ -56,21 +56,21 @@ func TestFromEnv(t *testing.T) {
 	})
 
 	t.Run("unset base url names the variable", func(t *testing.T) {
-		t.Setenv("BACKEND_CHAT_BASE_URL", "")
-		t.Setenv("BACKEND_CHAT_API_KEY", "k")
+		t.Setenv("ZAI_BASE_URL", "")
+		t.Setenv("ZAI_API_KEY", "k")
 		_, err := FromEnv("glm-5.3-flash", Config{})
 		var me *MissingEnvError
-		if !errors.As(err, &me) || me.Var != "BACKEND_CHAT_BASE_URL" || me.Model != "glm-5.3-flash" {
+		if !errors.As(err, &me) || me.Var != "ZAI_BASE_URL" || me.Model != "glm-5.3-flash" {
 			t.Fatalf("got %v", err)
 		}
 	})
 
 	t.Run("whitespace-only api key names the variable", func(t *testing.T) {
-		t.Setenv("BACKEND_CHAT_BASE_URL", "https://api.example")
-		t.Setenv("BACKEND_CHAT_API_KEY", " ")
+		t.Setenv("ZAI_BASE_URL", "https://api.example")
+		t.Setenv("ZAI_API_KEY", " ")
 		_, err := FromEnv("glm-5.3-flash", Config{})
 		var me *MissingEnvError
-		if !errors.As(err, &me) || me.Var != "BACKEND_CHAT_API_KEY" {
+		if !errors.As(err, &me) || me.Var != "ZAI_API_KEY" {
 			t.Fatalf("got %v", err)
 		}
 	})

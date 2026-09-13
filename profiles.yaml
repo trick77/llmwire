@@ -24,8 +24,8 @@ profiles:
   - id: glm-5.3-flash
     endpoint: chat
     wire_model_id: glm-5.3-flash
-    base_url_env: BACKEND_CHAT_BASE_URL
-    api_key_env: BACKEND_CHAT_API_KEY
+    base_url_env: ZAI_BASE_URL
+    api_key_env: ZAI_API_KEY
     verified: measured
 
     # MEASURED, and the single most expensive quirk in this file. This endpoint
@@ -146,8 +146,8 @@ profiles:
   - id: mimo-v2.5-pro
     endpoint: chat
     wire_model_id: mimo-v2.5-pro
-    base_url_env: BACKEND_CHAT_BASE_URL
-    api_key_env: BACKEND_CHAT_API_KEY
+    base_url_env: MIMO_BASE_URL
+    api_key_env: MIMO_API_KEY
     verified: measured
 
     # MEASURED: this endpoint honours BOTH max_tokens and max_completion_tokens
@@ -252,8 +252,8 @@ profiles:
   - id: mimo-v2.5
     endpoint: chat
     wire_model_id: mimo-v2.5
-    base_url_env: BACKEND_CHAT_BASE_URL
-    api_key_env: BACKEND_CHAT_API_KEY
+    base_url_env: MIMO_BASE_URL
+    api_key_env: MIMO_API_KEY
     verified: measured
 
     max_tokens_param: max_completion_tokens
@@ -318,8 +318,8 @@ profiles:
   - id: text-embedding-3-small
     endpoint: embeddings
     wire_model_id: text-embedding-3-small
-    base_url_env: BACKEND_EMBED_BASE_URL
-    api_key_env: BACKEND_EMBED_API_KEY
+    base_url_env: OPENAI_BASE_URL
+    api_key_env: OPENAI_API_KEY
     verified: source-derived
     limits:
       # Per-input token ceiling. The API reference says 8192 and the cookbook
@@ -350,8 +350,8 @@ profiles:
   - id: text-embedding-3-large
     endpoint: embeddings
     wire_model_id: text-embedding-3-large
-    base_url_env: BACKEND_EMBED_BASE_URL
-    api_key_env: BACKEND_EMBED_API_KEY
+    base_url_env: OPENAI_BASE_URL
+    api_key_env: OPENAI_API_KEY
     verified: source-derived
     limits:
       context: 8191

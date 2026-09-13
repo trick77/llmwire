@@ -9,10 +9,11 @@ data rather than scattered through call sites.
 > recovery are still landing. The API is not stable yet.
 
 ```go
-// Base URL and key come from the env vars the model's profile names
-// (BACKEND_CHAT_BASE_URL / BACKEND_CHAT_API_KEY for glm-5.3-flash), so no
-// application repeats that wiring. New(Config{...}) is there for a custom
-// transport or an explicit URL.
+// Base URL and key come from the env vars the model's profile names,
+// provider-named (ZAI_BASE_URL / ZAI_API_KEY for glm-5.3-flash, MIMO_* for
+// the MiMo models, OPENAI_* for the embeddings), so one .env serves every
+// application and none repeats the wiring. New(Config{...}) is there for a
+// custom transport or an explicit URL.
 client, err := llmwire.FromEnv("glm-5.3-flash", llmwire.Config{})
 if err != nil {
     return err // names the missing variable
