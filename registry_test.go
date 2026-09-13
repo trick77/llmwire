@@ -417,8 +417,7 @@ func TestNewRegistry_DerivedProfileInheritsAndOverridesRouting(t *testing.T) {
     base: base-model
     gateway: litellm
     wire_model_id: alias/base-model
-    base_url_env: GW_BASE_URL
-    api_key_env: GW_API_KEY
+    provider: gw
     streaming: {needs_include_usage: true}
 `
 	reg, err := NewRegistry([]byte(doc))
@@ -431,7 +430,7 @@ func TestNewRegistry_DerivedProfileInheritsAndOverridesRouting(t *testing.T) {
 	if d.WireModelID != "alias/base-model" {
 		t.Errorf("wire_model_id = %q, want the gateway alias", d.WireModelID)
 	}
-	if d.BaseURLEnv != "GW_BASE_URL" || d.APIKeyEnv != "GW_API_KEY" {
+	if d.Provider != "gw" || d.BaseURLEnv() != "LLMWIRE_GW_BASE_URL" || d.APIKeyEnv() != "LLMWIRE_GW_API_KEY" {
 		t.Errorf("routing not overridden: %+v", d)
 	}
 	if d.Gateway != "litellm" {

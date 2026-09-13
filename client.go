@@ -86,6 +86,11 @@ type Config struct {
 	// particular local window is worse than no test. Defaults to time.Now.
 	Now func() time.Time
 
+	// Lookup is where FromEnv reads a profile's endpoint variables from. Nil
+	// means the process environment. An application whose own config loader
+	// is the single source of settings passes its getter; a test passes a
+	// map.
+	Lookup func(name string) (string, bool)
 	// Registry supplies the model profiles this client validates against.
 	// Defaults to the built-in one. Injectable so a caller can add a deployment
 	// without waiting for it to be upstreamed here, and so tests can drive
@@ -190,20 +195,22 @@ func New(cfg Config) *Client {
 }
 
 // FromEnv builds a Client for one model, taking BaseURL and APIKey from the
-// environment variables that model's profile names (base_url_env and
-// api_key_env in profiles.yaml). The profile carries the names; this is what
-// reads them, so the wiring does not have to be repeated in every application.
+// environment variables its profile's provider implies:
+// LLMWIRE_<PROVIDER>_BASE_URL and LLMWIRE_<PROVIDER>_API_KEY. The profile
+// carries the provider; this is what reads the variables, so the wiring does
+// not have to be repeated in every application, and one .env serves all of
+// them. cfg.Lookup replaces the process environment as the source.
 //
 // A cfg.BaseURL already set means the caller is wiring the endpoint itself,
-// and the environment is not consulted at all: cfg.APIKey goes as given, empty
-// included. The profile's key belongs to the profile's host, and a test fake or
-// a stand-in endpoint must not be handed it just because the model is the same.
-// With cfg.BaseURL empty, a cfg.APIKey already set still wins over the
-// environment.
+// and no variable is consulted at all: cfg.APIKey goes as given, empty
+// included. The provider's key belongs to the provider's host, and a test
+// fake or a stand-in endpoint must not be handed it just because the model is
+// the same. With cfg.BaseURL empty, a cfg.APIKey already set still wins over
+// the variable.
 //
-// A named variable that is unset or empty is a MissingEnvError, never a
-// fallback. A profile that names no api_key_env sends no key at all, which is
-// the self-hosted case.
+// A variable that is unset or empty is a MissingEnvError, never a fallback.
+// A profile with no_api_key sends no key at all, which is the self-hosted
+// case.
 func FromEnv(model string, cfg Config) (*Client, error) {
 	reg := cfg.Registry
 	if reg == nil {
@@ -216,38 +223,50 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	if cfg.BaseURL != "" {
 		return New(cfg), nil
 	}
+	if p.Provider == "" {
+		return nil, &MissingEnvError{Model: model}
+	}
+	lookup := cfg.Lookup
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
 	// Trimmed: a whitespace-only value (a stray `export X= ` in a .env) would
 	// otherwise build a client that fails later with an opaque dial or 401
 	// instead of the named error here.
-	v := strings.TrimSpace(os.Getenv(p.BaseURLEnv))
+	get := func(name string) string {
+		v, _ := lookup(name)
+		return strings.TrimSpace(v)
+	}
+	v := get(p.BaseURLEnv())
 	if v == "" {
-		return nil, &MissingEnvError{Model: model, Var: p.BaseURLEnv, Field: "base_url_env"}
+		return nil, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()}
 	}
 	cfg.BaseURL = v
-	if cfg.APIKey == "" && p.APIKeyEnv != "" {
-		v := strings.TrimSpace(os.Getenv(p.APIKeyEnv))
+	if cfg.APIKey == "" && !p.NoAPIKey {
+		v := get(p.APIKeyEnv())
 		if v == "" {
-			return nil, &MissingEnvError{Model: model, Var: p.APIKeyEnv, Field: "api_key_env"}
+			return nil, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.APIKeyEnv()}
 		}
 		cfg.APIKey = v
 	}
 	return New(cfg), nil
 }
 
-// MissingEnvError names the variable a profile expects and the profile field
-// that expects it, so the fix is one export away rather than a search.
+// MissingEnvError names the variable a profile's provider expects, so the fix
+// is one export away rather than a search. Var is empty when the profile
+// names no provider at all, which is a profile bug rather than a deployment
+// one.
 type MissingEnvError struct {
-	Model string
-	// Var is the variable name, or empty when the profile names none.
-	Var   string
-	Field string
+	Model    string
+	Provider string
+	Var      string
 }
 
 func (e *MissingEnvError) Error() string {
 	if e.Var == "" {
-		return fmt.Sprintf("llmwire: model %q has no %s in its profile", e.Model, e.Field)
+		return fmt.Sprintf("llmwire: model %q names no provider in its profile, so FromEnv cannot find its endpoint", e.Model)
 	}
-	return fmt.Sprintf("llmwire: model %q needs %s (%s) set in the environment", e.Model, e.Var, e.Field)
+	return fmt.Sprintf("llmwire: model %q needs %s set in the environment (provider %s)", e.Model, e.Var, e.Provider)
 }
 
 // Now exposes the client's clock, so pricing and tests share one source of time.

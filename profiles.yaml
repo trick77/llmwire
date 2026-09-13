@@ -24,8 +24,7 @@ profiles:
   - id: glm-5.3-flash
     endpoint: chat
     wire_model_id: glm-5.3-flash
-    base_url_env: ZAI_BASE_URL
-    api_key_env: ZAI_API_KEY
+    provider: zai
     verified: measured
 
     # MEASURED, and the single most expensive quirk in this file. This endpoint
@@ -141,13 +140,14 @@ profiles:
 
   # ---------------------------------------------------------------------------
   # Xiaomi MiMo. Reached here over a Token Plan host, which bills subscription
-  # credits rather than dollars.
+  # credits rather than dollars. `provider: mimo` means THAT host; the
+  # pay-as-you-go API is a different host with a different key and would be
+  # its own provider.
   # ---------------------------------------------------------------------------
   - id: mimo-v2.5-pro
     endpoint: chat
     wire_model_id: mimo-v2.5-pro
-    base_url_env: MIMO_BASE_URL
-    api_key_env: MIMO_API_KEY
+    provider: mimo
     verified: measured
 
     # MEASURED: this endpoint honours BOTH max_tokens and max_completion_tokens
@@ -252,8 +252,7 @@ profiles:
   - id: mimo-v2.5
     endpoint: chat
     wire_model_id: mimo-v2.5
-    base_url_env: MIMO_BASE_URL
-    api_key_env: MIMO_API_KEY
+    provider: mimo
     verified: measured
 
     max_tokens_param: max_completion_tokens
@@ -318,8 +317,7 @@ profiles:
   - id: text-embedding-3-small
     endpoint: embeddings
     wire_model_id: text-embedding-3-small
-    base_url_env: OPENAI_BASE_URL
-    api_key_env: OPENAI_API_KEY
+    provider: openai
     verified: source-derived
     limits:
       # Per-input token ceiling. The API reference says 8192 and the cookbook
@@ -350,8 +348,7 @@ profiles:
   - id: text-embedding-3-large
     endpoint: embeddings
     wire_model_id: text-embedding-3-large
-    base_url_env: OPENAI_BASE_URL
-    api_key_env: OPENAI_API_KEY
+    provider: openai
     verified: source-derived
     limits:
       context: 8191
