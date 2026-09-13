@@ -148,6 +148,10 @@ type StreamResult struct {
 	// margin between that policy and a false abort — the number the transport
 	// probe exists to measure.
 	MaxCommentGap time.Duration
+	// Timing is set on the error path too: a stream cut mid-answer still has
+	// a measured Total, and that figure beside the named bound in the error is
+	// what settles whether the bound or the endpoint was wrong.
+	Timing Timing
 }
 
 // streamCounters are the live counts a heartbeat can read while the stream is
@@ -194,11 +198,16 @@ const (
 // is surfaced as a tool-call event as soon as it parses, and the calls recovered
 // at the end are emitted as one fragment each. The returned warnings say what
 // recovery found.
-func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idle time.Duration, sink func(streamEvent), redact redactor, recover bool) (StreamResult, []Warning, error) {
+//
+// start is when the request was sent and now is the client's clock; both come
+// from the caller so every Timing figure shares one clock and one origin. Total
+// is written on every return, the error ones included, which is what the named
+// result and the deferred write are for.
+func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idle time.Duration, sink func(streamEvent), redact redactor, recover bool, now func() time.Time, start time.Time) (res StreamResult, warnings []Warning, err error) {
+	defer func() { res.Timing.Total = now().Sub(start) }()
 	var (
 		content   strings.Builder
 		reasoning strings.Builder
-		res       StreamResult
 		tools     = map[int]*ToolCall{}
 		order     []int
 	)
@@ -248,7 +257,7 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 64<<10), maxStreamLine)
 
-	lastData := time.Now()
+	lastData := now()
 	for sc.Scan() {
 		line := strings.TrimRight(sc.Text(), "\r")
 		if line == "" || !strings.HasPrefix(line, dataPrefix) {
@@ -258,10 +267,14 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 
 		// Measure the gap this frame closes before re-arming, so the recorded
 		// figure is the real silence the guard had to tolerate.
-		if gap := time.Since(lastData); gap > res.MaxCommentGap {
+		at := now()
+		if gap := at.Sub(lastData); gap > res.MaxCommentGap {
 			res.MaxCommentGap = gap
 		}
-		lastData = time.Now()
+		lastData = at
+		if res.Timing.FirstData == 0 {
+			res.Timing.FirstData = at.Sub(start)
+		}
 		guard.arm(idle, stallIdle)
 
 		// Counted per event rather than per line: an event is "data:…" plus a

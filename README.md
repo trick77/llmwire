@@ -45,6 +45,7 @@ if err := stream.Err(); err != nil {
     return err
 }
 cost := stream.Usage().Cost
+ttft := stream.Result().Timing.FirstData // also Headers and Total, on every response
 ```
 
 ## Why
