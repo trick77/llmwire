@@ -203,10 +203,13 @@ func New(cfg Config) *Client {
 // repeated in every application's configuration. cfg.Lookup replaces the
 // process environment as the source.
 //
-// LLMWIRE_<PROVIDER>_BASE_URL, when set, OVERRIDES the shipped host: a
-// regional mirror, a proxy, a different plan's host for the same vendor. It is
-// REQUIRED only where the provider ships no host (a self-hosted gateway);
-// there, unset is a MissingEnvError naming the variable.
+// LLMWIRE_<PROVIDER>_BASE_URL exists only for a provider that ships no host
+// (a self-hosted gateway): there it is required, and unset is a
+// MissingEnvError naming it. For a provider that ships a host the variable is
+// REFUSED with a StaleEnvError: the host is the library's, and an application
+// still carrying one is on the old contract, where every deployment copied
+// the URL. Accepting it as an override would let that copy live on unnoticed
+// and diverge; a different host is a different provider entry.
 //
 // A cfg.BaseURL already set means the caller is wiring the endpoint itself,
 // and no variable is consulted at all: cfg.APIKey goes as given, empty
@@ -250,20 +253,20 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	}
 	cfg.BaseURL = p.BaseURL
 	if v := get(p.BaseURLEnv()); v != "" {
+		if p.BaseURL != "" {
+			return nil, &StaleEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()}
+		}
 		cfg.BaseURL = v
-	}
-	// The identity follows the host: a provider sold as opencode's backend
-	// gets that client string without every application knowing to ask. The
-	// LLMWIRE_<PROVIDER>_BASE_URL override keeps it, since the headers are
-	// inert on a host that does not care and the override is usually the
-	// same vendor's other plan. An explicit cfg.BaseURL returned above and
-	// gets nothing: the caller is wiring the endpoint itself, identity
-	// included.
-	if p.EmulateOpenCode {
-		cfg.EmulateOpenCode = true
 	}
 	if cfg.BaseURL == "" {
 		return nil, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()}
+	}
+	// The identity follows the host: a provider sold as opencode's backend
+	// gets that client string without every application knowing to ask. An
+	// explicit cfg.BaseURL returned above and gets nothing: the caller is
+	// wiring the endpoint itself, identity included.
+	if p.EmulateOpenCode {
+		cfg.EmulateOpenCode = true
 	}
 	if cfg.APIKey == "" && !p.NoAPIKey {
 		v := get(p.APIKeyEnv())
@@ -290,6 +293,23 @@ func (e *MissingEnvError) Error() string {
 		return fmt.Sprintf("llmwire: model %q names no provider in its profile, so FromEnv cannot find its endpoint", e.Model)
 	}
 	return fmt.Sprintf("llmwire: model %q needs %s set in the environment (provider %s)", e.Model, e.Var, e.Provider)
+}
+
+// StaleEnvError names a variable from the old contract that is still set:
+// LLMWIRE_<PROVIDER>_BASE_URL for a provider whose host the library ships.
+// The fix is to delete the line, and the error says so, because a deployment
+// carrying a URL the library already knows is one that nobody will notice
+// drifting.
+type StaleEnvError struct {
+	Model    string
+	Provider string
+	Var      string
+}
+
+func (e *StaleEnvError) Error() string {
+	return fmt.Sprintf("llmwire: %s is set, but the host for provider %s is the library's (profiles.yaml providers:); "+
+		"delete the variable. A different host is a different provider entry, not an override (model %q)",
+		e.Var, e.Provider, e.Model)
 }
 
 // Now exposes the client's clock, so pricing and tests share one source of time.
