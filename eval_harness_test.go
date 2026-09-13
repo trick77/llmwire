@@ -244,7 +244,7 @@ var (
 func (e endpoint) client(t *testing.T) *Client {
 	t.Helper()
 	evalGate(t)
-	base, key := os.Getenv(e.baseURLVar), os.Getenv(e.apiKeyVar)
+	base, key := strings.TrimSpace(os.Getenv(e.baseURLVar)), strings.TrimSpace(os.Getenv(e.apiKeyVar))
 	pv, err := Default().Provider(e.name)
 	if err != nil {
 		t.Fatal(err)
