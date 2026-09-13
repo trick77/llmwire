@@ -58,6 +58,20 @@ var (
 	// ErrMalformedResponse because a caller retries the two differently — a
 	// proxy page is transient, a shape the endpoint chose to send is not.
 	ErrResponseShape = errors.New("response shape")
+
+	// The three bounds this package enforces on a call, so a caller can act
+	// on which one gave up without matching the message. Each is wrapped by
+	// the error that names the duration: "llmwire: stream idle for 1m30s".
+	//
+	// ErrNoResponseHeaders: the endpoint sent nothing within the header bound
+	// (HeaderTimeout on a stream; the call cap on a non-streaming call, which
+	// withholds headers until the whole answer is ready).
+	ErrNoResponseHeaders = errors.New("no response headers")
+	// ErrStreamIdle: a started stream sent no data frame for IdleTimeout (or
+	// the request's ToolCallIdleTimeout once a tool call was underway).
+	ErrStreamIdle = errors.New("stream idle")
+	// ErrCallCap: the whole call outran CallTimeout.
+	ErrCallCap = errors.New("exceeded the call cap")
 )
 
 // APIError is a decoded error response. Every field is best-effort: endpoints

@@ -158,7 +158,8 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 // read consumes the stream on its own goroutine and publishes the result.
 func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, headers time.Duration) {
 	var counters streamCounters
-	res, inlineWarnings, err := readStream(resp.Body, s.guard, &counters, s.client.idle, s.push, s.client.redact,
+	res, inlineWarnings, err := readStream(resp.Body, s.guard, &counters,
+		streamBounds{idle: s.client.idle, toolIdle: pl.req.ToolCallIdleTimeout}, s.push, s.client.redact,
 		pl.profile.Tools.recoversInline(), s.client.now, start)
 	res.Timing.Headers = headers
 
