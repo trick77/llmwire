@@ -196,12 +196,17 @@ func New(cfg Config) *Client {
 	return c
 }
 
-// FromEnv builds a Client for one model, taking BaseURL and APIKey from the
-// environment variables its profile's provider implies:
-// LLMWIRE_<PROVIDER>_BASE_URL and LLMWIRE_<PROVIDER>_API_KEY. The profile
-// carries the provider; this is what reads the variables, so the wiring does
-// not have to be repeated in every application, and one .env serves all of
-// them. cfg.Lookup replaces the process environment as the source.
+// FromEnv builds a Client for one model. The host comes from the profile's
+// provider (profiles.yaml providers:), the key from the environment variable
+// that provider implies, LLMWIRE_<PROVIDER>_API_KEY. An application supplies a
+// key and nothing else; the URL is the library's to know, so it is not
+// repeated in every application's configuration. cfg.Lookup replaces the
+// process environment as the source.
+//
+// LLMWIRE_<PROVIDER>_BASE_URL, when set, OVERRIDES the shipped host: a
+// regional mirror, a proxy, a different plan's host for the same vendor. It is
+// REQUIRED only where the provider ships no host (a self-hosted gateway);
+// there, unset is a MissingEnvError naming the variable.
 //
 // A cfg.BaseURL already set means the caller is wiring the endpoint itself,
 // and no variable is consulted at all: cfg.APIKey goes as given, empty
@@ -210,9 +215,9 @@ func New(cfg Config) *Client {
 // the same. With cfg.BaseURL empty, a cfg.APIKey already set still wins over
 // the variable.
 //
-// A variable that is unset or empty is a MissingEnvError, never a fallback.
-// A profile with no_api_key sends no key at all, which is the self-hosted
-// case.
+// A key variable that is unset or empty is a MissingEnvError, never a
+// fallback. A profile with no_api_key sends no key at all, which is the
+// self-hosted case.
 func FromEnv(model string, cfg Config) (*Client, error) {
 	reg := cfg.Registry
 	if reg == nil {
@@ -239,11 +244,13 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 		v, _ := lookup(name)
 		return strings.TrimSpace(v)
 	}
-	v := get(p.BaseURLEnv())
-	if v == "" {
+	cfg.BaseURL = p.BaseURL
+	if v := get(p.BaseURLEnv()); v != "" {
+		cfg.BaseURL = v
+	}
+	if cfg.BaseURL == "" {
 		return nil, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()}
 	}
-	cfg.BaseURL = v
 	if cfg.APIKey == "" && !p.NoAPIKey {
 		v := get(p.APIKeyEnv())
 		if v == "" {

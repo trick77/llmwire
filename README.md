@@ -9,10 +9,12 @@ data rather than scattered through call sites.
 > API is not stable yet.
 
 ```go
-// Base URL and key come from LLMWIRE_<PROVIDER>_BASE_URL and _API_KEY, with
-// the provider named by the model's profile (zai here, mimo and openai for
-// the others), so one .env serves every application and none repeats the
-// wiring. New(Config{...}) is there for a custom transport or an explicit URL.
+// The host comes from the model's profile (profiles.yaml carries each
+// vendor's base URL); the key from LLMWIRE_<PROVIDER>_API_KEY, the provider
+// named by the profile (zai here, mimo and openai for the others). An
+// application configures a key and nothing else. LLMWIRE_<PROVIDER>_BASE_URL
+// overrides the host; New(Config{...}) is there for a custom transport or an
+// explicit URL.
 client, err := llmwire.FromEnv("glm-5.3-flash", llmwire.Config{})
 if err != nil {
     return err // names the missing variable
@@ -192,7 +194,7 @@ every capability, and adds only what the gateway changes:
 - id: litellm/openai-gpt-5.4
   base: azure/gpt-5.4          # inherits capabilities and parameters
   gateway: litellm
-  provider: litellm            # LLMWIRE_LITELLM_BASE_URL and _API_KEY
+  provider: litellm            # no shipped host: LLMWIRE_LITELLM_BASE_URL and _API_KEY
   wire_model_id: ai-gateway/gpt-5.4   # the proxy's alias
 ```
 

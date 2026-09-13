@@ -69,12 +69,46 @@ func TestFromEnv(t *testing.T) {
 		}
 	})
 
-	t.Run("unset base url names the variable and the provider", func(t *testing.T) {
+	t.Run("the shipped host is used when no variable overrides it", func(t *testing.T) {
 		t.Setenv("LLMWIRE_ZAI_BASE_URL", "")
 		t.Setenv("LLMWIRE_ZAI_API_KEY", "k")
-		_, err := FromEnv("glm-5.3-flash", Config{})
+		c, err := FromEnv("glm-5.3-flash", Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := Default().Provider("zai")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want.BaseURL == "" || c.baseURL != want.BaseURL || c.apiKey != "k" {
+			t.Fatalf("got %q %q, want the shipped host %q", c.baseURL, c.apiKey, want.BaseURL)
+		}
+	})
+
+	t.Run("a provider that ships no host names the variable", func(t *testing.T) {
+		reg, err := NewRegistry([]byte("providers:\n  gw: {}\n" + chatHead + "    provider: gw\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("LLMWIRE_GW_BASE_URL", "")
+		t.Setenv("LLMWIRE_GW_API_KEY", "k")
+		_, err = FromEnv("m", Config{Registry: reg})
 		var me *MissingEnvError
-		if !errors.As(err, &me) || me.Var != "LLMWIRE_ZAI_BASE_URL" || me.Provider != "zai" || me.Model != "glm-5.3-flash" {
+		if !errors.As(err, &me) || me.Var != "LLMWIRE_GW_BASE_URL" || me.Provider != "gw" || me.Model != "m" {
+			t.Fatalf("got %v", err)
+		}
+	})
+
+	t.Run("a provider absent from providers: is the same as one with no host", func(t *testing.T) {
+		reg, err := NewRegistry([]byte(chatHead + "    provider: gw\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("LLMWIRE_GW_BASE_URL", "")
+		t.Setenv("LLMWIRE_GW_API_KEY", "k")
+		_, err = FromEnv("m", Config{Registry: reg})
+		var me *MissingEnvError
+		if !errors.As(err, &me) || me.Var != "LLMWIRE_GW_BASE_URL" {
 			t.Fatalf("got %v", err)
 		}
 	})
@@ -164,5 +198,65 @@ func TestProfile_providerNameIsValidated(t *testing.T) {
 	_, err := NewRegistry([]byte(chatHead + "    provider: Z-AI\n"))
 	if err == nil {
 		t.Fatal("a provider with a dash or capitals must be refused")
+	}
+}
+
+// The shipped hosts: every vendor provider carries one, so an application
+// needs only its key. litellm is the deliberate exception, a self-hosted
+// gateway has no public host.
+func TestEveryEmbeddedVendorProviderShipsAHost(t *testing.T) {
+	reg := Default()
+	for _, id := range reg.Models() {
+		p, err := reg.Lookup(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pv, err := reg.Provider(p.Provider)
+		if err != nil {
+			t.Errorf("%s: %v", id, err)
+			continue
+		}
+		if p.Provider != "litellm" && pv.BaseURL == "" {
+			t.Errorf("%s: provider %q ships no base_url; an application would have to know the host", id, p.Provider)
+		}
+		if p.BaseURL != pv.BaseURL {
+			t.Errorf("%s: profile BaseURL %q does not match provider %q", id, p.BaseURL, pv.BaseURL)
+		}
+	}
+	if _, err := reg.Provider("nope"); err == nil {
+		t.Error("an unknown provider name must error, not read as no host")
+	}
+}
+
+// A derived profile's host follows ITS provider, not its base's: the route is
+// what changes when a model is reached through a gateway.
+func TestRegistry_derivedProfileTakesItsOwnProvidersHost(t *testing.T) {
+	reg, err := NewRegistry([]byte("providers:\n  vendor:\n    base_url: https://vendor.example/v1\n  gw: {}\n" +
+		chatHead + "    provider: vendor\n" +
+		"  - id: m-via\n    base: m\n    gateway: litellm\n    provider: gw\n    wire_model_id: alias/m\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct, _ := reg.Lookup("m")
+	via, _ := reg.Lookup("m-via")
+	if direct.BaseURL != "https://vendor.example/v1" || via.BaseURL != "" {
+		t.Fatalf("direct %q via %q", direct.BaseURL, via.BaseURL)
+	}
+}
+
+func TestRegistry_providerHostIsValidated(t *testing.T) {
+	for name, doc := range map[string]string{
+		"http":        "providers:\n  v:\n    base_url: http://vendor.example/v1\n",
+		"query":       "providers:\n  v:\n    base_url: https://vendor.example/v1?api_key=x\n",
+		"credentials": "providers:\n  v:\n    base_url: https://user:pw@vendor.example/v1\n",
+		"no host":     "providers:\n  v:\n    base_url: https:///v1\n",
+		"unknown key": "providers:\n  v:\n    url: https://vendor.example/v1\n",
+		"bad name":    "providers:\n  Vendor-1:\n    base_url: https://vendor.example/v1\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewRegistry([]byte(doc + chatHead)); err == nil {
+				t.Fatal("must be refused at load")
+			}
+		})
 	}
 }

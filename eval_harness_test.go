@@ -221,8 +221,10 @@ func evalGate(t *testing.T) {
 	}
 }
 
-// endpoint names one upstream under test. BaseURL and key come from the
-// environment; neither is ever defaulted to a literal.
+// endpoint names one upstream under test: the provider as profiles.yaml names
+// it. The host is the provider's shipped base_url unless
+// LLMWIRE_<PROVIDER>_BASE_URL overrides it; the key comes from the environment
+// only and is never defaulted to a literal.
 type endpoint struct {
 	name       string
 	baseURLVar string
@@ -237,13 +239,20 @@ var (
 // client builds a Client for an endpoint, or skips with a named reason.
 //
 // A missing key SKIPS rather than failing: an incomplete local setup should not
-// look like a broken library. It never falls back to an embedded value.
+// look like a broken library.
 func (e endpoint) client(t *testing.T) *Client {
 	t.Helper()
 	evalGate(t)
 	base, key := os.Getenv(e.baseURLVar), os.Getenv(e.apiKeyVar)
 	if base == "" {
-		t.Skipf("live probe: %s is not set", e.baseURLVar)
+		pv, err := Default().Provider(e.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		base = pv.BaseURL
+	}
+	if base == "" {
+		t.Skipf("live probe: %s is not set and the provider ships no host", e.baseURLVar)
 	}
 	if key == "" {
 		t.Skipf("live probe: %s is not set", e.apiKeyVar)
