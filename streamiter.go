@@ -99,6 +99,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	}
 	body, err := renderChatBody(pl)
 	if err != nil {
+		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err})
 		return nil, warnings, err
 	}
 	at := c.Now()
@@ -113,6 +114,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	if err != nil {
 		cancelReq()
 		cancelCall()
+		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err})
 		return nil, warnings, err
 	}
 	httpReq.Header.Set("Accept", "text/event-stream")
@@ -126,6 +128,8 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 		guard.stop()
 		cancelReq()
 		cancelCall()
+		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err,
+			timing: Timing{Headers: headers, Total: c.now().Sub(start)}})
 		return nil, warnings, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -134,6 +138,8 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 		guard.stop()
 		cancelReq()
 		cancelCall()
+		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err,
+			timing: Timing{Headers: headers, Total: c.now().Sub(start)}})
 		return nil, warnings, err
 	}
 	// Headers are in, so the bound that matters from here is silence.
@@ -185,6 +191,14 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 		cost, priceWarnings = priceCall(pl.profile, res.Usage, resp.Header, resp.StatusCode, at)
 		res.Usage.Cost = cost
 	}
+
+	// Reported from the locals: s.res and s.err are written under the mutex
+	// below, and the caller may already be reading them.
+	warnings := append(append(append([]Warning(nil), s.warnings...), inlineWarnings...), priceWarnings...)
+	s.client.finish(callSummary{kind: "chat_stream", model: pl.req.Model, plan: pl,
+		content: len(res.Content), reasoning: len(res.Reasoning), toolCalls: len(res.ToolCalls),
+		finishReason: res.FinishReason, usage: res.Usage, timing: res.Timing,
+		warnings: warnings, err: err, closed: stopped})
 
 	s.mu.Lock()
 	// Written under the mutex, all of it. Warnings() is documented as readable

@@ -31,6 +31,14 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 	}
 
 	out := &EmbedResponse{Vectors: make([][]float32, len(req.Inputs))}
+	sum := callSummary{kind: "embed", model: req.Model, inputs: len(req.Inputs)}
+	defer func() {
+		sum.timing, sum.warnings = out.Timing, warnings
+		if sum.err == nil {
+			sum.usage = out.Usage
+		}
+		c.finish(sum)
+	}()
 	// Summed only while every batch has reported: a partial sum understates and is
 	// indistinguishable from a real total, which is worse than admitting the
 	// number is unknown.
@@ -41,6 +49,7 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 		// Checked between batches so a cancelled context stops the loop rather
 		// than finishing a long corpus nobody is waiting for.
 		if err := ctx.Err(); err != nil {
+			sum.err = err
 			return nil, warnings, err
 		}
 		end := min(start+embedBatchSize, len(req.Inputs))
@@ -48,6 +57,7 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 
 		body, err := renderEmbedBody(p, batch, dimensions)
 		if err != nil {
+			sum.err = err
 			return nil, warnings, err
 		}
 		at := c.Now()
@@ -56,12 +66,14 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 			// No partial result. A half-filled [][]float32 is worse than none,
 			// because the caller cannot tell which rows are real, and a row of
 			// zeros is a valid-looking vector that means nothing.
+			sum.err = err
 			return nil, warnings, err
 		}
 		out.Timing.Headers += timing.Headers
 		out.Timing.Total += timing.Total
 		batchResp, err := parseEmbedResponseWith(c.redact, raw, len(batch))
 		if err != nil {
+			sum.err = err
 			return nil, warnings, err
 		}
 		copy(out.Vectors[start:end], batchResp.vectors)

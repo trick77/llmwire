@@ -169,27 +169,30 @@ func TestEmulateOpenCode_rotatesAfterAnIdleGap(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	s := newSession(func() time.Time { return now })
 
-	first := s.current()
+	first, rotated := s.current()
+	if rotated {
+		t.Fatal("the first call reported a rotation; the id was minted at construction")
+	}
 	now = now.Add(sessionIdleRotation - time.Second)
-	if s.current() != first {
+	if id, rotated := s.current(); id != first || rotated {
 		t.Fatal("rotated inside the idle window: a burst of related calls must stay one session")
 	}
 	// The window is measured from the LAST call, not the first: activity keeps
 	// a session alive indefinitely, the way it does for a person who keeps
 	// working.
 	now = now.Add(sessionIdleRotation - time.Second)
-	if s.current() != first {
+	if id, rotated := s.current(); id != first || rotated {
 		t.Fatal("rotated while still active; the gap is measured from the last call")
 	}
 	now = now.Add(sessionIdleRotation + time.Second)
-	second := s.current()
-	if second == first {
-		t.Fatal("did not rotate after an idle gap longer than the window")
+	second, rotated := s.current()
+	if second == first || !rotated {
+		t.Fatal("did not rotate, or did not say so, after an idle gap longer than the window")
 	}
 	if !sessionIDShape.MatchString(second) {
 		t.Errorf("rotated id %q has the wrong shape", second)
 	}
-	if s.current() != second {
+	if id, rotated := s.current(); id != second || rotated {
 		t.Error("a fresh session did not persist across the next call")
 	}
 }
