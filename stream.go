@@ -152,6 +152,19 @@ type StreamResult struct {
 	// a measured Total, and that figure beside the named bound in the error is
 	// what settles whether the bound or the endpoint was wrong.
 	Timing Timing
+	// MaxDataGap is the longest silence between two `data:` frames, the wait
+	// for the first one included. It is exactly what the idle guard raced
+	// against, so comparing it to IdleTimeout says how close a healthy stream
+	// came to a false abort.
+	MaxDataGap time.Duration
+	// Bytes counts the SSE payload read, data lines and comments alike.
+	Bytes int64
+}
+
+// streamBounds are the idle bounds a stream runs under: idle for the whole
+// stream, toolIdle replacing it once a tool call is underway (zero: no change).
+type streamBounds struct {
+	idle, toolIdle time.Duration
 }
 
 // streamCounters are the live counts a heartbeat can read while the stream is
@@ -199,11 +212,15 @@ const (
 // at the end are emitted as one fragment each. The returned warnings say what
 // recovery found.
 //
+// bounds.toolIdle, when set, replaces the idle bound from the first tool-call
+// fragment or inline marker on, and the guard is re-armed with it at once: the
+// silence it exists to tolerate starts right there.
+//
 // start is when the request was sent and now is the client's clock; both come
 // from the caller so every Timing figure shares one clock and one origin. Total
 // is written on every return, the error ones included, which is what the named
 // result and the deferred write are for.
-func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idle time.Duration, sink func(streamEvent), redact redactor, recover bool, now func() time.Time, start time.Time) (res StreamResult, warnings []Warning, err error) {
+func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bounds streamBounds, sink func(streamEvent), redact redactor, recover bool, now func() time.Time, start time.Time) (res StreamResult, warnings []Warning, err error) {
 	defer func() { res.Timing.Total = now().Sub(start) }()
 	var (
 		content   strings.Builder
@@ -211,6 +228,15 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 		tools     = map[int]*ToolCall{}
 		order     []int
 	)
+	idle := bounds.idle
+	// toolUnderway widens the idle bound once, the moment a tool call is known
+	// to be in progress.
+	toolUnderway := func() {
+		if bounds.toolIdle > 0 && idle != bounds.toolIdle {
+			idle = bounds.toolIdle
+			guard.arm(idle, stallIdle)
+		}
+	}
 	emit := func(ev streamEvent) {
 		if sink != nil {
 			sink(ev)
@@ -239,7 +265,13 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 		if out := g.push(text); out != "" {
 			emit(streamEvent{kind: kind, text: out})
 		}
-		if !g.suppressed || earlyName != "" {
+		if !g.suppressed {
+			return
+		}
+		// Markup seen: the argument is being serialized, and on the model
+		// that emits it that means the silence the wider bound is for.
+		toolUnderway()
+		if earlyName != "" {
 			return
 		}
 		if name := firstInlineToolName(buf.String()); name != "" {
@@ -257,8 +289,14 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 64<<10), maxStreamLine)
 
+	// Two clocks for the same silences: lastData starts with the body, so
+	// MaxCommentGap measures the stream itself; lastFrame starts with the
+	// request, so MaxDataGap includes the wait for the first frame, which is a
+	// gap the guard had to tolerate too.
 	lastData := now()
+	lastFrame := start
 	for sc.Scan() {
+		res.Bytes += int64(len(sc.Bytes()))
 		line := strings.TrimRight(sc.Text(), "\r")
 		if line == "" || !strings.HasPrefix(line, dataPrefix) {
 			// Deliberately no guard.arm here. See the doc comment.
@@ -271,7 +309,11 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 		if gap := at.Sub(lastData); gap > res.MaxCommentGap {
 			res.MaxCommentGap = gap
 		}
+		if gap := at.Sub(lastFrame); gap > res.MaxDataGap {
+			res.MaxDataGap = gap
+		}
 		lastData = at
+		lastFrame = at
 		if res.Timing.FirstData == 0 {
 			res.Timing.FirstData = at.Sub(start)
 		}
@@ -312,6 +354,7 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 				gated(reasoningGate, evReasoning, r, &reasoning)
 			}
 			for _, tc := range ch.Delta.ToolCalls {
+				toolUnderway()
 				emit(streamEvent{kind: evToolCall, toolCall: tc})
 				acc, seen := tools[tc.Index]
 				if !seen {

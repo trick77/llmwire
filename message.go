@@ -1,6 +1,9 @@
 package llmwire
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // The request vocabulary.
 //
@@ -215,6 +218,20 @@ type ChatRequest struct {
 	// with generated ones at the caller's risk: they win, deliberately, since
 	// the point is to reach something the package does not know about.
 	ExtraBody map[string]any
+
+	// ToolCallIdleTimeout replaces the client's IdleTimeout for the rest of a
+	// streamed call once the first tool-call fragment has arrived, or once
+	// inline markup has been seen. Zero leaves the idle bound as it is.
+	//
+	// The only per-request bound, because it answers a per-request question.
+	// MiMo does not stream tool-call arguments incrementally: it emits the
+	// name, then goes silent while it serializes the whole argument server-side,
+	// then flushes it in one burst. A large document payload measured ~82s of
+	// silence, past any idle bound sized for prose. Which calls can carry such
+	// an argument depends on which tools the request offered, so the caller
+	// widens only those and keeps the narrow bound for every other turn. The
+	// whole-call cap stays the backstop.
+	ToolCallIdleTimeout time.Duration
 
 	// BestEffort demotes what would be a hard error into a coercion plus a
 	// Warning, for one call. Deliberately per-request rather than a package

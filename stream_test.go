@@ -18,7 +18,7 @@ func readFixture(t *testing.T, body string) (StreamResult, error) {
 	guard := newStallGuard(cancel, time.Hour, stallHeaders)
 	defer guard.stop()
 	var counters streamCounters
-	res, _, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, nil, Redact, false, time.Now, time.Now())
+	res, _, err := readStream(strings.NewReader(body), guard, &counters, streamBounds{idle: time.Hour}, nil, Redact, false, time.Now, time.Now())
 	return res, err
 }
 
@@ -329,7 +329,7 @@ data: {"choices":[{"delta":{"content":"two"},"finish_reason":"stop"}]}
 	defer guard.stop()
 	var counters streamCounters
 	var got []string
-	res, _, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, func(ev streamEvent) {
+	res, _, err := readStream(strings.NewReader(body), guard, &counters, streamBounds{idle: time.Hour}, func(ev streamEvent) {
 		if ev.kind == evContent {
 			got = append(got, ev.text)
 		}

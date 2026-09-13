@@ -334,7 +334,7 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	}
 
 	// Below profile resolution, so no inline recovery: the caller owns the body.
-	res, _, err := readStream(resp.Body, guard, &counters, c.idle, sink, c.redact, false, c.now, start)
+	res, _, err := readStream(resp.Body, guard, &counters, streamBounds{idle: c.idle}, sink, c.redact, false, c.now, start)
 	res.Timing.Headers = headers
 	if err != nil {
 		return res, c.explain(ctx, callCtx, guard, err)
@@ -483,12 +483,14 @@ func (c *Client) httpError(resp *http.Response) error {
 func (c *Client) explain(parent, call context.Context, guard *stallGuard, err error) error {
 	if reason, bound := guard.firedReason(); reason != "" {
 		if reason == stallHeaders {
-			return fmt.Errorf("llmwire: %s within %s", reason, bound)
+			return fmt.Errorf("llmwire: %w within %s", ErrNoResponseHeaders, bound)
 		}
-		return fmt.Errorf("llmwire: %s for %s", reason, bound)
+		return fmt.Errorf("llmwire: %w for %s", ErrStreamIdle, bound)
 	}
 	if call.Err() != nil && parent.Err() == nil {
-		return fmt.Errorf("llmwire: exceeded the %s call cap", c.cap)
+		// Phrased around the sentinel so the message still reads "exceeded
+		// the 15m0s call cap" and errors.Is(err, ErrCallCap) holds.
+		return fmt.Errorf("llmwire: %w", &callCapError{cap: c.cap})
 	}
 	return c.scrub(err)
 }
@@ -558,3 +560,9 @@ func (e *scrubbedError) Unwrap() error { return e.err }
 // Registry exposes the profiles this client validates against, so a caller can
 // ask what a model supports without making a request.
 func (c *Client) Registry() *Registry { return c.registry }
+
+// callCapError names the cap that elapsed and unwraps to ErrCallCap.
+type callCapError struct{ cap time.Duration }
+
+func (e *callCapError) Error() string { return fmt.Sprintf("exceeded the %s call cap", e.cap) }
+func (e *callCapError) Unwrap() error { return ErrCallCap }

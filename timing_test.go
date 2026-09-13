@@ -36,7 +36,7 @@ data: [DONE]
 	guard := newStallGuard(cancel, time.Hour, stallHeaders)
 	defer guard.stop()
 	var counters streamCounters
-	res, _, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, nil, Redact, false, now, start)
+	res, _, err := readStream(strings.NewReader(body), guard, &counters, streamBounds{idle: time.Hour}, nil, Redact, false, now, start)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestReadStream_TimingSetOnErrorPath(t *testing.T) {
 	guard := newStallGuard(cancel, time.Hour, stallHeaders)
 	defer guard.stop()
 	var counters streamCounters
-	res, _, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, nil, Redact, false, now, start)
+	res, _, err := readStream(strings.NewReader(body), guard, &counters, streamBounds{idle: time.Hour}, nil, Redact, false, now, start)
 	if err == nil {
 		t.Fatal("expected a truncation error")
 	}
