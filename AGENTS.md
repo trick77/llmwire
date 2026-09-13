@@ -116,11 +116,13 @@ one machine. `.env.example` holds names with empty values. CI holds no key.
 
 ## Evals
 
-`LLMWIRE_EVAL=1 go test -run Eval ./...`. Env-gated via `t.Skip`, **never a build
+`LLMWIRE_EVAL=1 go test -run Probe ./...`. Env-gated via `t.Skip`, **never a build
 tag** — a tag hides code from `gofmt`, `go vet` and the compiler, and it rots.
 
 **Evals are the source of truth for profile bits**: a vendor doc that disagrees
 with a measurement loses. Record the measurement in the profile comment.
+
+New model, version, provider or gateway route → `ONBOARDING.md`, top to bottom.
 
 Spend guard mandatory, fail-closed: budget checked *before* each call, call ceiling
 independent of cost, wall-clock deadline, minimal per-call caps. `Unpriced` counts as

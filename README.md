@@ -142,9 +142,11 @@ transient outage into a permanent failure for a whole job queue.
 
 ## Adding a model
 
-Add an entry to `profiles.yaml` and run the evals against it. A model's behaviour
-is never inferred from its name — ids are matched exactly, and an unknown id is an
-error rather than a silent set of defaults.
+Add an entry to `profiles.yaml` and run the evals against it; `ONBOARDING.md`
+is the step-by-step procedure, including which probe establishes which field
+and what to record where. A model's behaviour is never inferred from its name —
+ids are matched exactly, and an unknown id is an error rather than a silent set
+of defaults.
 
 ```yaml
 - id: mimo-v2.5-pro
@@ -203,7 +205,7 @@ Profile data is verified against live endpoints, not taken from documentation �
 published catalogues disagree with each other and with the endpoints.
 
 ```
-LLMWIRE_EVAL=1 go test -run Eval ./...
+LLMWIRE_EVAL=1 go test -run Probe ./...
 ```
 
 Evals skip unless that variable is set, so they never run in CI. With it set, the

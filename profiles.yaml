@@ -11,8 +11,9 @@
 # one saw. Six of those measurements contradict a vendor doc. Where they
 # disagree, this file follows the measurement.
 #
-# Adding a model: write the entry, run `LLMWIRE_EVAL=1 go test -run Probe`, and
-# set `verified: measured` only for the bits a probe actually established. An
+# Adding a model: follow ONBOARDING.md. In short: write the entry, run
+# `LLMWIRE_EVAL=1 go test -run Probe`, mark each bit's comment MEASURED or NOT
+# measured, and set `verified: measured` once the profile has been probed. An
 # unmeasured field is left absent rather than guessed — absent means "assume
 # nothing", not "assume the default".
 
