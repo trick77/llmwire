@@ -69,10 +69,15 @@ func (t *SpoolTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // spoolBody tees the body into a buffer and writes the file on Close. On
 // Close, not on EOF: a stream that failed mid-way never reaches EOF, and its
 // partial body is exactly the evidence worth keeping.
+//
+// The buffer is guarded: net/http tolerates a Close racing a Read from another
+// goroutine, and a caller using this transport on a bare http.Client may do
+// exactly that from a watchdog.
 type spoolBody struct {
 	io.ReadCloser
 	resp *http.Response
 	path string
+	mu   sync.Mutex
 	body bytes.Buffer
 	once sync.Once
 }
@@ -80,7 +85,9 @@ type spoolBody struct {
 func (b *spoolBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if n > 0 {
+		b.mu.Lock()
 		b.body.Write(p[:n])
+		b.mu.Unlock()
 	}
 	return n, err
 }
@@ -92,6 +99,8 @@ func (b *spoolBody) Close() error {
 }
 
 func (b *spoolBody) write() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(b.path), 0o700); err != nil {
 		return
 	}
