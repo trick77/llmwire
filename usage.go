@@ -29,7 +29,8 @@ import (
 // is the one with the retry loop, the queue and the batch these figures belong
 // to. What it adds over a time.Since around the call is the split only the
 // transport can see, which lines up with the three bounds the client arms:
-// Headers against HeaderTimeout, FirstData against IdleTimeout, Total against
+// Headers against HeaderTimeout, FirstData minus Headers against IdleTimeout
+// (the idle guard is only armed once headers are in), Total against
 // CallTimeout. A call that took 38s to headers against a 60s bound is a margin
 // worth knowing before the bound fires, the same way MaxCommentGap reports the
 // margin on the idle guard.

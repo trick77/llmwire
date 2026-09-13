@@ -84,6 +84,8 @@ type Config struct {
 	// Now is the clock, injectable because cost depends on wall-clock time on
 	// endpoints with off-peak pricing, and a test that only passes during a
 	// particular local window is worse than no test. Defaults to time.Now.
+	// It is also the clock behind Timing and MaxCommentGap, so a fixed clock
+	// pinned for pricing reports every duration as zero.
 	Now func() time.Time
 
 	// Lookup is where FromEnv reads a profile's endpoint variables from. Nil
@@ -310,7 +312,9 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	headers := c.now().Sub(start)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return StreamResult{}, c.httpError(resp)
+		// The headers figure survives the failure: a 503 after 45s against a
+		// 60s header bound is exactly the margin the probe suite records.
+		return StreamResult{Timing: Timing{Headers: headers, Total: headers}}, c.httpError(resp)
 	}
 
 	// Headers are in, so the bound that matters from here is silence, not
@@ -393,6 +397,7 @@ func (c *Client) rawPost(ctx context.Context, route string, body []byte) (json.R
 	t.Headers = c.now().Sub(start)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		t.Total = t.Headers
 		return nil, resp.Header, t, c.httpError(resp)
 	}
 	// Headers are in, so the bound that matters from here is silence on the body.

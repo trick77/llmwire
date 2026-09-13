@@ -99,14 +99,39 @@ func TestRawStream_TimingOrderedAndBounded(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	tm := res.Timing
+	// Lower bounds are the server's own delays from start, which the client
+	// cannot undercut; the relative checks are ordering only, since each
+	// reading carries its own scheduling jitter.
 	if tm.Headers < headerDelay {
 		t.Errorf("Headers = %v, want >= %v", tm.Headers, headerDelay)
 	}
-	if tm.FirstData < tm.Headers+frameGap {
-		t.Errorf("FirstData = %v, want >= Headers %v + %v", tm.FirstData, tm.Headers, frameGap)
+	if tm.FirstData < headerDelay+frameGap {
+		t.Errorf("FirstData = %v, want >= %v", tm.FirstData, headerDelay+frameGap)
 	}
-	if tm.Total < tm.FirstData+frameGap {
-		t.Errorf("Total = %v, want >= FirstData %v + %v", tm.Total, tm.FirstData, frameGap)
+	if tm.Total < headerDelay+2*frameGap {
+		t.Errorf("Total = %v, want >= %v", tm.Total, headerDelay+2*frameGap)
+	}
+	if tm.FirstData < tm.Headers || tm.Total < tm.FirstData {
+		t.Errorf("Timing = %+v, want Headers <= FirstData <= Total", tm)
+	}
+}
+
+// A non-2xx answer is an error, and the result beside it still carries how long
+// the endpoint took to say so: a 503 after 45s against a 60s header bound is a
+// margin, not nothing.
+func TestRawStream_NonOKCarriesHeadersTiming(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	now, _ := stepClock()
+	c := New(Config{BaseURL: srv.URL, Now: now})
+	res, err := c.RawStream(context.Background(), []byte(`{}`), nil)
+	if err == nil {
+		t.Fatal("expected an error for 503")
+	}
+	if res.Timing.Headers != time.Second || res.Timing.Total != time.Second {
+		t.Errorf("Timing = %+v, want Headers and Total 1s from the stepping clock", res.Timing)
 	}
 }
 
