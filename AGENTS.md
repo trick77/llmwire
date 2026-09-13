@@ -88,8 +88,9 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
 Keys from the **environment only**, never a literal anywhere; missing key skips
 with a named reason. **Hosts live in `profiles.yaml` `providers:`**, never in an
 app's config: an app supplies `LLMWIRE_<PROVIDER>_API_KEY` and nothing else.
-`LLMWIRE_<PROVIDER>_BASE_URL` overrides the shipped host; required only for a
-provider that ships none (litellm). Read by `FromEnv` and the evals. `.env` gitignored, loaded under
+`LLMWIRE_<PROVIDER>_BASE_URL` exists only for a provider that ships no host
+(litellm); beside a shipped host it is **refused** (`StaleEnvError`): no
+override, a different host is a different provider entry. Read by `FromEnv` and the evals. `.env` gitignored, loaded under
 `LLMWIRE_EVAL=1` (real env wins). `hack/secret-scan.sh` runs pre-commit **and** CI.
 CI holds no key.
 

@@ -21,10 +21,11 @@
 
 # Providers: the host and account a profile is reached through. The URL lives
 # HERE, once, so an application supplies LLMWIRE_<PROVIDER>_API_KEY and nothing
-# else. LLMWIRE_<PROVIDER>_BASE_URL overrides it (a mirror, a proxy, another
-# plan's host for the same vendor) and is required only for a provider that
-# ships no host. Roots only: no /chat/completions, the client appends the
-# route; no query string, a key there is echoed by every error body.
+# else. LLMWIRE_<PROVIDER>_BASE_URL exists only for a provider that ships no
+# host; beside a shipped host it is refused, not honoured: a different host
+# is a different entry here. Roots only: no /chat/completions, the client
+# appends the route; no query string, a key there is echoed by every error
+# body.
 providers:
   zai:
     # The GENERAL host. NEVER /api/coding/paas/v4: the Coding Plan host is

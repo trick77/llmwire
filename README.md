@@ -12,9 +12,9 @@ data rather than scattered through call sites.
 // The host comes from the model's profile (profiles.yaml carries each
 // vendor's base URL); the key from LLMWIRE_<PROVIDER>_API_KEY, the provider
 // named by the profile (zai here, mimo and openai for the others). An
-// application configures a key and nothing else. LLMWIRE_<PROVIDER>_BASE_URL
-// overrides the host; New(Config{...}) is there for a custom transport or an
-// explicit URL.
+// application configures a key and nothing else; a LLMWIRE_<PROVIDER>_BASE_URL
+// beside a shipped host is refused as the old contract. New(Config{...}) is
+// there for a custom transport or an explicit URL.
 client, err := llmwire.FromEnv("glm-5.3-flash", llmwire.Config{})
 if err != nil {
     return err // names the missing variable
@@ -121,9 +121,8 @@ is surfaced rather than read as an empty answer.
 **Can present as opencode.** Some endpoints are sold as one client's backend and
 treat a neutral `User-Agent` as a bot. A provider marked `emulate_opencode` in
 `profiles.yaml` gets opencode's client string and its session header pair from
-`FromEnv`, on the shipped host or the `LLMWIRE_<PROVIDER>_BASE_URL` override;
-a client built with an explicit `Config.BaseURL` sets `EmulateOpenCode: true`
-by hand. Headers only, never a request body. The session id is the client's own — minted at construction,
+`FromEnv`; a client built with an explicit `Config.BaseURL` sets
+`EmulateOpenCode: true` by hand. Headers only, never a request body. The session id is the client's own — minted at construction,
 rotated after a 30-minute idle gap, the way a person's session starts and ends —
 and there is deliberately no way to supply one.
 

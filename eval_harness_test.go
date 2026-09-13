@@ -222,9 +222,10 @@ func evalGate(t *testing.T) {
 }
 
 // endpoint names one upstream under test: the provider as profiles.yaml names
-// it. The host is the provider's shipped base_url unless
-// LLMWIRE_<PROVIDER>_BASE_URL overrides it; the key comes from the environment
-// only and is never defaulted to a literal.
+// it. The host is the provider's shipped base_url, the same contract FromEnv
+// enforces: a LLMWIRE_<PROVIDER>_BASE_URL beside a shipped host fails the run
+// rather than silently measuring some other host. The key comes from the
+// environment only and is never defaulted to a literal.
 type endpoint struct {
 	name       string
 	baseURLVar string
@@ -244,14 +245,17 @@ func (e endpoint) client(t *testing.T) *Client {
 	t.Helper()
 	evalGate(t)
 	base, key := os.Getenv(e.baseURLVar), os.Getenv(e.apiKeyVar)
-	if base == "" {
-		pv, err := Default().Provider(e.name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		base = pv.BaseURL
+	pv, err := Default().Provider(e.name)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if base == "" {
+	switch {
+	case pv.BaseURL != "" && base != "":
+		t.Fatalf("live probe: %s is set but the host for %s is the library's; delete the variable, "+
+			"or the findings describe a host the profile does not name", e.baseURLVar, e.name)
+	case pv.BaseURL != "":
+		base = pv.BaseURL
+	case base == "":
 		t.Skipf("live probe: %s is not set and the provider ships no host", e.baseURLVar)
 	}
 	if key == "" {

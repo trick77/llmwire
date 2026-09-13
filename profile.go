@@ -237,7 +237,7 @@ type Profile struct {
 	// providers: map. Not a profile key: the host belongs to the provider, and
 	// a profile restating it would be the per-model copy this field removes.
 	// Empty when the provider ships no host; FromEnv then requires the
-	// LLMWIRE_<PROVIDER>_BASE_URL variable, which otherwise merely overrides.
+	// LLMWIRE_<PROVIDER>_BASE_URL variable, which it otherwise refuses.
 	BaseURL string `yaml:"-"`
 	// EmulateOpenCode follows the provider the same way BaseURL does.
 	EmulateOpenCode bool `yaml:"-"`
@@ -635,9 +635,8 @@ func copyFloat(p *float64) *float64 {
 
 var providerName = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 
-// BaseURLEnv is the variable that OVERRIDES the provider's shipped host:
-// LLMWIRE_<PROVIDER>_BASE_URL. Required only when BaseURL is empty. Empty when
-// the profile names no provider.
+// BaseURLEnv is LLMWIRE_<PROVIDER>_BASE_URL: required when BaseURL is empty,
+// refused when it is not. Empty when the profile names no provider.
 func (p Profile) BaseURLEnv() string { return p.providerVar("BASE_URL") }
 
 // APIKeyEnv is the variable FromEnv reads the bearer token from:

@@ -37,9 +37,9 @@ truth, comment standard) and the head comment of `profiles.yaml`.
 ### 0.2 New provider
 
 - `provider:` matches `^[a-z][a-z0-9]*$` (`profile.go` `providerName`). It
-  derives `LLMWIRE_<PROVIDER>_API_KEY` (required) and
-  `LLMWIRE_<PROVIDER>_BASE_URL` (an override); two profiles on one host share
-  the pair.
+  derives `LLMWIRE_<PROVIDER>_API_KEY` (required) and, only for a provider
+  that ships no host, `LLMWIRE_<PROVIDER>_BASE_URL` (refused beside a shipped
+  host); two profiles on one host share them.
 - **Add the host to `providers:` in `profiles.yaml`** with a comment naming
   which of the vendor's hosts it is (general vs plan-specific, and what the
   other ones refuse). Root only, https, no query string; `registry.go`
@@ -49,9 +49,9 @@ truth, comment standard) and the head comment of `profiles.yaml`.
   that authenticates nothing gets `no_api_key: true` and no `_API_KEY`
   variable: an empty bearer is not sent, some gateways reject it.
 - Add an `endpoint` var next to `mimoEndpoint` / `zaiEndpoint` in
-  `eval_harness_test.go`; it reads the shipped host unless the override is
-  set. A missing key skips that provider's probes with a named reason; it
-  never falls back.
+  `eval_harness_test.go`; it reads the shipped host and fails the run if the
+  URL variable is set beside it. A missing key skips that provider's probes
+  with a named reason; it never falls back.
 - **New key prefix?** `hack/secret-scan.sh` (`PATTERN='(sk|tp)-...'`) and
   `Redact` by shape (`errors.go`, the `sk-`/`tp-` run) only know those two.
   A key with another prefix is invisible to the scan and to redaction: extend

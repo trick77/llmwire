@@ -7,27 +7,32 @@ import (
 )
 
 func TestFromEnv(t *testing.T) {
-	t.Run("reads both variables and trims the slash", func(t *testing.T) {
+	t.Run("a URL variable for a shipped host is the old contract and is refused", func(t *testing.T) {
 		t.Setenv("LLMWIRE_ZAI_BASE_URL", "https://api.example/v4/")
 		t.Setenv("LLMWIRE_ZAI_API_KEY", "k")
-		c, err := FromEnv("glm-5.3-flash", Config{})
-		if err != nil {
-			t.Fatal(err)
+		_, err := FromEnv("glm-5.3-flash", Config{})
+		var se *StaleEnvError
+		if !errors.As(err, &se) || se.Var != "LLMWIRE_ZAI_BASE_URL" || se.Provider != "zai" {
+			t.Fatalf("got %v, want a StaleEnvError naming the variable", err)
 		}
-		if c.baseURL != "https://api.example/v4" || c.apiKey != "k" {
-			t.Fatalf("got %q %q", c.baseURL, c.apiKey)
+		if !strings.Contains(err.Error(), "delete the variable") {
+			t.Fatalf("the error must say what to do: %v", err)
 		}
 	})
 
-	t.Run("a Lookup replaces the environment", func(t *testing.T) {
-		t.Setenv("LLMWIRE_MIMO_BASE_URL", "")
-		t.Setenv("LLMWIRE_MIMO_API_KEY", "")
-		m := map[string]string{"LLMWIRE_MIMO_BASE_URL": "https://map.example", "LLMWIRE_MIMO_API_KEY": "m"}
-		c, err := FromEnv("mimo-v2.5-pro", Config{Lookup: func(k string) (string, bool) { v, ok := m[k]; return v, ok }})
+	t.Run("a Lookup replaces the environment and trims the slash", func(t *testing.T) {
+		reg, err := NewRegistry([]byte("providers:\n  gw: {}\n" + chatHead + "    provider: gw\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.baseURL != "https://map.example" || c.apiKey != "m" {
+		t.Setenv("LLMWIRE_GW_BASE_URL", "")
+		t.Setenv("LLMWIRE_GW_API_KEY", "")
+		m := map[string]string{"LLMWIRE_GW_BASE_URL": "https://map.example/v1/", "LLMWIRE_GW_API_KEY": "m"}
+		c, err := FromEnv("m", Config{Registry: reg, Lookup: func(k string) (string, bool) { v, ok := m[k]; return v, ok }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.baseURL != "https://map.example/v1" || c.apiKey != "m" {
 			t.Fatalf("got %q %q", c.baseURL, c.apiKey)
 		}
 	})
@@ -58,13 +63,13 @@ func TestFromEnv(t *testing.T) {
 	})
 
 	t.Run("explicit api key wins over the environment", func(t *testing.T) {
-		t.Setenv("LLMWIRE_ZAI_BASE_URL", "https://env.example")
+		t.Setenv("LLMWIRE_ZAI_BASE_URL", "")
 		t.Setenv("LLMWIRE_ZAI_API_KEY", "env")
 		c, err := FromEnv("glm-5.3-flash", Config{APIKey: "cfg"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.baseURL != "https://env.example" || c.apiKey != "cfg" {
+		if c.baseURL == "" || c.apiKey != "cfg" {
 			t.Fatalf("got %q %q", c.baseURL, c.apiKey)
 		}
 	})
@@ -114,7 +119,7 @@ func TestFromEnv(t *testing.T) {
 	})
 
 	t.Run("whitespace-only api key names the variable", func(t *testing.T) {
-		t.Setenv("LLMWIRE_ZAI_BASE_URL", "https://api.example")
+		t.Setenv("LLMWIRE_ZAI_BASE_URL", "")
 		t.Setenv("LLMWIRE_ZAI_API_KEY", " ")
 		_, err := FromEnv("glm-5.3-flash", Config{})
 		var me *MissingEnvError
@@ -247,16 +252,6 @@ func TestFromEnv_identityFollowsTheProvider(t *testing.T) {
 	}
 	if zai.session != nil {
 		t.Error("zai: provider does not emulate, client presents as opencode")
-	}
-	// The override host keeps the identity: it is usually the same vendor's
-	// other plan, and the headers are inert on a host that does not care.
-	t.Setenv("LLMWIRE_MIMO_BASE_URL", "https://other.example/v1")
-	over, err := FromEnv("mimo-v2.5-pro", Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if over.session == nil {
-		t.Error("override host: identity dropped")
 	}
 }
 
