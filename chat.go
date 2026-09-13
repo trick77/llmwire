@@ -37,7 +37,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	// off-peak boundary to the wrong window.
 	at := c.Now()
 
-	raw, hdr, err := c.RawPost(ctx, routeChat, body)
+	raw, hdr, timing, err := c.rawPost(ctx, routeChat, body)
 	if err != nil {
 		return nil, warnings, err
 	}
@@ -45,6 +45,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	if err != nil {
 		return nil, warnings, err
 	}
+	resp.Timing = timing
 	if pl.profile.Tools.recoversInline() {
 		rec := recoverInline(resp.Content, resp.Reasoning, len(resp.ToolCalls))
 		resp.Content, resp.Reasoning = rec.content, rec.reasoning

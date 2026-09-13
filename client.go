@@ -301,11 +301,13 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	guard := newStallGuard(cancelReq, c.header, stallHeaders)
 	defer guard.stop()
 
+	start := c.now()
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return StreamResult{}, c.explain(ctx, callCtx, guard, c.dialError("/chat/completions", err))
 	}
 	defer resp.Body.Close()
+	headers := c.now().Sub(start)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return StreamResult{}, c.httpError(resp)
@@ -328,7 +330,8 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	}
 
 	// Below profile resolution, so no inline recovery: the caller owns the body.
-	res, _, err := readStream(resp.Body, guard, &counters, c.idle, sink, c.redact, false)
+	res, _, err := readStream(resp.Body, guard, &counters, c.idle, sink, c.redact, false, c.now, start)
+	res.Timing.Headers = headers
 	if err != nil {
 		return res, c.explain(ctx, callCtx, guard, err)
 	}
@@ -343,6 +346,14 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 // The headers are returned because a gateway reports per-call spend and the
 // real deployment name there and nowhere else.
 func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.RawMessage, http.Header, error) {
+	raw, hdr, _, err := c.rawPost(ctx, route, body)
+	return raw, hdr, err
+}
+
+// rawPost is RawPost with the call's Timing. Separate so the exported signature
+// the probe suite calls stays put while Chat and Embed get the figures.
+func (c *Client) rawPost(ctx context.Context, route string, body []byte) (json.RawMessage, http.Header, Timing, error) {
+	var t Timing
 	callCtx, cancelCall := context.WithTimeout(ctx, c.cap)
 	defer cancelCall()
 	reqCtx, cancelReq := context.WithCancel(callCtx)
@@ -350,7 +361,7 @@ func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.R
 
 	req, err := c.newRequest(reqCtx, route, body)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, t, err
 	}
 	req.Header.Set("Accept", "application/json")
 
@@ -370,27 +381,30 @@ func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.R
 	guard := newStallGuard(cancelReq, c.cap, stallHeaders)
 	defer guard.stop()
 
+	start := c.now()
 	resp, err := c.http.Do(req)
 	if err != nil {
 		// Redaction first, then classification: the URL can carry a key in its
 		// query string, and explain returns the error as given when no bound
 		// fired.
-		return nil, nil, c.explain(ctx, callCtx, guard, c.dialError(route, err))
+		return nil, nil, t, c.explain(ctx, callCtx, guard, c.dialError(route, err))
 	}
 	defer resp.Body.Close()
+	t.Headers = c.now().Sub(start)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp.Header, c.httpError(resp)
+		return nil, resp.Header, t, c.httpError(resp)
 	}
 	// Headers are in, so the bound that matters from here is silence on the body.
 	guard.arm(c.idle, stallIdle)
 
 	raw, err := io.ReadAll(resp.Body)
+	t.Total = c.now().Sub(start)
 	if err != nil {
-		return nil, resp.Header, c.explain(ctx, callCtx, guard,
+		return nil, resp.Header, t, c.explain(ctx, callCtx, guard,
 			fmt.Errorf("llmwire: reading response: %w", err))
 	}
-	return raw, resp.Header, nil
+	return raw, resp.Header, t, nil
 }
 
 // newRequest builds a POST with the standard headers.

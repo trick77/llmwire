@@ -281,6 +281,9 @@ type EmbedResponse struct {
 	Vectors [][]float32
 	Usage   Usage
 	Model   string
+	// Timing is summed over the batches the inputs were split into, so it is
+	// the wall-clock the whole call spent on the wire, not one request's.
+	Timing Timing
 }
 
 // ChatResponse is a completed non-streaming turn.
@@ -296,5 +299,6 @@ type ChatResponse struct {
 	// in a header.
 	Model string
 	// Raw is the undecoded response, kept for fields this package does not model.
-	Raw json.RawMessage
+	Raw    json.RawMessage
+	Timing Timing
 }

@@ -51,13 +51,15 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 			return nil, warnings, err
 		}
 		at := c.Now()
-		raw, hdr, err := c.RawPost(ctx, routeEmbeddings, body)
+		raw, hdr, timing, err := c.rawPost(ctx, routeEmbeddings, body)
 		if err != nil {
 			// No partial result. A half-filled [][]float32 is worse than none,
 			// because the caller cannot tell which rows are real, and a row of
 			// zeros is a valid-looking vector that means nothing.
 			return nil, warnings, err
 		}
+		out.Timing.Headers += timing.Headers
+		out.Timing.Total += timing.Total
 		batchResp, err := parseEmbedResponseWith(c.redact, raw, len(batch))
 		if err != nil {
 			return nil, warnings, err

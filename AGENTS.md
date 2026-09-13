@@ -63,6 +63,9 @@ would drop the param itself — stricter than the wire on purpose: a silently dr
 - The `Stream` reader goroutine must **never block**, so its queue is unbounded: a
   blocked sink stops re-arming the idle guard, and a slow consumer then reports as
   a stalled model. A caller-initiated `Close` is not an error.
+- `Timing` (Headers / FirstData / Total) is **returned, never logged**, measured
+  with `Config.Now` from request start; set on the stream error path too. The
+  library has no logger and gets none.
 - Wire mechanics that bit us once are documented at their enforcement site, not
   here. Read `stream.go`'s head comment before touching the parser.
 

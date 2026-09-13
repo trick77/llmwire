@@ -216,7 +216,7 @@ func readInline(t *testing.T, body string) (StreamResult, []streamEvent, []Warni
 	var events []streamEvent
 	res, warnings, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, func(ev streamEvent) {
 		events = append(events, ev)
-	}, Redact, true)
+	}, Redact, true, time.Now, time.Now())
 	if err != nil {
 		t.Fatalf("readStream: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestReadStream_NoRecoveryLeavesMarkupAlone(t *testing.T) {
 	guard := newStallGuard(cancel, time.Hour, stallHeaders)
 	defer guard.stop()
 	var counters streamCounters
-	res, warnings, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, nil, Redact, false)
+	res, warnings, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, nil, Redact, false, time.Now, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
