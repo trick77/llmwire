@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -23,9 +24,22 @@ import (
 //go:embed profiles.yaml
 var embeddedProfiles []byte
 
-// Registry holds fully-resolved profiles, keyed by exact model id.
+// Registry holds fully-resolved profiles, keyed by exact model id, and the
+// providers they are reached through.
 type Registry struct {
-	byID map[string]*Profile
+	byID      map[string]*Profile
+	providers map[string]Provider
+}
+
+// Provider is one host and account a profile is reached through: the thing
+// `provider:` names. It carries the endpoint root so an application supplies a
+// key and nothing else. The URL is a property of the provider, not of the
+// model, which is why it lives here rather than on every profile.
+type Provider struct {
+	// BaseURL is the OpenAI-compatible root the client appends routes to.
+	// Empty means the library ships no host for this provider (a self-hosted
+	// gateway), and LLMWIRE_<PROVIDER>_BASE_URL is then required.
+	BaseURL string `yaml:"base_url"`
 }
 
 var (
@@ -52,7 +66,8 @@ func Default() *Registry {
 
 // profileFile is the top level of profiles.yaml.
 type profileFile struct {
-	Profiles []yaml.Node `yaml:"profiles"`
+	Providers map[string]yaml.Node `yaml:"providers"`
+	Profiles  []yaml.Node          `yaml:"profiles"`
 }
 
 // NewRegistry parses and validates a profile document.
@@ -68,6 +83,20 @@ func NewRegistry(doc []byte) (*Registry, error) {
 	}
 	if len(file.Profiles) == 0 {
 		return nil, fmt.Errorf("llmwire: profiles document has no entries")
+	}
+	providers := make(map[string]Provider, len(file.Providers))
+	for name, node := range file.Providers {
+		if !providerName.MatchString(name) {
+			return nil, fmt.Errorf("llmwire: provider %q must be lowercase letters and digits", name)
+		}
+		var pv Provider
+		if err := strictDecode(node, &pv); err != nil {
+			return nil, fmt.Errorf("llmwire: provider %q: %w", name, err)
+		}
+		if err := pv.validate(); err != nil {
+			return nil, fmt.Errorf("llmwire: provider %q: %w", name, err)
+		}
+		providers[name] = pv
 	}
 
 	// Two passes. The first decodes every entry and records which YAML keys each
@@ -108,7 +137,7 @@ func NewRegistry(doc []byte) (*Registry, error) {
 		}
 	}
 
-	reg := &Registry{byID: make(map[string]*Profile, len(entries))}
+	reg := &Registry{byID: make(map[string]*Profile, len(entries)), providers: providers}
 	for _, e := range entries {
 		p := e.profile
 		if p.Base != "" {
@@ -133,6 +162,19 @@ func NewRegistry(doc []byte) (*Registry, error) {
 		if err := p.validate(); err != nil {
 			return nil, fmt.Errorf("llmwire: %w", err)
 		}
+		// Resolved here, after the base merge, because provider REPLACES on a
+		// derived profile and the URL follows the provider. A document with no
+		// providers: section at all is allowed (every host from the
+		// environment); one that HAS the section must name every provider a
+		// profile uses, or a typo in `provider:` would surface as a missing
+		// environment variable and send the operator to the wrong file.
+		if p.Provider != "" && len(providers) > 0 {
+			if _, ok := providers[p.Provider]; !ok {
+				return nil, fmt.Errorf("llmwire: profile %q names provider %q, which is not in providers: (known: %v)",
+					p.ID, p.Provider, sortedProviderNames(providers))
+			}
+		}
+		p.BaseURL = providers[p.Provider].BaseURL
 		stored := p
 		reg.byID[p.ID] = &stored
 	}
@@ -182,6 +224,51 @@ func applyDefaults(p *Profile) {
 	if p.Tools.Supported && p.Tools.Format == "" {
 		p.Tools.Format = FormatNative
 	}
+}
+
+// Provider returns the host a provider name resolves to. An unknown name is
+// an error rather than an empty Provider, for the same reason Lookup errors:
+// a typo must not read as "no host shipped".
+func (r *Registry) Provider(name string) (Provider, error) {
+	if pv, ok := r.providers[name]; ok {
+		return pv, nil
+	}
+	return Provider{}, fmt.Errorf("llmwire: unknown provider %q; known: %v", name, sortedProviderNames(r.providers))
+}
+
+func sortedProviderNames(m map[string]Provider) []string {
+	out := make([]string, 0, len(m))
+	for name := range m {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// validate checks a provider's host. A trailing slash is trimmed at use, so
+// the check is on things that would go wrong silently: a scheme other than
+// https sends the key in clear, and a query string is where a key ends up
+// echoed in every error body (see the redaction notes in errors.go).
+func (pv Provider) validate() error {
+	if pv.BaseURL == "" {
+		return nil
+	}
+	u, err := url.Parse(pv.BaseURL)
+	if err != nil {
+		return fmt.Errorf("base_url %q: %w", pv.BaseURL, err)
+	}
+	switch {
+	case u.Scheme != "https":
+		return fmt.Errorf("base_url %q must be https", pv.BaseURL)
+	case u.Host == "":
+		return fmt.Errorf("base_url %q has no host", pv.BaseURL)
+	case u.RawQuery != "" || u.Fragment != "" || u.User != nil:
+		return fmt.Errorf("base_url %q must be a bare root: no query, fragment or credentials", pv.BaseURL)
+	case strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/chat/completions"),
+		strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/embeddings"):
+		return fmt.Errorf("base_url %q ends in a route; the client appends /chat/completions and /embeddings itself", pv.BaseURL)
+	}
+	return nil
 }
 
 // Lookup returns the profile for an exact model id.
@@ -242,17 +329,22 @@ func (r *Registry) Models() []string { return sortedIDs(r.byID) }
 // fails loudly, a mistyped capability turning into an assumed-absent one is the
 // worst available failure.
 func decodeStrict(node yaml.Node) (Profile, error) {
-	raw, err := yaml.Marshal(&node)
-	if err != nil {
-		return Profile{}, fmt.Errorf("re-encoding entry: %w", err)
-	}
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
 	var p Profile
-	if err := dec.Decode(&p); err != nil {
+	if err := strictDecode(node, &p); err != nil {
 		return Profile{}, err
 	}
 	return p, nil
+}
+
+// strictDecode is the round trip decodeStrict describes, for any target.
+func strictDecode(node yaml.Node, into any) error {
+	raw, err := yaml.Marshal(&node)
+	if err != nil {
+		return fmt.Errorf("re-encoding entry: %w", err)
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	return dec.Decode(into)
 }
 
 // checkDerivedKeys rejects a based profile that sets a capability field.

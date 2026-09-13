@@ -19,6 +19,30 @@
 # unmeasured field is left absent rather than guessed — absent means "assume
 # nothing", not "assume the default".
 
+# Providers: the host and account a profile is reached through. The URL lives
+# HERE, once, so an application supplies LLMWIRE_<PROVIDER>_API_KEY and nothing
+# else. LLMWIRE_<PROVIDER>_BASE_URL overrides it (a mirror, a proxy, another
+# plan's host for the same vendor) and is required only for a provider that
+# ships no host. Roots only: no /chat/completions, the client appends the
+# route; no query string, a key there is echoed by every error body.
+providers:
+  zai:
+    # The GENERAL host. NEVER /api/coding/paas/v4: the Coding Plan host is
+    # restricted to Z.ai's own coding tools and refuses everything else. No
+    # /v1 on this vendor.
+    base_url: https://api.z.ai/api/paas/v4
+  mimo:
+    # The Token Plan host, which is what `provider: mimo` means throughout this
+    # file; the pay-as-you-go API is api.xiaomimimo.com/v1 with a different
+    # key, and would be its own provider. Sold as opencode's backend: a
+    # neutral User-Agent is refused as a bot, see Config.EmulateOpenCode.
+    base_url: https://token-plan-sgp.xiaomimimo.com/v1
+  openai:
+    base_url: https://api.openai.com/v1
+  # A self-hosted gateway has no public host: LLMWIRE_LITELLM_BASE_URL is
+  # required.
+  litellm: {}
+
 profiles:
   # ---------------------------------------------------------------------------
   # Z.ai, general (pay-as-you-go) host. NOT the Coding Plan host, which is

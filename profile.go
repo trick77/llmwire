@@ -233,6 +233,12 @@ type Profile struct {
 	// NoAPIKey marks a host that authenticates nothing: FromEnv sends no
 	// Authorization header and does not look for the key variable.
 	NoAPIKey bool `yaml:"no_api_key"`
+	// BaseURL is the provider's endpoint root, resolved at load from the
+	// providers: map. Not a profile key: the host belongs to the provider, and
+	// a profile restating it would be the per-model copy this field removes.
+	// Empty when the provider ships no host; FromEnv then requires the
+	// LLMWIRE_<PROVIDER>_BASE_URL variable, which otherwise merely overrides.
+	BaseURL string `yaml:"-"`
 
 	// MaxTokensParam is which output-cap parameter this endpoint honours.
 	// Getting it wrong is not always an error: one endpoint accepts the wrong
@@ -627,8 +633,9 @@ func copyFloat(p *float64) *float64 {
 
 var providerName = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 
-// BaseURLEnv is the variable FromEnv reads the endpoint root from:
-// LLMWIRE_<PROVIDER>_BASE_URL. Empty when the profile names no provider.
+// BaseURLEnv is the variable that OVERRIDES the provider's shipped host:
+// LLMWIRE_<PROVIDER>_BASE_URL. Required only when BaseURL is empty. Empty when
+// the profile names no provider.
 func (p Profile) BaseURLEnv() string { return p.providerVar("BASE_URL") }
 
 // APIKeyEnv is the variable FromEnv reads the bearer token from:
