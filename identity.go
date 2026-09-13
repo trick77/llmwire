@@ -139,14 +139,15 @@ func newSession(now func() time.Time) *session {
 }
 
 // current returns the id to send on a call made now, rotating it first if the
-// client has been idle past sessionIdleRotation.
-func (s *session) current() string {
+// client has been idle past sessionIdleRotation, and says when it did.
+func (s *session) current() (id string, rotated bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	if now.Sub(s.lastUsed) > sessionIdleRotation {
 		s.id = newSessionID()
+		rotated = true
 	}
 	s.lastUsed = now
-	return s.id
+	return s.id, rotated
 }

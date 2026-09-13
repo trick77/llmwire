@@ -128,6 +128,20 @@ request body. The session id is the client's own — minted at construction,
 rotated after a 30-minute idle gap, the way a person's session starts and ends —
 and there is deliberately no way to supply one.
 
+**Reports every call, never its text.** `Config.Logger` (slog; `slog.Default()`
+when nil, so the line is JSON or text as the process already logs) gets one
+line per call: what went on the wire (message and tool counts, cap, sampling,
+reasoning), what came back (`finish_reason`, content and reasoning lengths,
+tool calls), tokens per lane (input, cache read, cache write, output,
+reasoning), `cost_usd` with its provenance, `headers_ms`/`first_data_ms`/
+`total_ms`, output tokens per second, warnings. Debug when it worked; Warn
+when it failed (with the bound or status that ended it) or when the answer
+needs a look: cut by the output cap, empty on a `stop`, no usage reported.
+`Client.Stats()` returns the same figures summed per model since `New`, with
+unpriced and unreported calls counted apart so a low total is never read as
+cheap; it is a `slog.LogValuer`, for a shutdown summary. Prompt, answer and
+key never appear.
+
 **Carries the small helpers every consumer was copying.** `Stream.Collect(onDelta)`
 drains a stream into its result. `JSONObject(s)` cuts the first brace-balanced
 object out of a reply that was asked for JSON and came back fenced or wrapped in

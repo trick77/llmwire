@@ -30,6 +30,10 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	if err != nil {
 		return nil, warnings, err
 	}
+	// Everything past the plan ends in one line and one stats update, on
+	// success and on every failure alike.
+	sum := callSummary{kind: "chat", model: req.Model, plan: pl}
+	defer func() { c.finish(sum) }()
 
 	// Captured BEFORE the request, and carried into pricing: which instant bills
 	// is unspecified by both vendors, so llmwire uses request start and records
@@ -38,11 +42,14 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	at := c.Now()
 
 	raw, hdr, timing, err := c.rawPost(ctx, routeChat, body)
+	sum.timing = timing
 	if err != nil {
+		sum.err = err
 		return nil, warnings, err
 	}
 	resp, err := parseChatResponseWith(c.redact, raw)
 	if err != nil {
+		sum.err = err
 		return nil, warnings, err
 	}
 	resp.Timing = timing
@@ -54,7 +61,10 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	}
 	cost, priceWarnings := priceCall(pl.profile, resp.Usage, hdr, 200, at)
 	resp.Usage.Cost = cost
-	return resp, append(warnings, priceWarnings...), nil
+	warnings = append(warnings, priceWarnings...)
+	sum.content, sum.reasoning, sum.toolCalls = len(resp.Content), len(resp.Reasoning), len(resp.ToolCalls)
+	sum.finishReason, sum.usage, sum.warnings = resp.FinishReason, resp.Usage, warnings
+	return resp, warnings, nil
 }
 
 // wireChatResponse mirrors the OpenAI-compatible response object.

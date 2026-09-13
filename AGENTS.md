@@ -48,9 +48,10 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
 - **Completion asserted, never inferred**: only `[DONE]` or `finish_reason`.
 - `Stream` reader goroutine **never blocks** (unbounded queue): a blocked sink stops
   re-arming the guard. Caller `Close` is not an error.
-- `Timing` is **returned, never logged**, measured with `Config.Now`; set on error
-  paths too. `Config.Logger` (slog, default `slog.Default()`) gets one Info line
-  from `FromEnv` with the settings; the key by variable name, never value.
+- `Timing` measured with `Config.Now`; set on error paths too.
+- Logging is `observe.go`, one line per call via `Client.finish` (Debug ok, Warn
+  failed/truncated/empty/unaccounted) + `Stats()`. Flat keys, `_ms` ints, never
+  prompt/answer/key text. Every new call path ends in `finish`, every error path.
 - Wire mechanics live at their enforcement site. Read `stream.go`'s head comment
   before touching the parser.
 

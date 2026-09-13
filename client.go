@@ -95,11 +95,13 @@ type Config struct {
 	// is the single source of settings passes its getter; a test passes a
 	// map.
 	Lookup func(name string) (string, bool)
-	// Logger receives one Info line from FromEnv naming the settings the
-	// client was built with: model, provider, host, which key variable was
-	// read, the identity it presents and the bounds. Never the key itself.
-	// Nil means slog.Default(). A client built by New logs nothing: the
-	// caller chose every value by hand and has nothing to learn.
+	// Logger is where the client reports. Nil means slog.Default(). FromEnv
+	// writes one Info line with the settings it built the client with; every
+	// call then ends in one line, Debug when it worked, Warn when it failed
+	// or the answer needs a look (truncated, empty, unaccounted); a session
+	// rotation under EmulateOpenCode is a Debug line. Never the prompt, the
+	// answer or the key: lengths, counts, the key's variable name. See
+	// observe.go.
 	Logger *slog.Logger
 	// Registry supplies the model profiles this client validates against.
 	// Defaults to the built-in one. Injectable so a caller can add a deployment
@@ -140,6 +142,8 @@ type Client struct {
 	cap       time.Duration
 	now       func() time.Time
 	registry  *Registry
+	log       *slog.Logger
+	stats     stats
 	// session is non-nil only under EmulateOpenCode.
 	session *session
 }
@@ -167,6 +171,9 @@ func New(cfg Config) *Client {
 	}
 	if cfg.Registry == nil {
 		cfg.Registry = Default()
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
 	}
 	hc := cfg.HTTPClient
 	if hc == nil {
@@ -203,6 +210,7 @@ func New(cfg Config) *Client {
 		cap:       cfg.CallTimeout,
 		now:       cfg.Now,
 		registry:  cfg.Registry,
+		log:       cfg.Logger,
 	}
 	if cfg.EmulateOpenCode {
 		c.session = newSession(cfg.Now)
@@ -253,7 +261,7 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	}
 	if cfg.BaseURL != "" {
 		c := New(cfg)
-		logSettings(cfg.Logger, model, p, "", c)
+		c.logSettings(model, p, "")
 		return c, nil
 	}
 	if p.Provider == "" {
@@ -306,17 +314,14 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 		keyVar = p.APIKeyEnv()
 	}
 	c := New(cfg)
-	logSettings(cfg.Logger, model, p, keyVar, c)
+	c.logSettings(model, p, keyVar)
 	return c, nil
 }
 
 // logSettings is the one line FromEnv writes: everything an operator asks
 // "what is it actually talking to" about, at Info, with the key named by its
 // variable and never by its value.
-func logSettings(log *slog.Logger, model string, p *Profile, keyVar string, c *Client) {
-	if log == nil {
-		log = slog.Default()
-	}
+func (c *Client) logSettings(model string, p *Profile, keyVar string) {
 	key := "none"
 	switch {
 	case keyVar != "":
@@ -324,7 +329,7 @@ func logSettings(log *slog.Logger, model string, p *Profile, keyVar string, c *C
 	case c.apiKey != "":
 		key = "config"
 	}
-	log.Info("llmwire client",
+	c.log.Info("llmwire client",
 		"model", model,
 		"provider", p.Provider,
 		"base_url", RedactURL(c.baseURL),
@@ -541,7 +546,10 @@ func (c *Client) newRequest(ctx context.Context, route string, body []byte) (*ht
 		// — Headers is the escape hatch for what this package does not model —
 		// and it is mirrored into the other, so the pair stays a pair. Only when
 		// neither was set does the client's own session id go out.
-		id := c.session.current()
+		id, rotated := c.session.current()
+		if rotated {
+			c.log.Debug("llmwire session rotated", "session_id", id, "idle_gap", sessionIdleRotation.String())
+		}
 		switch pinnedID, pinnedAff := req.Header.Get(HeaderSessionID), req.Header.Get(HeaderSessionAffinity); {
 		case pinnedID != "":
 			id = pinnedID
