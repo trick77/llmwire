@@ -138,6 +138,18 @@ func TestRender_ReasoningSpellingPerControl(t *testing.T) {
 	}
 	absent(t, body, "thinking")
 
+	// A toggle model that lists effort_values takes the level beside its
+	// switch: the level goes out, the toggle stays home.
+	body = renderFor(t, c, ChatRequest{
+		Model:     "mimo-v2.5-pro",
+		Messages:  []Message{User("hi")},
+		Reasoning: ReasoningEffort("low"),
+	}, false)
+	if body["reasoning_effort"] != "low" {
+		t.Errorf("reasoning_effort = %v", body["reasoning_effort"])
+	}
+	absent(t, body, "thinking")
+
 	body = renderFor(t, c, ChatRequest{
 		Model:     "mimo-v2.5",
 		Messages:  []Message{User("hi")},
