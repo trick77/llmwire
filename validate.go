@@ -392,7 +392,9 @@ func (v *validation) checkReasoning(req ChatRequest) {
 			}
 			return
 		}
-		if r.Control != ControlEffort {
+		// A toggle model with effort_values takes the level beside its switch;
+		// one without has no such knob and the level is a mismatch.
+		if r.Control != ControlEffort && !(r.Control == ControlToggleObject && len(r.EffortValues) > 0) {
 			if !v.refuse("reasoning", reasoningControlMismatch(r.Control, "an effort level"),
 				reasoningControlHint(r.Control)) {
 				v.dropReasoning()

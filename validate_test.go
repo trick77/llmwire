@@ -128,14 +128,23 @@ func TestValidate_EffortLevels(t *testing.T) {
 func TestValidate_ReasoningVariantMustMatchTheModelsControl(t *testing.T) {
 	c := testClient(t, nil)
 
-	// mimo takes a toggle object, not an effort level.
+	// mimo takes a toggle object AND a level beside it (measured), so an
+	// accepted level passes and one outside the set is refused by name.
 	_, err := c.Validate(ChatRequest{
 		Model:     "mimo-v2.5-pro",
 		Messages:  []Message{User("hi")},
 		Reasoning: ReasoningEffort("high"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "not as an effort level") {
-		t.Errorf("error = %v, want a refusal naming the mismatch", err)
+	if err != nil {
+		t.Errorf("error = %v, want a level the profile lists to pass", err)
+	}
+	_, err = c.Validate(ChatRequest{
+		Model:     "mimo-v2.5-pro",
+		Messages:  []Message{User("hi")},
+		Reasoning: ReasoningEffort("xhigh"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "not accepted by this model") {
+		t.Errorf("error = %v, want a refusal naming the set", err)
 	}
 
 	// glm takes an effort level, not a budget.

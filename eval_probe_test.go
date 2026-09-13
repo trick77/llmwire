@@ -337,6 +337,40 @@ func TestProbe_MiMoAcceptsReasoningEffort(t *testing.T) {
 		valueOr(res.Usage.Output.Reasoning, -1))
 }
 
+// Which levels MiMo takes beside its thinking toggle, and whether they move
+// anything. loom offers low/medium/high to its users; the profile's
+// effort_values must be the set the endpoint accepts, and the reasoning-token
+// counts per level are the evidence for whether the knob does anything. A
+// prompt that needs some thinking, so a level that is honoured has room to
+// show: at a trivial prompt every level reasons the same handful of tokens.
+func TestProbe_MiMoReasoningEffortValues(t *testing.T) {
+	c := mimoEndpoint.client(t)
+	// "" is the control: the same prompt with no level sent, so a model that
+	// stops thinking when a level arrives is told apart from one that never
+	// thought about this prompt.
+	for _, model := range []string{"mimo-v2.5-pro", "mimo-v2.5"} {
+		for _, effort := range []string{"", "low", "medium", "high", "xhigh"} {
+			t.Run(model+"/"+effort, func(t *testing.T) {
+				b := probeBody(model, "A train leaves at 09:40 and arrives at 13:05 the same day. "+
+					"How many minutes is the journey? Reply with the number only.")
+				if effort != "" {
+					b["reasoning_effort"] = effort
+				}
+				b["max_completion_tokens"] = 4096
+				res, err := stream(t, c, b)
+				ok, why := accepted(res, err)
+				if !ok {
+					t.Logf("FINDING: %s reasoning_effort=%q REJECTED: %s", model, effort, why)
+					return
+				}
+				t.Logf("FINDING: %s reasoning_effort=%q ACCEPTED (reasoning tokens: %v, completion: %v, finish: %s, content: %q)",
+					model, effort, valueOr(res.Usage.Output.Reasoning, -1), valueOr(res.Usage.Output.Total, -1),
+					res.FinishReason, Truncate(res.Content, 40))
+			})
+		}
+	}
+}
+
 // Which output-cap parameter each endpoint honours. Sending the wrong one is
 // silently unbounded on some endpoints and a 400 on others.
 func TestProbe_OutputCapParameter(t *testing.T) {

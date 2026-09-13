@@ -80,6 +80,12 @@ type Reasoning struct {
 	// EffortValues is the exact accepted set, never a superset. The vendor's
 	// global enum is wider than any single model takes: glm-5.3-flash accepts
 	// three of the seven values its provider documents.
+	//
+	// Required for ControlEffort. Optional for ControlToggleObject, where a
+	// non-empty set says the model ALSO takes reasoning_effort beside its
+	// on/off switch: ReasoningEffort(level) then renders the field instead of
+	// being refused, and ReasoningOff() still renders the toggle. Empty on a
+	// toggle model means the switch is the only knob.
 	EffortValues []string `yaml:"effort_values"`
 	// DefaultEffort is what the model uses when the field is omitted. Empty
 	// means the vendor does not say.
@@ -494,7 +500,20 @@ func (p Profile) validate() error {
 			if r.DefaultEffort != "" && !r.Accepts(r.DefaultEffort) {
 				return bad("default_effort %q is not in effort_values %v", r.DefaultEffort, r.EffortValues)
 			}
-		case ControlToggleObject, ControlBudget:
+		case ControlToggleObject:
+			// Levels beside a toggle only make sense on a model that is
+			// thinking to begin with: there is no on-switch constructor, so a
+			// level sent to a model that is off would be inert.
+			if len(r.EffortValues) > 0 && !r.EnabledByDefault {
+				return bad("effort_values is set on a %s model that is not enabled_by_default; a level cannot switch thinking on", ControlToggleObject)
+			}
+			if r.DefaultEffort != "" && !r.Accepts(r.DefaultEffort) {
+				return bad("default_effort %q is not in effort_values %v", r.DefaultEffort, r.EffortValues)
+			}
+		case ControlBudget:
+			if len(r.EffortValues) > 0 {
+				return bad("reasoning control is %q but effort_values is set; a budget model takes no levels", ControlBudget)
+			}
 		default:
 			return bad("reasoning is supported but control is %q", r.Control)
 		}

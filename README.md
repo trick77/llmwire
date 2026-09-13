@@ -174,6 +174,10 @@ All four chat lanes are required, or the block is left out entirely and the mode
 reports `Unpriced`: a lane falling back to another lane's rate would be a
 call-site default, and this registry resolves everything at load.
 
+A toggle model may also list `effort_values`: MiMo takes `reasoning_effort`
+beside its `thinking` switch, so `ReasoningEffort("high")` renders the level and
+`ReasoningOff()` renders the toggle.
+
 `enabled_by_default` and `can_be_disabled` are deliberately separate flags. "Can
 this model turn reasoning off" is not answerable from whether `none` appears in a
 list of effort levels — inferring it is how published model catalogues get it

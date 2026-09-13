@@ -181,6 +181,15 @@ profiles:
       enabled_by_default: true
       can_be_disabled: true
       control: toggle_object
+      # MEASURED 2026-09-13: reasoning_effort is taken BESIDE the toggle, and
+      # the set is enforced by the endpoint: low, medium and high return 200,
+      # xhigh is a 400 "Invalid request parameters". Whether the level changes
+      # how much this deployment thinks is not shown by the probe: a small
+      # arithmetic prompt answered in 9 completion tokens at every level AND
+      # with no level sent (the control), so this prompt simply did not make
+      # Pro think; sending a level does not switch thinking off. See mimo-v2.5
+      # for the sibling that did move.
+      effort_values: [low, medium, high]
       # MEASURED: reasoning arrived on this delta field on every probe.
       stream_field: reasoning_content
 
@@ -277,8 +286,8 @@ profiles:
       then 11131 / 11072 on the identical prompt), so the full-rate lane is the
       difference and pricing subtracts it.
       reasoning_effort is accepted on chat/completions despite the vendor
-      documenting it as a Responses-API parameter; whether it changes anything is
-      not established.
+      documenting it as a Responses-API parameter; see the reasoning block for
+      the accepted set and what the probe measured.
 
   - id: mimo-v2.5
     endpoint: chat
@@ -301,6 +310,13 @@ profiles:
       enabled_by_default: true
       can_be_disabled: true
       control: toggle_object
+      # MEASURED 2026-09-13, same probe as -pro: low, medium, high accepted,
+      # xhigh a 400. Here the level did move the answer: the same arithmetic
+      # prompt took 225 / 377 / 396 completion tokens at low / medium / high
+      # (one sample each, answer identical), while the reasoning_tokens lane
+      # reported 0 throughout — the thinking is counted inside
+      # completion_tokens on this endpoint.
+      effort_values: [low, medium, high]
       stream_field: reasoning_content
 
     # NOT measured, vendor documentation; same statement as for -pro.
