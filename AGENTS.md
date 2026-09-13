@@ -93,11 +93,13 @@ CI holds no key.
 
 ## Evals
 
-`LLMWIRE_EVAL=1 go test -run Eval ./...`. Gated via `t.Skip`, **never a build tag**
+`LLMWIRE_EVAL=1 go test -run Probe ./...`. Gated via `t.Skip`, **never a build tag**
 (hides code from vet and the compiler).
 
 **Evals are the source of truth for profile bits**; vendor doc loses to a
 measurement, recorded in the profile comment.
+
+New model, version, provider or gateway route → `ONBOARDING.md`, top to bottom.
 
 Spend guard fail-closed: budget checked *before* each call, call ceiling, deadline,
 per-call caps. `Unpriced` counts as the whole remaining budget. **No retries**: a
