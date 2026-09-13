@@ -1,6 +1,9 @@
 package llmwire
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Token accounting.
 //
@@ -19,6 +22,29 @@ import "encoding/json"
 //   - completion_tokens INCLUDES reasoning_tokens. Reasoning is never a separate
 //     billing lane; pricing it again double-counts every call a reasoning model
 //     makes, which is all of them on the models this library targets.
+
+// Timing is where one call's wall-clock went, measured with the client's clock
+// (Config.Now) from the instant the request was handed to the transport. It is
+// returned, never logged: a log line is invisible to the caller, and the caller
+// is the one with the retry loop, the queue and the batch these figures belong
+// to. What it adds over a time.Since around the call is the split only the
+// transport can see, which lines up with the three bounds the client arms:
+// Headers against HeaderTimeout, FirstData minus Headers against IdleTimeout
+// (the idle guard is only armed once headers are in), Total against
+// CallTimeout. A call that took 38s to headers against a 60s bound is a margin
+// worth knowing before the bound fires, the same way MaxCommentGap reports the
+// margin on the idle guard.
+type Timing struct {
+	// Headers is request sent to response headers received. On a non-streaming
+	// route the endpoint withholds headers until the answer is ready, so this
+	// is the model's whole latency there, not the time to first byte.
+	Headers time.Duration
+	// FirstData is request sent to the first `data:` frame. Zero on a
+	// non-streaming route, where the body arrives whole with the headers.
+	FirstData time.Duration
+	// Total is request sent to the last byte read.
+	Total time.Duration
+}
 
 // Usage is one call's token accounting, normalised across endpoints.
 type Usage struct {

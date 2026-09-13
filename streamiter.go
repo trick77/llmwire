@@ -118,7 +118,9 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	guard := newStallGuard(cancelReq, c.header, stallHeaders)
+	start := c.now()
 	resp, err := c.http.Do(httpReq)
+	headers := c.now().Sub(start)
 	if err != nil {
 		err = c.explain(ctx, callCtx, guard, c.dialError(routeChat, err))
 		guard.stop()
@@ -149,15 +151,16 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	}
 	s.cond = sync.NewCond(&s.mu)
 
-	go s.read(resp, pl, at)
+	go s.read(resp, pl, at, start, headers)
 	return s, warnings, nil
 }
 
 // read consumes the stream on its own goroutine and publishes the result.
-func (s *Stream) read(resp *http.Response, pl *wirePlan, at time.Time) {
+func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, headers time.Duration) {
 	var counters streamCounters
 	res, inlineWarnings, err := readStream(resp.Body, s.guard, &counters, s.client.idle, s.push, s.client.redact,
-		pl.profile.Tools.recoversInline())
+		pl.profile.Tools.recoversInline(), s.client.now, start)
+	res.Timing.Headers = headers
 
 	resp.Body.Close()
 	s.guard.stop()
