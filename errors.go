@@ -387,29 +387,46 @@ func Truncate(s string, max int) string {
 	return s[:cut] + "…(truncated)"
 }
 
-// JSONObject returns the first brace-balanced JSON object in s, or false when
-// there is none. It is the salvage step before json.Unmarshal on a reply that
-// was asked for JSON: models fence it in ```json, lead with "Sure, here it
-// is:", or trail a sentence after the closing brace, and every consumer was
-// carrying its own strip-the-fence helper — three of them in one program,
-// each slightly different. This one is the string-aware form: a brace inside
-// a JSON string does not count, an escaped quote does not close the string.
+// JSONObject returns the first JSON object in s, or false when there is none.
+// It is the salvage step before json.Unmarshal on a reply that was asked for
+// JSON: models fence it in ```json, lead with "Sure, here it is:", or trail a
+// sentence after the closing brace, and every consumer was carrying its own
+// strip-the-fence helper — three of them in one program, each slightly
+// different.
 //
-// It is the FIRST object, not first-brace-to-last-brace: a reply that says
-// "{...} or, if you prefer, {...}" yields the first and parses, where the
-// widest cut would include the prose and fail. What it does not do is repair:
-// an unbalanced object is reported as none, and the caller's parse failure
-// path is the right place for that.
+// Each '{' is tried as a start, the candidate is cut where its braces balance
+// (string-aware: a brace inside a JSON string does not count, an escaped
+// quote does not close the string), and the first candidate that is valid
+// JSON wins. Trying every start is what survives prose that mentions a brace
+// before the object — `wrap it in {braces}: {"a":1}` yields the second. It is
+// the FIRST object, not first-brace-to-last-brace: a reply offering two
+// parses on the first, where the widest cut includes the prose and fails.
+// What it does not do is repair: an unbalanced object is reported as none,
+// and the caller's parse failure path is the right place for that.
 //
 // Consider ChatRequest.ResponseFormat first. On one model a prompt asking for
 // JSON parsed 0 times out of 8 and the response format 8 out of 8 — but a
 // fenced reply still arrives with the format set on some endpoints, so the
 // salvage stays useful behind it.
 func JSONObject(s string) (string, bool) {
-	start := strings.IndexByte(s, '{')
-	if start == -1 {
-		return "", false
+	for start := strings.IndexByte(s, '{'); start >= 0; {
+		if end := balancedObjectEnd(s, start); end > start {
+			if candidate := s[start:end]; json.Valid([]byte(candidate)) {
+				return candidate, true
+			}
+		}
+		next := strings.IndexByte(s[start+1:], '{')
+		if next < 0 {
+			break
+		}
+		start += 1 + next
 	}
+	return "", false
+}
+
+// balancedObjectEnd returns the index one past the brace that closes the
+// object opening at start, or -1 when it never closes.
+func balancedObjectEnd(s string, start int) int {
 	depth := 0
 	inString := false
 	escaped := false
@@ -434,9 +451,9 @@ func JSONObject(s string) (string, bool) {
 		case '}':
 			depth--
 			if depth == 0 {
-				return s[start : i+1], true
+				return i + 1
 			}
 		}
 	}
-	return "", false
+	return -1
 }
