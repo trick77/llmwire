@@ -94,6 +94,12 @@ across models. Behind a gateway the cost comes from the proxy's own header or no
 at all. A rate we have not verified reports `Unpriced` and warns, because zero
 means unknown, not free.
 
+**Shows what the endpoint really sent.** `NewSpoolTransport(dir, next, skip)` is
+an `http.RoundTripper` that writes every response — status line, headers, body
+as read, a truncated stream included — to one `.http` file per call. Hand it to
+`Config.HTTPClient` while diagnosing; `skip` keeps a request the caller promised
+to keep ephemeral off disk.
+
 **Handles the stream cases that bite.** Separate header / idle / whole-call
 bounds, and a failure says which one fired. Completion is asserted by `[DONE]` or
 `finish_reason`, never inferred from a clean EOF — a connection dropping mid-answer
