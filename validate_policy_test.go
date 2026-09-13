@@ -294,9 +294,22 @@ func TestValidate_ReasoningOffOnANonReasoningModelIsANoOp(t *testing.T) {
 // A control mismatch must name the constructor that would work and must not leak
 // the profile's internal constant name into a caller-facing message.
 func TestValidate_ControlMismatchIsActionable(t *testing.T) {
-	c := testClient(t, nil)
+	// A toggle model WITHOUT effort_values: the switch is its only knob. The
+	// shipped MiMo profiles take levels too, so the shape is spelled out here.
+	c := testClient(t, registryFrom(t, `
+profiles:
+  - id: toggle-only
+    wire_model_id: toggle-only
+    max_tokens_param: max_tokens
+    verified: measured
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: true
+      control: toggle_object
+`))
 	_, err := c.Validate(ChatRequest{
-		Model:     "mimo-v2.5-pro",
+		Model:     "toggle-only",
 		Messages:  []Message{User("hi")},
 		Reasoning: ReasoningEffort("high"),
 	})
