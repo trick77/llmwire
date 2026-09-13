@@ -1,7 +1,9 @@
 package llmwire
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -338,5 +340,32 @@ func TestRegistry_profileProviderMustExistWhenProvidersAreDeclared(t *testing.T)
 		chatHead + "    provider: opeanai\n"))
 	if err == nil || !strings.Contains(err.Error(), "opeanai") {
 		t.Fatalf("got %v, want a load error naming the typo", err)
+	}
+}
+
+// FromEnv says what it built, once, at Info: the key by its variable name,
+// never by value.
+func TestFromEnv_logsItsSettings(t *testing.T) {
+	t.Setenv("LLMWIRE_MIMO_BASE_URL", "")
+	t.Setenv("LLMWIRE_MIMO_API_KEY", "sk-secret-value")
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	if _, err := FromEnv("mimo-v2.5-pro", Config{Logger: log}); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if strings.Count(got, "\n") != 1 {
+		t.Fatalf("want exactly one line, got:\n%s", got)
+	}
+	for _, want := range []string{
+		"model=mimo-v2.5-pro", "provider=mimo", "base_url=https://token-plan-sgp.xiaomimimo.com/v1",
+		"api_key=LLMWIRE_MIMO_API_KEY", "emulate_opencode=true", "header_timeout=",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "secret") {
+		t.Errorf("the key's value reached the log: %s", got)
 	}
 }

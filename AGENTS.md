@@ -49,7 +49,8 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
 - `Stream` reader goroutine **never blocks** (unbounded queue): a blocked sink stops
   re-arming the guard. Caller `Close` is not an error.
 - `Timing` is **returned, never logged**, measured with `Config.Now`; set on error
-  paths too. No logger, ever.
+  paths too. `Config.Logger` (slog, default `slog.Default()`) gets one Info line
+  from `FromEnv` with the settings; the key by variable name, never value.
 - Wire mechanics live at their enforcement site. Read `stream.go`'s head comment
   before touching the parser.
 

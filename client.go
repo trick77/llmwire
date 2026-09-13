@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -94,6 +95,12 @@ type Config struct {
 	// is the single source of settings passes its getter; a test passes a
 	// map.
 	Lookup func(name string) (string, bool)
+	// Logger receives one Info line from FromEnv naming the settings the
+	// client was built with: model, provider, host, which key variable was
+	// read, the identity it presents and the bounds. Never the key itself.
+	// Nil means slog.Default(). A client built by New logs nothing: the
+	// caller chose every value by hand and has nothing to learn.
+	Logger *slog.Logger
 	// Registry supplies the model profiles this client validates against.
 	// Defaults to the built-in one. Injectable so a caller can add a deployment
 	// without waiting for it to be upstreamed here, and so tests can drive
@@ -287,14 +294,45 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 			cfg.EmulateOpenCode = true
 		}
 	}
+	keyVar := ""
 	if cfg.APIKey == "" && !p.NoAPIKey {
 		v := get(p.APIKeyEnv())
 		if v == "" {
 			return nil, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.APIKeyEnv()}
 		}
 		cfg.APIKey = v
+		keyVar = p.APIKeyEnv()
 	}
-	return New(cfg), nil
+	c := New(cfg)
+	logSettings(cfg.Logger, model, p, keyVar, c)
+	return c, nil
+}
+
+// logSettings is the one line FromEnv writes: everything an operator asks
+// "what is it actually talking to" about, at Info, with the key named by its
+// variable and never by its value.
+func logSettings(log *slog.Logger, model string, p *Profile, keyVar string, c *Client) {
+	if log == nil {
+		log = slog.Default()
+	}
+	key := "none"
+	switch {
+	case keyVar != "":
+		key = keyVar
+	case c.apiKey != "":
+		key = "config"
+	}
+	log.Info("llmwire client",
+		"model", model,
+		"provider", p.Provider,
+		"base_url", RedactURL(c.baseURL),
+		"api_key", key,
+		"emulate_opencode", c.session != nil,
+		"user_agent", c.userAgent,
+		"header_timeout", c.header,
+		"idle_timeout", c.idle,
+		"call_timeout", c.cap,
+	)
 }
 
 // MissingEnvError names the variable a profile's provider expects, so the fix
