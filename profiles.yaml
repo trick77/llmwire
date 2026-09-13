@@ -6,10 +6,12 @@
 # call, a cache, a staleness window and a fallback table, and this file is the
 # fallback table.
 #
-# Every entry marked `verified: measured` was established by a probe in
-# eval_probe_test.go against the live endpoint, and FINDINGS.md records what each
-# one saw. Six of those measurements contradict a vendor doc. Where they
-# disagree, this file follows the measurement.
+# Every entry marked `verified: measured` was probed in eval_probe_test.go
+# against the live endpoint, and FINDINGS.md records what each probe saw. The
+# flag is per profile; each bit's comment says MEASURED or NOT measured, and a
+# NOT measured bit is the vendor's documentation carried until a probe reads it.
+# Six of the measurements contradict a vendor doc. Where they disagree, this
+# file follows the measurement.
 #
 # Adding a model: follow ONBOARDING.md. In short: write the entry, run
 # `LLMWIRE_EVAL=1 go test -run Probe`, mark each bit's comment MEASURED or NOT
@@ -37,6 +39,9 @@ profiles:
 
     reasoning:
       supported: true
+      # NOT measured directly: no probe sent a request with no knob and read
+      # the reasoning tokens. Inferred from the endpoint's own refusal below,
+      # "This model always engages in thinking".
       enabled_by_default: true
       # MEASURED: thinking:{"type":"disabled"} is refused outright —
       #   status 400, code 1210
@@ -53,14 +58,17 @@ profiles:
       # message names only a subset of what it rejects. Dispatching on the prose
       # would be wrong twice over.
       effort_values: [low, high, max]
-      # The vendor's documented default and their recommendation for this model.
+      # NOT measured: the vendor's documented default and their recommendation
+      # for this model.
       default_effort: max
+      # MEASURED: reasoning arrived on this delta field on every probe.
       stream_field: reasoning_content
 
-    # Sent explicitly rather than omitted. The endpoint's own fallbacks are
-    # materially lower than the vendor's recommended operating point, so leaving
-    # these out does not mean "the model's defaults" — it means running the
-    # model off the point it was tuned for.
+    # NOT measured, vendor documentation. Sent explicitly rather than omitted:
+    # the endpoint's own fallbacks are materially lower than the vendor's
+    # recommended operating point, so leaving these out does not mean "the
+    # model's defaults" — it means running the model off the point it was tuned
+    # for.
     temperature:
       supported: true
       recommended_value: 1.0
@@ -70,6 +78,8 @@ profiles:
 
     tools:
       supported: true
+      # NOT measured: the tool-format probes ran against MiMo only. Documented
+      # as native; nothing has been seen to contradict it.
       format: native
       # Documented as auto-only. NOT measured: no probe offered a forced choice
       # to this endpoint, so this follows the doc and is the weakest line here.
@@ -77,11 +87,13 @@ profiles:
       supports_forced_choice: false
 
     output:
+      # MEASURED: accepted and the reply parsed as JSON.
       json_object: true
       # MEASURED: accepted and honoured, despite json_schema being absent from
       # Z.ai's OpenAPI enum and from their documentation entirely. A third-party
       # aggregator claimed support and was right.
       json_schema: true
+      # MEASURED: the probe sent "strict": true inside the json_schema block.
       strict_schema: true
 
     streaming:
@@ -91,11 +103,15 @@ profiles:
       needs_include_usage: false
       accepts_stream_options: true
 
+    # NOT measured, vendor documentation.
     limits:
       context: 1000000
       max_output: 131072
 
+    # NOT measured: the image probe ran against MiMo only. Vendor documentation.
     vision: true
+    # NOT measured: vendor documentation. Only "stop" and "length" have been
+    # seen from this endpoint.
     finish_reasons_extra: [sensitive, model_context_window_exceeded, network_error]
 
     # Published pay-as-you-go USD list rate, per 1M tokens, read from the
@@ -159,10 +175,13 @@ profiles:
 
     reasoning:
       supported: true
-      # Thinking is ON unless switched off.
+      # NOT measured: no probe sent the toggle to this endpoint in either
+      # direction. Thinking is ON unless switched off, per the vendor; the
+      # disable shape is vendor documentation.
       enabled_by_default: true
       can_be_disabled: true
       control: toggle_object
+      # MEASURED: reasoning arrived on this delta field on every probe.
       stream_field: reasoning_content
 
     # MEASURED behaviour, documented by the vendor: while thinking is on, these
@@ -190,25 +209,32 @@ profiles:
       # markup appears, so a clean answer costs nothing.
       format: native
       recover_inline_markup: true
-      # Documented auto-only; anything else is silently DROPPED by the backend
-      # rather than rejected, so a caller asking for a forced call would get an
-      # unforced one with no error.
+      # NOT measured, vendor documentation: documented auto-only; anything
+      # else is silently DROPPED by the backend rather than rejected, so a
+      # caller asking for a forced call would get an unforced one with no
+      # error. No probe offered a forced choice here either.
       tool_choice_values: [auto]
       supports_forced_choice: false
+      # NOT measured: no probe offered two tools in one turn.
       supports_parallel: true
 
     output:
+      # MEASURED: accepted and the reply parsed as JSON.
       json_object: true
       # MEASURED: accepted and honoured, though the vendor documents only
       # json_object.
       json_schema: true
+      # MEASURED: the probe sent "strict": true inside the json_schema block.
       strict_schema: true
 
+    # MEASURED both ways: usage arrives without asking, and stream_options is
+    # accepted.
     streaming:
       supported: true
       needs_include_usage: false
       accepts_stream_options: true
 
+    # NOT measured, vendor documentation.
     limits:
       context: 1048576
       max_output: 131072
@@ -218,6 +244,8 @@ profiles:
     # module errors rather than rerouting: they are different models with
     # different capabilities, and a silent swap would misattribute cost.
     vision: false
+    # NOT measured: vendor documentation. Only "stop" and "length" have been
+    # seen from this endpoint.
     finish_reasons_extra: [repetition_truncation]
 
     # Published pay-as-you-go USD list rate per 1M tokens, from the vendor's own
@@ -258,8 +286,16 @@ profiles:
     provider: mimo
     verified: measured
 
+    # Two bits were measured on this model: vision and the tool-call format.
+    # Every other bit below is NOT measured; it is the -pro entry's value,
+    # carried over on the strength of a shared serving layer and the vendor's
+    # documentation. The output-cap, reasoning, response-format and usage
+    # probes ran against -pro only.
+
+    # NOT measured here; measured on -pro (both names honoured).
     max_tokens_param: max_completion_tokens
 
+    # NOT measured, vendor documentation.
     reasoning:
       supported: true
       enabled_by_default: true
@@ -267,6 +303,7 @@ profiles:
       control: toggle_object
       stream_field: reasoning_content
 
+    # NOT measured, vendor documentation; same statement as for -pro.
     temperature:
       supported: true
       inert_while_reasoning: true
@@ -276,29 +313,35 @@ profiles:
 
     tools:
       supported: true
+      # MEASURED: native tool_calls, with tools offered and on a tool-free call.
       format: native
       # Same serving layer as -pro; see the note there.
       recover_inline_markup: true
+      # NOT measured, vendor documentation.
       tool_choice_values: [auto]
       supports_forced_choice: false
       supports_parallel: true
 
+    # NOT measured here; measured on -pro.
     output:
       json_object: true
       json_schema: true
       strict_schema: true
 
+    # NOT measured here; measured on -pro.
     streaming:
       supported: true
       needs_include_usage: false
       accepts_stream_options: true
 
+    # NOT measured, vendor documentation.
     limits:
       context: 1048576
       max_output: 32768
 
     # MEASURED: accepts the same image part that 404s on -pro.
     vision: true
+    # NOT measured: vendor documentation.
     finish_reasons_extra: [repetition_truncation]
 
     # Same page and same caveats as mimo-v2.5-pro above: list USD rate, not the
