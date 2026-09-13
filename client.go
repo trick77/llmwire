@@ -252,7 +252,9 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 		return nil, err
 	}
 	if cfg.BaseURL != "" {
-		return New(cfg), nil
+		c := New(cfg)
+		logSettings(cfg.Logger, model, p, "", c)
+		return c, nil
 	}
 	if p.Provider == "" {
 		return nil, &MissingEnvError{Model: model}
