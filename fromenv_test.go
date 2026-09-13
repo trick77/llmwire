@@ -255,6 +255,47 @@ func TestFromEnv_identityFollowsTheProvider(t *testing.T) {
 	}
 }
 
+// LLMWIRE_EMULATE_OPENCODE adds the identity on a provider that does not carry
+// it; false leaves the provider's own setting alone; a non-boolean is refused.
+func TestFromEnv_emulateOpenCodeEnv(t *testing.T) {
+	t.Setenv("LLMWIRE_MIMO_BASE_URL", "")
+	t.Setenv("LLMWIRE_MIMO_API_KEY", "k")
+	t.Setenv("LLMWIRE_ZAI_API_KEY", "k")
+	for _, tc := range []struct {
+		value   string
+		zaiOn   bool
+		wantErr bool
+	}{
+		{"1", true, false},
+		{"true", true, false},
+		{"0", false, false},
+		{"false", false, false},
+		{"yes", false, true},
+	} {
+		t.Setenv(EmulateOpenCodeEnv, tc.value)
+		zai, err := FromEnv("glm-5.3-flash", Config{})
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("%s=%q: want error, got client", EmulateOpenCodeEnv, tc.value)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s=%q: %v", EmulateOpenCodeEnv, tc.value, err)
+		}
+		if got := zai.session != nil; got != tc.zaiOn {
+			t.Errorf("%s=%q: zai emulates=%v, want %v", EmulateOpenCodeEnv, tc.value, got, tc.zaiOn)
+		}
+		mimo, err := FromEnv("mimo-v2.5-pro", Config{})
+		if err != nil {
+			t.Fatalf("%s=%q: mimo: %v", EmulateOpenCodeEnv, tc.value, err)
+		}
+		if mimo.session == nil {
+			t.Errorf("%s=%q: mimo lost its provider's identity", EmulateOpenCodeEnv, tc.value)
+		}
+	}
+}
+
 // A derived profile's host follows ITS provider, not its base's: the route is
 // what changes when a model is reached through a gateway.
 func TestRegistry_derivedProfileTakesItsOwnProvidersHost(t *testing.T) {

@@ -60,7 +60,8 @@ truth, comment standard) and the head comment of `profiles.yaml`.
   as a bot (`identity.go` head comment; MiMo's Token Plan host does). Probe
   with the default UA first; if refused, `emulate_opencode: true` on the
   `providers:` entry, so `FromEnv` presents as that client and no application
-  has to know.
+  has to know. `LLMWIRE_EMULATE_OPENCODE=1` forces it for any provider, e.g. a
+  gateway in front of such a host; default off.
 - **Key in the query string?** Some deployments carry it there
   (`api_key`, `key`, `token`, `access_token`) and their error bodies echo it.
   `Redact`/`RedactURL` handle the known names; a new name needs adding

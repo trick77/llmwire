@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -113,6 +114,12 @@ type Config struct {
 
 // DefaultUserAgent is what this package sends when Config.UserAgent is empty.
 const DefaultUserAgent = "llmwire/0.1 (+https://github.com/trick77/llmwire)"
+
+// EmulateOpenCodeEnv is the variable FromEnv reads to present as opencode on a
+// provider profiles.yaml does not mark. Global, not per provider; boolean per
+// strconv.ParseBool; unset or false leaves the provider's own setting in
+// place. It adds the identity, never removes it.
+const EmulateOpenCodeEnv = "LLMWIRE_EMULATE_OPENCODE"
 
 // Client is a transport for one endpoint.
 type Client struct {
@@ -224,7 +231,10 @@ func New(cfg Config) *Client {
 //
 // A provider marked emulate_opencode in profiles.yaml gets Config.EmulateOpenCode
 // set here, which replaces a cfg.UserAgent the caller supplied: on such a host
-// the caller's own string is exactly what gets refused.
+// the caller's own string is exactly what gets refused. EmulateOpenCodeEnv set
+// true does the same for any provider, marked or not: a gateway fronting such
+// a host is not in profiles.yaml, and the operator running it knows. A value
+// that is not a boolean is an error, never ignored.
 func FromEnv(model string, cfg Config) (*Client, error) {
 	reg := cfg.Registry
 	if reg == nil {
@@ -267,6 +277,15 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	// wiring the endpoint itself, identity included.
 	if p.EmulateOpenCode {
 		cfg.EmulateOpenCode = true
+	}
+	if v := get(EmulateOpenCodeEnv); v != "" {
+		on, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("llmwire: %s=%q is not a boolean", EmulateOpenCodeEnv, v)
+		}
+		if on {
+			cfg.EmulateOpenCode = true
+		}
 	}
 	if cfg.APIKey == "" && !p.NoAPIKey {
 		v := get(p.APIKeyEnv())
