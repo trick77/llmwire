@@ -7,6 +7,9 @@ import (
 )
 
 func TestFromEnv(t *testing.T) {
+	// The operator's switch lives in the same .env the eval harness exports;
+	// pin it so a local value neither adds the identity nor refuses the client.
+	t.Setenv(EnvEmulateOpenCode, "")
 	t.Run("a URL variable for a shipped host is the old contract and is refused", func(t *testing.T) {
 		t.Setenv("LLMWIRE_ZAI_BASE_URL", "https://api.example/v4/")
 		t.Setenv("LLMWIRE_ZAI_API_KEY", "k")
@@ -236,6 +239,7 @@ func TestEveryEmbeddedVendorProviderShipsAHost(t *testing.T) {
 // The identity follows the provider: a host sold as opencode's backend gets
 // the client string from FromEnv, and no application has to know to ask.
 func TestFromEnv_identityFollowsTheProvider(t *testing.T) {
+	t.Setenv(EnvEmulateOpenCode, "")
 	t.Setenv("LLMWIRE_MIMO_BASE_URL", "")
 	t.Setenv("LLMWIRE_MIMO_API_KEY", "k")
 	t.Setenv("LLMWIRE_ZAI_API_KEY", "k")

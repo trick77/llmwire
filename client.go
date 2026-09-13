@@ -89,7 +89,8 @@ type Config struct {
 	// pinned for pricing reports every duration as zero.
 	Now func() time.Time
 
-	// Lookup is where FromEnv reads a profile's endpoint variables from. Nil
+	// Lookup is where FromEnv reads its variables from (a profile's endpoint
+	// variables and EnvEmulateOpenCode). Nil
 	// means the process environment. An application whose own config loader
 	// is the single source of settings passes its getter; a test passes a
 	// map.
@@ -222,11 +223,13 @@ const EnvEmulateOpenCode = "LLMWIRE_EMULATE_OPENCODE"
 // and diverge; a different host is a different provider entry.
 //
 // A cfg.BaseURL already set means the caller is wiring the endpoint itself,
-// and no variable is consulted at all: cfg.APIKey goes as given, empty
+// and no endpoint variable is consulted: cfg.APIKey goes as given, empty
 // included. The provider's key belongs to the provider's host, and a test
 // fake or a stand-in endpoint must not be handed it just because the model is
 // the same. With cfg.BaseURL empty, a cfg.APIKey already set still wins over
-// the variable.
+// the variable. EnvEmulateOpenCode is the one variable read on both paths:
+// the operator's identity switch applies to whatever host the client talks
+// to.
 //
 // A key variable that is unset or empty is a MissingEnvError, never a
 // fallback. A profile with no_api_key sends no key at all, which is the
@@ -286,8 +289,9 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	}
 	// The identity follows the host: a provider sold as opencode's backend
 	// gets that client string without every application knowing to ask. An
-	// explicit cfg.BaseURL returned above and gets nothing: the caller is
-	// wiring the endpoint itself, identity included.
+	// explicit cfg.BaseURL returned above and gets only what the caller or
+	// the EnvEmulateOpenCode switch set: the caller is wiring the endpoint
+	// itself, and the provider's mark is about the provider's host.
 	if p.EmulateOpenCode {
 		cfg.EmulateOpenCode = true
 	}
