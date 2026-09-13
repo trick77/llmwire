@@ -230,8 +230,8 @@ type endpoint struct {
 }
 
 var (
-	mimoEndpoint = endpoint{"mimo", "LLMWIRE_EVAL_MIMO_BASE_URL", "LLMWIRE_EVAL_MIMO_API_KEY"}
-	zaiEndpoint  = endpoint{"zai", "LLMWIRE_EVAL_ZAI_BASE_URL", "LLMWIRE_EVAL_ZAI_API_KEY"}
+	mimoEndpoint = endpoint{"mimo", "LLMWIRE_MIMO_BASE_URL", "LLMWIRE_MIMO_API_KEY"}
+	zaiEndpoint  = endpoint{"zai", "LLMWIRE_ZAI_BASE_URL", "LLMWIRE_ZAI_API_KEY"}
 )
 
 // client builds a Client for an endpoint, or skips with a named reason.

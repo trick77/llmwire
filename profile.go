@@ -2,6 +2,7 @@ package llmwire
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -217,8 +218,15 @@ type Profile struct {
 	// WireModelID is what goes in the request body's "model" field, which is not
 	// always the ID a caller uses: behind a gateway it is the proxy's alias.
 	WireModelID string `yaml:"wire_model_id"`
-	BaseURLEnv  string `yaml:"base_url_env"`
-	APIKeyEnv   string `yaml:"api_key_env"`
+	// Provider names the host and account this model is reached through:
+	// zai, mimo, openai, litellm. It decides the environment variables
+	// FromEnv reads, LLMWIRE_<PROVIDER>_BASE_URL and _API_KEY, so two profiles
+	// on one host cannot name different variables. Lowercase letters and
+	// digits only; it is uppercased into the variable name.
+	Provider string `yaml:"provider"`
+	// NoAPIKey marks a host that authenticates nothing: FromEnv sends no
+	// Authorization header and does not look for the key variable.
+	NoAPIKey bool `yaml:"no_api_key"`
 
 	// MaxTokensParam is which output-cap parameter this endpoint honours.
 	// Getting it wrong is not always an error: one endpoint accepts the wrong
@@ -280,7 +288,7 @@ const (
 // exposes a narrower model, that is a different model and gets its own profile.
 var derivedAllowedKeys = map[string]bool{
 	"id": true, "base": true, "gateway": true,
-	"wire_model_id": true, "base_url_env": true, "api_key_env": true,
+	"wire_model_id": true, "provider": true, "no_api_key": true,
 	"endpoint": true, "max_tokens_param": true,
 	"verified": true, "notes": true,
 	// These two are allowed only for the specific sub-keys in
@@ -328,11 +336,15 @@ func (p Profile) resolve(base Profile) Profile {
 	if p.WireModelID != "" {
 		out.WireModelID = p.WireModelID
 	}
-	if p.BaseURLEnv != "" {
-		out.BaseURLEnv = p.BaseURLEnv
-	}
-	if p.APIKeyEnv != "" {
-		out.APIKeyEnv = p.APIKeyEnv
+	if p.Provider != "" {
+		out.Provider = p.Provider
+		// The flag belongs to the host, not the model: a new provider is a
+		// new host, and whether it authenticates is the derived profile's to
+		// say. Without this a keyed gateway in front of a keyless base would
+		// inherit "no key" and be answered with a 401.
+		out.NoAPIKey = p.NoAPIKey
+	} else if p.NoAPIKey {
+		out.NoAPIKey = true
 	}
 	if p.Endpoint != "" {
 		out.Endpoint = p.Endpoint
@@ -393,6 +405,9 @@ func (p Profile) validate() error {
 	}
 	if p.WireModelID == "" {
 		return bad("wire_model_id is empty; it is what goes on the wire and is not defaulted from id")
+	}
+	if p.Provider != "" && !providerName.MatchString(p.Provider) {
+		return bad("provider %q must be lowercase letters and digits, it becomes the LLMWIRE_<PROVIDER>_BASE_URL variable name", p.Provider)
 	}
 	switch p.Verified {
 	case VerifiedMeasured, VerifiedSource:
@@ -589,4 +604,27 @@ func copyFloat(p *float64) *float64 {
 	}
 	v := *p
 	return &v
+}
+
+var providerName = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
+
+// BaseURLEnv is the variable FromEnv reads the endpoint root from:
+// LLMWIRE_<PROVIDER>_BASE_URL. Empty when the profile names no provider.
+func (p Profile) BaseURLEnv() string { return p.providerVar("BASE_URL") }
+
+// APIKeyEnv is the variable FromEnv reads the bearer token from:
+// LLMWIRE_<PROVIDER>_API_KEY. Empty when the profile names no provider or
+// takes no key.
+func (p Profile) APIKeyEnv() string {
+	if p.NoAPIKey {
+		return ""
+	}
+	return p.providerVar("API_KEY")
+}
+
+func (p Profile) providerVar(field string) string {
+	if p.Provider == "" {
+		return ""
+	}
+	return "LLMWIRE_" + strings.ToUpper(p.Provider) + "_" + field
 }
