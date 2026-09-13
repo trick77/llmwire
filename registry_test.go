@@ -225,6 +225,56 @@ func TestNewRegistry_RejectsMalformedDocuments(t *testing.T) {
 func TestNewRegistry_RejectsContradictoryReasoning(t *testing.T) {
 	for _, tc := range []struct{ name, doc, wantSubstr string }{
 		{
+			name: "levels beside a toggle on a model that is off",
+			doc: `profiles:
+  - id: a
+    wire_model_id: a
+    max_tokens_param: max_tokens
+    verified: measured
+    reasoning:
+      supported: true
+      enabled_by_default: false
+      can_be_disabled: true
+      control: toggle_object
+      effort_values: [low, high]
+`,
+			wantSubstr: "not enabled_by_default",
+		},
+		{
+			name: "toggle default effort outside its levels",
+			doc: `profiles:
+  - id: a
+    wire_model_id: a
+    max_tokens_param: max_tokens
+    verified: measured
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: true
+      control: toggle_object
+      effort_values: [low, high]
+      default_effort: max
+`,
+			wantSubstr: "not in effort_values",
+		},
+		{
+			name: "levels on a budget model",
+			doc: `profiles:
+  - id: a
+    wire_model_id: a
+    max_tokens_param: max_tokens
+    verified: measured
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: true
+      control: budget_tokens
+      budget_param: thinking_budget
+      effort_values: [low, high]
+`,
+			wantSubstr: "takes no levels",
+		},
+		{
 			name: "cannot disable yet offers none",
 			doc: `profiles:
   - id: a
