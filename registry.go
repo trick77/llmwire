@@ -40,6 +40,11 @@ type Provider struct {
 	// Empty means the library ships no host for this provider (a self-hosted
 	// gateway), and LLMWIRE_<PROVIDER>_BASE_URL is then required.
 	BaseURL string `yaml:"base_url"`
+	// EmulateOpenCode: this host is sold as opencode's backend and refuses a
+	// neutral User-Agent as a bot, so FromEnv presents as that client. A
+	// property of the host, which is why it is here and not in every
+	// application's configuration. See Config.EmulateOpenCode.
+	EmulateOpenCode bool `yaml:"emulate_opencode"`
 }
 
 var (
@@ -175,6 +180,7 @@ func NewRegistry(doc []byte) (*Registry, error) {
 			}
 		}
 		p.BaseURL = providers[p.Provider].BaseURL
+		p.EmulateOpenCode = providers[p.Provider].EmulateOpenCode
 		stored := p
 		reg.byID[p.ID] = &stored
 	}

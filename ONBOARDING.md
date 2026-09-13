@@ -58,8 +58,9 @@ truth, comment standard) and the head comment of `profiles.yaml`.
   both, with a test, before the first probe logs anything.
 - **User-Agent.** A host sold as one client's backend may refuse a neutral UA
   as a bot (`identity.go` head comment; MiMo's Token Plan host does). Probe
-  with the default UA first; if refused, `Config.EmulateOpenCode` and record
-  that in the profile's provider banner comment.
+  with the default UA first; if refused, `emulate_opencode: true` on the
+  `providers:` entry, so `FromEnv` presents as that client and no application
+  has to know.
 - **Key in the query string?** Some deployments carry it there
   (`api_key`, `key`, `token`, `access_token`) and their error bodies echo it.
   `Redact`/`RedactURL` handle the known names; a new name needs adding

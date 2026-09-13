@@ -218,6 +218,10 @@ func New(cfg Config) *Client {
 // A key variable that is unset or empty is a MissingEnvError, never a
 // fallback. A profile with no_api_key sends no key at all, which is the
 // self-hosted case.
+//
+// A provider marked emulate_opencode in profiles.yaml gets Config.EmulateOpenCode
+// set here, which replaces a cfg.UserAgent the caller supplied: on such a host
+// the caller's own string is exactly what gets refused.
 func FromEnv(model string, cfg Config) (*Client, error) {
 	reg := cfg.Registry
 	if reg == nil {
@@ -247,6 +251,16 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	cfg.BaseURL = p.BaseURL
 	if v := get(p.BaseURLEnv()); v != "" {
 		cfg.BaseURL = v
+	}
+	// The identity follows the host: a provider sold as opencode's backend
+	// gets that client string without every application knowing to ask. The
+	// LLMWIRE_<PROVIDER>_BASE_URL override keeps it, since the headers are
+	// inert on a host that does not care and the override is usually the
+	// same vendor's other plan. An explicit cfg.BaseURL returned above and
+	// gets nothing: the caller is wiring the endpoint itself, identity
+	// included.
+	if p.EmulateOpenCode {
+		cfg.EmulateOpenCode = true
 	}
 	if cfg.BaseURL == "" {
 		return nil, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()}
