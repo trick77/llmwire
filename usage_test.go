@@ -143,6 +143,19 @@ func TestUsage_ReportedAndTotal(t *testing.T) {
 	}
 }
 
+func TestTokens_ReadsALaneOrZero(t *testing.T) {
+	u := parseUsage(json.RawMessage(`{"prompt_tokens":25,"completion_tokens":47,"prompt_tokens_details":{"cached_tokens":0}}`))
+	if got := Tokens(u.Input.Total); got != 25 {
+		t.Errorf("Tokens(Input.Total) = %d, want 25", got)
+	}
+	if got := Tokens(u.Input.CacheRead); got != 0 || u.Input.CacheRead == nil {
+		t.Errorf("a reported zero reads 0 and stays reported: got %d, lane nil=%v", got, u.Input.CacheRead == nil)
+	}
+	if got := Tokens(u.Output.Reasoning); got != 0 || u.Output.Reasoning != nil {
+		t.Errorf("an absent lane reads 0 and stays nil: got %d, lane nil=%v", got, u.Output.Reasoning == nil)
+	}
+}
+
 func TestWireUsage_ReportedDistinguishesNullFromPopulated(t *testing.T) {
 	for _, tc := range []struct {
 		name string

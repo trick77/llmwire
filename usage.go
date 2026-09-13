@@ -76,6 +76,19 @@ func (u Usage) Total() (total int64, ok bool) {
 	return total, true
 }
 
+// Tokens reads one lane for a log line or a running total: the count, or 0
+// when the endpoint did not report it. The pointer exists so that "not
+// reported" and "reported zero" stay distinct — a consumer that needs the
+// distinction checks nil or Reported() itself; one that is about to print or
+// sum the number does not, and every such consumer was carrying its own
+// three-line copy of this. Exported for the same reason Truncate is.
+func Tokens(lane *int64) int64 {
+	if lane == nil {
+		return 0
+	}
+	return *lane
+}
+
 // InputTokens is the prompt side. Total is what the endpoint billed as prompt
 // tokens; the rest break that total down where the endpoint says.
 type InputTokens struct {
