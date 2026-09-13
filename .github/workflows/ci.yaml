@@ -66,7 +66,7 @@ jobs:
       # refs/remotes/origin/<base> is not guaranteed to exist even with
       # fetch-depth: 0. Fetch it explicitly before the gates diff against it.
       - name: Fetch base ref
-        run: git fetch --no-tags origin +refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+        run: git fetch --no-tags origin +refs/heads/${{ github.base_ref || 'master' }}:refs/remotes/origin/${{ github.base_ref || 'master' }}
       # The floor gate runs first: when a PR drops the project below the floor
       # the absolute number is the more actionable failure, and reporting it
       # before patch coverage keeps the log readable.
