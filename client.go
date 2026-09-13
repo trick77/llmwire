@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -196,6 +197,15 @@ func New(cfg Config) *Client {
 	return c
 }
 
+// EnvEmulateOpenCode is the operator's switch for the opencode identity, read
+// by FromEnv: "true" presents every request as that client (see
+// Config.EmulateOpenCode), on any host. A provider marked emulate_opencode in
+// profiles.yaml presents that way regardless of this variable; the switch
+// adds the identity for a host the profiles do not mark and never removes it.
+// Any value strconv.ParseBool accepts; anything else is refused at
+// construction.
+const EnvEmulateOpenCode = "LLMWIRE_EMULATE_OPENCODE"
+
 // FromEnv builds a Client for one model. The host comes from the profile's
 // provider (profiles.yaml providers:), the key from the environment variable
 // that provider implies, LLMWIRE_<PROVIDER>_API_KEY. An application supplies a
@@ -234,12 +244,6 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.BaseURL != "" {
-		return New(cfg), nil
-	}
-	if p.Provider == "" {
-		return nil, &MissingEnvError{Model: model}
-	}
 	lookup := cfg.Lookup
 	if lookup == nil {
 		lookup = os.LookupEnv
@@ -250,6 +254,25 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	get := func(name string) string {
 		v, _ := lookup(name)
 		return strings.TrimSpace(v)
+	}
+	// The operator's switch for the identity, read before the explicit-URL
+	// return below so it reaches a client that wires its own endpoint too. It
+	// only adds: a provider marked emulate_opencode keeps the identity on
+	// "false", and so does a caller who set cfg.EmulateOpenCode.
+	if v := get(EnvEmulateOpenCode); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("llmwire: %s=%q is not a boolean", EnvEmulateOpenCode, v)
+		}
+		if b {
+			cfg.EmulateOpenCode = true
+		}
+	}
+	if cfg.BaseURL != "" {
+		return New(cfg), nil
+	}
+	if p.Provider == "" {
+		return nil, &MissingEnvError{Model: model}
 	}
 	cfg.BaseURL = p.BaseURL
 	if v := get(p.BaseURLEnv()); v != "" {

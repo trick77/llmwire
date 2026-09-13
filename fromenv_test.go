@@ -299,3 +299,48 @@ func TestRegistry_profileProviderMustExistWhenProvidersAreDeclared(t *testing.T)
 		t.Fatalf("got %v, want a load error naming the typo", err)
 	}
 }
+
+// LLMWIRE_EMULATE_OPENCODE is the operator's switch: true adds the identity on
+// a host the profiles do not mark, false takes nothing away from one they do,
+// and a value that is not a boolean is refused with the variable named.
+func TestFromEnv_emulateOpenCodeSwitch(t *testing.T) {
+	t.Setenv("LLMWIRE_MIMO_API_KEY", "k")
+	t.Setenv("LLMWIRE_ZAI_API_KEY", "k")
+
+	t.Setenv(EnvEmulateOpenCode, "true")
+	zai, err := FromEnv("glm-5.3-flash", Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zai.session == nil {
+		t.Error("zai with the switch on: client presents as neutral")
+	}
+	explicit, err := FromEnv("glm-5.3-flash", Config{BaseURL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.session == nil {
+		t.Error("explicit BaseURL with the switch on: client presents as neutral")
+	}
+
+	t.Setenv(EnvEmulateOpenCode, "false")
+	mimo, err := FromEnv("mimo-v2.5-pro", Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mimo.session == nil {
+		t.Error("mimo with the switch off: the provider flag must keep the identity")
+	}
+	zai, err = FromEnv("glm-5.3-flash", Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zai.session != nil {
+		t.Error("zai with the switch off: client presents as opencode")
+	}
+
+	t.Setenv(EnvEmulateOpenCode, "yes please")
+	if _, err := FromEnv("glm-5.3-flash", Config{}); err == nil || !strings.Contains(err.Error(), EnvEmulateOpenCode) {
+		t.Fatalf("garbage value: err = %v, want the variable named", err)
+	}
+}

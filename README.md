@@ -121,8 +121,9 @@ is surfaced rather than read as an empty answer.
 **Can present as opencode.** Some endpoints are sold as one client's backend and
 treat a neutral `User-Agent` as a bot. A provider marked `emulate_opencode` in
 `profiles.yaml` gets opencode's client string and its session header pair from
-`FromEnv`; a client built with an explicit `Config.BaseURL` sets
-`EmulateOpenCode: true` by hand. Headers only, never a request body. The session id is the client's own — minted at construction,
+`FromEnv`; `LLMWIRE_EMULATE_OPENCODE=true` is the operator's switch for a host
+the profiles do not mark (it adds the identity, never removes it), and a client
+built with an explicit `Config.BaseURL` can set `EmulateOpenCode: true` by hand. Headers only, never a request body. The session id is the client's own — minted at construction,
 rotated after a 30-minute idle gap, the way a person's session starts and ends —
 and there is deliberately no way to supply one.
 
