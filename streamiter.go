@@ -156,7 +156,8 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 // read consumes the stream on its own goroutine and publishes the result.
 func (s *Stream) read(resp *http.Response, pl *wirePlan, at time.Time) {
 	var counters streamCounters
-	res, err := readStream(resp.Body, s.guard, &counters, s.client.idle, s.push, s.client.redact)
+	res, inlineWarnings, err := readStream(resp.Body, s.guard, &counters, s.client.idle, s.push, s.client.redact,
+		pl.profile.Tools.recoversInline())
 
 	resp.Body.Close()
 	s.guard.stop()
@@ -190,6 +191,7 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at time.Time) {
 	// Written before the reader is marked finished, and read only after Next has
 	// observed that flag, so the mutex also carries the happens-before edge for
 	// res and err.
+	s.warnings = append(s.warnings, inlineWarnings...)
 	s.warnings = append(s.warnings, priceWarnings...)
 	s.res, s.err = res, err
 	s.closed = true

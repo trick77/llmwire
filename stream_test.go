@@ -18,7 +18,8 @@ func readFixture(t *testing.T, body string) (StreamResult, error) {
 	guard := newStallGuard(cancel, time.Hour, stallHeaders)
 	defer guard.stop()
 	var counters streamCounters
-	return readStream(strings.NewReader(body), guard, &counters, time.Hour, nil, Redact)
+	res, _, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, nil, Redact, false)
+	return res, err
 }
 
 // The usage object arrives in a trailing chunk with an EMPTY choices array,
@@ -328,11 +329,11 @@ data: {"choices":[{"delta":{"content":"two"},"finish_reason":"stop"}]}
 	defer guard.stop()
 	var counters streamCounters
 	var got []string
-	res, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, func(ev streamEvent) {
+	res, _, err := readStream(strings.NewReader(body), guard, &counters, time.Hour, func(ev streamEvent) {
 		if ev.kind == evContent {
 			got = append(got, ev.text)
 		}
-	}, Redact)
+	}, Redact, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

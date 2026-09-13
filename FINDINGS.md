@@ -39,10 +39,11 @@ prompt describing a prior search, not a genuine multi-round tool history, and
 loom's observation is of production traffic after real tool rounds. Two
 explanations fit equally well: the serving layer gained the `mimo` parser after
 loom's code was written, or the leak needs a longer, tool-saturated history than
-a probe reproduces. Inline recovery therefore ships as an **opt-in profile
-capability**, defaulting off for these deployments, rather than as dead code
-removed or live code always running. That keeps the machinery one profile flag
-away if loom's case resurfaces during its migration.
+a probe reproduces. Inline recovery therefore ships as a **profile capability**
+(`tools.recover_inline_markup`), implemented in `inline.go` from loom's parser
+and its production captures, and switched ON for both MiMo profiles: it acts
+only when the markup appears, so a clean answer costs nothing, and a leak that
+does resurface is recovered instead of reaching a user.
 
 ### 2. `reasoning_content` need not be replayed in history
 
@@ -218,5 +219,5 @@ prompt sent twice per vendor. Both well inside the $0.50 circuit breaker.
   burn. Both vendors document them as credit coefficients.
 - **Whether inline tool markup can still appear at all.** Neither probe
   reproduced it, but neither reproduced loom's exact conditions either: a long,
-  tool-saturated history in production. The capability stays in the profile
-  schema, defaulted off, and loom's migration is where it gets a real test.
+  tool-saturated history in production. Recovery is on for the MiMo profiles;
+  the `tool_calls` warning it emits is how a recurrence gets noticed.

@@ -327,7 +327,8 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 		}
 	}
 
-	res, err := readStream(resp.Body, guard, &counters, c.idle, sink, c.redact)
+	// Below profile resolution, so no inline recovery: the caller owns the body.
+	res, _, err := readStream(resp.Body, guard, &counters, c.idle, sink, c.redact, false)
 	if err != nil {
 		return res, c.explain(ctx, callCtx, guard, err)
 	}

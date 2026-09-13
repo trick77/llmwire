@@ -45,6 +45,12 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	if err != nil {
 		return nil, warnings, err
 	}
+	if pl.profile.Tools.recoversInline() {
+		rec := recoverInline(resp.Content, resp.Reasoning, len(resp.ToolCalls))
+		resp.Content, resp.Reasoning = rec.content, rec.reasoning
+		resp.ToolCalls = append(resp.ToolCalls, rec.calls...)
+		warnings = append(warnings, rec.warnings()...)
+	}
 	cost, priceWarnings := priceCall(pl.profile, resp.Usage, hdr, 200, at)
 	resp.Usage.Cost = cost
 	return resp, append(warnings, priceWarnings...), nil

@@ -5,8 +5,8 @@ endpoints — chat, tools, vision and embeddings — with each model's quirks ke
 data rather than scattered through call sites.
 
 > **Status: under construction.** `Chat`, `ChatStream` and `Embed` work against
-> the profiled endpoints; pricing, the LiteLLM gateway and inline tool-call
-> recovery are still landing. The API is not stable yet.
+> the profiled endpoints; pricing and the LiteLLM gateway are still landing. The
+> API is not stable yet.
 
 ```go
 // Base URL and key come from LLMWIRE_<PROVIDER>_BASE_URL and _API_KEY, with
@@ -93,6 +93,15 @@ routed over a subscription host is billed in plan credits nobody can compare
 across models. Behind a gateway the cost comes from the proxy's own header or not
 at all. A rate we have not verified reports `Unpriced` and warns, because zero
 means unknown, not free.
+
+**Recovers tool calls a model wrote as markup.** Some deployments answer with
+`<tool_call>…</tool_call>` blocks (or an invented `<tool_invocation …/>`) in the
+content instead of the native `tool_calls` field, on tool-free calls too. A
+profile with `tools.recover_inline_markup` has that markup withheld from streamed
+deltas, the calls surfaced as tool-call events (name first, arguments when they
+land, `EventFinish` last) and cut from the returned text, with a `Warning` saying
+what was recovered or that text was cut with nothing coming out of it. The
+returned text is what streamed: everything from the first marker on is gone.
 
 **Shows what the endpoint really sent.** `NewSpoolTransport(dir, next, skip)` is
 an `http.RoundTripper` that writes every response — status line, headers, body

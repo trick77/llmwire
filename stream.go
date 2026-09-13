@@ -158,14 +158,6 @@ type streamCounters struct {
 	chars  atomic.Int64
 }
 
-// readStream consumes an SSE body.
-//
-// The idle guard is re-armed on `data:` frames ONLY — never on blank separators
-// or on SSE comment lines (": ping"). Those prove the connection is alive but
-// say nothing about the model making progress, and an upstream that emits them
-// on a timer would otherwise mask a model that has stalled completely. Reasoning
-// deltas are real data frames, so a legitimately long thinking phase still
-// re-arms the guard and is unaffected by this rule.
 // streamEvent is one increment the reader hands onward. Every channel the parser
 // understands is represented, not only content: an iterator that could not see
 // reasoning deltas or tool-call fragments would be strictly weaker than the
@@ -187,7 +179,22 @@ const (
 	evFinish
 )
 
-func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idle time.Duration, sink func(streamEvent), redact redactor) (StreamResult, error) {
+// readStream consumes an SSE body.
+//
+// The idle guard is re-armed on `data:` frames ONLY — never on blank separators
+// or on SSE comment lines (": ping"). Those prove the connection is alive but
+// say nothing about the model making progress, and an upstream that emits them
+// on a timer would otherwise mask a model that has stalled completely. Reasoning
+// deltas are real data frames, so a legitimately long thinking phase still
+// re-arms the guard and is unaffected by this rule.
+//
+// With recover set, content and reasoning deltas pass through an inline gate
+// before reaching the sink (see inline.go): text before a marker streams as
+// usual, the markup and everything after it is withheld, the first call's name
+// is surfaced as a tool-call event as soon as it parses, and the calls recovered
+// at the end are emitted as one fragment each. The returned warnings say what
+// recovery found.
+func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idle time.Duration, sink func(streamEvent), redact redactor, recover bool) (StreamResult, []Warning, error) {
 	var (
 		content   strings.Builder
 		reasoning strings.Builder
@@ -195,6 +202,48 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 		tools     = map[int]*ToolCall{}
 		order     []int
 	)
+	emit := func(ev streamEvent) {
+		if sink != nil {
+			sink(ev)
+		}
+	}
+
+	// Gates exist only when the profile asks for recovery; a nil gate passes
+	// text straight through.
+	var contentGate, reasoningGate *inlineGate
+	if recover {
+		contentGate, reasoningGate = &inlineGate{}, &inlineGate{}
+	}
+	// earlyName records which channel the first inline call's name went out
+	// from, under inlineToolCallID(0). When the call is then recovered from that
+	// same channel its final fragment carries the arguments only; a consumer
+	// that assigns the name on first sight is not told twice. Recovered from
+	// the other channel, the final fragment names the call again, because the
+	// early name may have been a different block's.
+	earlyName := ""
+	gated := func(g *inlineGate, kind eventKind, text string, buf *strings.Builder) {
+		buf.WriteString(text)
+		if g == nil {
+			emit(streamEvent{kind: kind, text: text})
+			return
+		}
+		if out := g.push(text); out != "" {
+			emit(streamEvent{kind: kind, text: out})
+		}
+		if !g.suppressed || earlyName != "" {
+			return
+		}
+		if name := firstInlineToolName(buf.String()); name != "" {
+			earlyName = map[eventKind]string{evContent: "content", evReasoning: "reasoning"}[kind]
+			var tc toolCallDelta
+			tc.ID, tc.Type, tc.Function.Name = inlineToolCallID(0), "function", name
+			emit(streamEvent{kind: evToolCall, toolCall: tc})
+		}
+	}
+	// With recovery on, the finish event is held back until the recovered calls
+	// have gone out: a consumer that stops at EventFinish would otherwise never
+	// see them, since finish_reason arrives before the tail is parsed.
+	var heldFinish *streamEvent
 
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 64<<10), maxStreamLine)
@@ -235,26 +284,19 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 		// frame carries no choices, so ignoring it yields a clean empty stream
 		// and the caller reports success with no answer.
 		if len(chunk.Error) > 0 && !isJSONNull(chunk.Error) {
-			return res, parseAPIErrorWith(redact, 0, chunk.Error)
+			return res, nil, parseAPIErrorWith(redact, 0, chunk.Error)
 		}
 
-		emit := func(ev streamEvent) {
-			if sink != nil {
-				sink(ev)
-			}
-		}
 		for _, ch := range chunk.Choices {
 			if ch.Delta.Content != "" {
-				content.WriteString(ch.Delta.Content)
-				emit(streamEvent{kind: evContent, text: ch.Delta.Content})
+				gated(contentGate, evContent, ch.Delta.Content, &content)
 				// Runes, not bytes: these endpoints return non-ASCII routinely,
 				// and a count inflated by UTF-8 encoding misreads as more
 				// output than the model produced.
 				res.Chars = counters.chars.Add(int64(utf8.RuneCountInString(ch.Delta.Content)))
 			}
 			if r := ch.Delta.reasoningText(); r != "" {
-				reasoning.WriteString(r)
-				emit(streamEvent{kind: evReasoning, text: r})
+				gated(reasoningGate, evReasoning, r, &reasoning)
 			}
 			for _, tc := range ch.Delta.ToolCalls {
 				emit(streamEvent{kind: evToolCall, toolCall: tc})
@@ -280,7 +322,11 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 			}
 			if ch.FinishReason != "" {
 				res.FinishReason = ch.FinishReason
-				emit(streamEvent{kind: evFinish, finishReason: ch.FinishReason})
+				if recover {
+					heldFinish = &streamEvent{kind: evFinish, finishReason: ch.FinishReason}
+				} else {
+					emit(streamEvent{kind: evFinish, finishReason: ch.FinishReason})
+				}
 			}
 		}
 
@@ -301,13 +347,45 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, idl
 	}
 
 	if err := sc.Err(); err != nil {
-		return res, err
+		return res, nil, err
 	}
 	if !res.Done && res.FinishReason == "" {
-		return res, fmt.Errorf("llmwire: %w: stream ended after %d events (%d chars) without finish_reason or %s",
+		return res, nil, fmt.Errorf("llmwire: %w: stream ended after %d events (%d chars) without finish_reason or %s",
 			ErrMalformedResponse, res.Events, res.Chars, doneMarker)
 	}
-	return res, nil
+	if !recover {
+		return res, nil, nil
+	}
+	defer func() {
+		if heldFinish != nil {
+			emit(*heldFinish)
+		}
+	}()
+
+	// A held suffix that never grew into a marker is text the consumer has not
+	// seen yet; it goes out before the calls, in stream order.
+	if out := contentGate.flush(); out != "" {
+		emit(streamEvent{kind: evContent, text: out})
+	}
+	if out := reasoningGate.flush(); out != "" {
+		emit(streamEvent{kind: evReasoning, text: out})
+	}
+	rec := recoverInline(res.Content, res.Reasoning, len(res.ToolCalls))
+	res.Content, res.Reasoning = rec.content, rec.reasoning
+	for i, call := range rec.calls {
+		var tc toolCallDelta
+		tc.Index, tc.ID, tc.Type = i, call.ID, call.Type
+		tc.Function.Arguments = call.Arguments
+		// The first call's name already went out under this id from the channel
+		// it was recovered from; a consumer that assigns names on first sight
+		// has it. From the other channel it is named again (see earlyName).
+		if !(i == 0 && earlyName == rec.channel) {
+			tc.Function.Name = call.Name
+		}
+		emit(streamEvent{kind: evToolCall, toolCall: tc})
+		res.ToolCalls = append(res.ToolCalls, call)
+	}
+	return res, rec.warnings(), nil
 }
 
 // isJSONNull reports whether raw is the literal null, so a `"error": null` field
