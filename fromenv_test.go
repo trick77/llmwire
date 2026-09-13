@@ -228,6 +228,38 @@ func TestEveryEmbeddedVendorProviderShipsAHost(t *testing.T) {
 	}
 }
 
+// The identity follows the provider: a host sold as opencode's backend gets
+// the client string from FromEnv, and no application has to know to ask.
+func TestFromEnv_identityFollowsTheProvider(t *testing.T) {
+	t.Setenv("LLMWIRE_MIMO_BASE_URL", "")
+	t.Setenv("LLMWIRE_MIMO_API_KEY", "k")
+	t.Setenv("LLMWIRE_ZAI_API_KEY", "k")
+	mimo, err := FromEnv("mimo-v2.5-pro", Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mimo.session == nil {
+		t.Error("mimo: provider says emulate_opencode, client presents as neutral")
+	}
+	zai, err := FromEnv("glm-5.3-flash", Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zai.session != nil {
+		t.Error("zai: provider does not emulate, client presents as opencode")
+	}
+	// The override host keeps the identity: it is usually the same vendor's
+	// other plan, and the headers are inert on a host that does not care.
+	t.Setenv("LLMWIRE_MIMO_BASE_URL", "https://other.example/v1")
+	over, err := FromEnv("mimo-v2.5-pro", Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if over.session == nil {
+		t.Error("override host: identity dropped")
+	}
+}
+
 // A derived profile's host follows ITS provider, not its base's: the route is
 // what changes when a model is reached through a gateway.
 func TestRegistry_derivedProfileTakesItsOwnProvidersHost(t *testing.T) {

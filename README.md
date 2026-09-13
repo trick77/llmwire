@@ -119,8 +119,9 @@ looks exactly like a finished one. An `error` frame arriving inside a `200` stre
 is surfaced rather than read as an empty answer.
 
 **Can present as opencode.** Some endpoints are sold as one client's backend and
-treat a neutral `User-Agent` as a bot. `Config{EmulateOpenCode: true}` sends
-opencode's client string and its session header pair; headers only, never a
+treat a neutral `User-Agent` as a bot. A provider marked `emulate_opencode` in
+`profiles.yaml` gets opencode's client string and its session header pair from
+`FromEnv` (`Config{EmulateOpenCode: true}` by hand); headers only, never a
 request body. The session id is the client's own — minted at construction,
 rotated after a 30-minute idle gap, the way a person's session starts and ends —
 and there is deliberately no way to supply one.

@@ -248,6 +248,14 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	if v := get(p.BaseURLEnv()); v != "" {
 		cfg.BaseURL = v
 	}
+	// The identity follows the host: a provider sold as opencode's backend
+	// gets that client string without every application knowing to ask. An
+	// override to another host keeps it, since the headers are inert on a
+	// host that does not care and the override is usually the same vendor's
+	// other plan.
+	if p.EmulateOpenCode {
+		cfg.EmulateOpenCode = true
+	}
 	if cfg.BaseURL == "" {
 		return nil, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()}
 	}

@@ -239,6 +239,8 @@ type Profile struct {
 	// Empty when the provider ships no host; FromEnv then requires the
 	// LLMWIRE_<PROVIDER>_BASE_URL variable, which otherwise merely overrides.
 	BaseURL string `yaml:"-"`
+	// EmulateOpenCode follows the provider the same way BaseURL does.
+	EmulateOpenCode bool `yaml:"-"`
 
 	// MaxTokensParam is which output-cap parameter this endpoint honours.
 	// Getting it wrong is not always an error: one endpoint accepts the wrong

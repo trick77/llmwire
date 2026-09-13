@@ -35,8 +35,10 @@ providers:
     # The Token Plan host, which is what `provider: mimo` means throughout this
     # file; the pay-as-you-go API is api.xiaomimimo.com/v1 with a different
     # key, and would be its own provider. Sold as opencode's backend: a
-    # neutral User-Agent is refused as a bot, see Config.EmulateOpenCode.
+    # neutral User-Agent is refused as a bot, so FromEnv presents as that
+    # client (Config.EmulateOpenCode) for every profile on this provider.
     base_url: https://token-plan-sgp.xiaomimimo.com/v1
+    emulate_opencode: true
   openai:
     base_url: https://api.openai.com/v1
   # A self-hosted gateway has no public host: LLMWIRE_LITELLM_BASE_URL is
