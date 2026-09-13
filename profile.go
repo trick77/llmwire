@@ -338,8 +338,12 @@ func (p Profile) resolve(base Profile) Profile {
 	}
 	if p.Provider != "" {
 		out.Provider = p.Provider
-	}
-	if p.NoAPIKey {
+		// The flag belongs to the host, not the model: a new provider is a
+		// new host, and whether it authenticates is the derived profile's to
+		// say. Without this a keyed gateway in front of a keyless base would
+		// inherit "no key" and be answered with a 401.
+		out.NoAPIKey = p.NoAPIKey
+	} else if p.NoAPIKey {
 		out.NoAPIKey = true
 	}
 	if p.Endpoint != "" {

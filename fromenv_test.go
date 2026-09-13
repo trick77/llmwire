@@ -143,6 +143,23 @@ func TestEveryEmbeddedProfileNamesAProvider(t *testing.T) {
 	}
 }
 
+// no_api_key follows the provider: a derived profile that names a new host
+// starts from "keyed", whatever its base said.
+func TestFromEnv_newProviderResetsNoAPIKey(t *testing.T) {
+	reg, err := NewRegistry([]byte(chatHead + "    provider: local\n    no_api_key: true\n" +
+		"  - id: m-via\n    base: m\n    gateway: litellm\n    provider: litellm\n    wire_model_id: alias/m\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLMWIRE_LITELLM_BASE_URL", "https://gw.example")
+	t.Setenv("LLMWIRE_LITELLM_API_KEY", "")
+	_, err = FromEnv("m-via", Config{Registry: reg})
+	var me *MissingEnvError
+	if !errors.As(err, &me) || me.Var != "LLMWIRE_LITELLM_API_KEY" {
+		t.Fatalf("got %v, want the gateway key demanded", err)
+	}
+}
+
 func TestProfile_providerNameIsValidated(t *testing.T) {
 	_, err := NewRegistry([]byte(chatHead + "    provider: Z-AI\n"))
 	if err == nil {
