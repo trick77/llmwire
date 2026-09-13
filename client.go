@@ -547,14 +547,15 @@ func (c *Client) newRequest(ctx context.Context, route string, body []byte) (*ht
 		// and it is mirrored into the other, so the pair stays a pair. Only when
 		// neither was set does the client's own session id go out.
 		id, rotated := c.session.current()
-		if rotated {
-			c.log.Debug("llmwire session rotated", "session_id", id, "idle_gap", sessionIdleRotation.String())
-		}
 		switch pinnedID, pinnedAff := req.Header.Get(HeaderSessionID), req.Header.Get(HeaderSessionAffinity); {
 		case pinnedID != "":
 			id = pinnedID
 		case pinnedAff != "":
 			id = pinnedAff
+		case rotated:
+			// Said only when the new id is the one going out: a pinned id
+			// makes the rotation invisible to the host.
+			c.log.Debug("llmwire session rotated", "session_id", id, "idle_gap", sessionIdleRotation.String())
 		}
 		req.Header.Set(HeaderSessionID, id)
 		req.Header.Set(HeaderSessionAffinity, id)

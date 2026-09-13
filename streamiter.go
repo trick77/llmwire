@@ -99,6 +99,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	}
 	body, err := renderChatBody(pl)
 	if err != nil {
+		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err})
 		return nil, warnings, err
 	}
 	at := c.Now()
@@ -113,6 +114,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	if err != nil {
 		cancelReq()
 		cancelCall()
+		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err})
 		return nil, warnings, err
 	}
 	httpReq.Header.Set("Accept", "text/event-stream")

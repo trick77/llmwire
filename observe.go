@@ -19,6 +19,9 @@ import (
 // two different fields in two deployments of the same binary. Never the
 // prompt, the answer or the key: text lengths and the key's variable name.
 
+// maxLoggedError bounds the error text on a failed line.
+const maxLoggedError = 300
+
 // callSummary is what one finished call amounts to, whichever route ran it.
 type callSummary struct {
 	kind  string // chat, chat_stream, embed
@@ -115,14 +118,20 @@ func (c *Client) logCall(s callSummary) {
 		c.log.Debug("llmwire call closed by caller", attrs...)
 		return
 	case s.err != nil:
-		attrs = append(attrs, "error", c.redact(s.err.Error()))
+		// Bounded: a shape error quotes a slice of the body, and a body in an
+		// off shape can be the answer. Enough to name the failure, not to
+		// read what the model said.
+		attrs = append(attrs, "error", Truncate(c.redact(s.err.Error()), maxLoggedError))
 		var rl *RateLimitError
 		var api *APIError
 		switch {
 		case errors.As(s.err, &rl):
 			attrs = append(attrs, "status", rl.StatusCode, "retry_after_ms", rl.RetryAfter.Milliseconds())
-		case errors.As(s.err, &api):
+		case errors.As(s.err, &api) && api.StatusCode > 0:
 			attrs = append(attrs, "status", api.StatusCode)
+		case errors.As(s.err, &api):
+			// An error object under a 200 has no status of its own.
+			attrs = append(attrs, "status", 200, "in_band_error", true)
 		}
 		c.log.Warn("llmwire call failed", attrs...)
 		return
@@ -135,7 +144,10 @@ func (c *Client) logCall(s callSummary) {
 		c.log.Warn("llmwire answer truncated by the output cap", attrs...)
 	case s.kind != "embed" && s.content == 0 && s.toolCalls == 0 && s.finishReason == "stop":
 		c.log.Warn("llmwire answer empty", attrs...)
-	case !u.Reported():
+	case s.kind != "embed" && !u.Reported():
+		// Embed sums batches by hand and only marks the sum reported when
+		// every batch carried an input lane; a total_tokens-only endpoint is
+		// accounted on the wire and would read as unaccounted here.
 		c.log.Warn("llmwire call unaccounted, no usage reported", attrs...)
 	default:
 		c.log.Debug("llmwire call", attrs...)
@@ -261,6 +273,7 @@ func (s Stats) LogValue() slog.Value {
 		attrs = append(attrs, slog.Group(name,
 			"calls", m.Calls, "errors", m.Errors, "closed", m.Closed,
 			"input_tokens", m.InputTokens, "cache_read_tokens", m.CacheReadTokens,
+			"cache_write_tokens", m.CacheWriteTokens,
 			"output_tokens", m.OutputTokens, "reasoning_tokens", m.ReasoningTokens,
 			"cost_usd", fmt.Sprintf("%.6f", float64(m.CostNanoUSD)/1e9),
 			"unpriced_calls", m.UnpricedCalls, "unreported_calls", m.UnreportedCalls,
