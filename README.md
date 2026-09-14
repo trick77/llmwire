@@ -6,10 +6,6 @@ data rather than scattered through call sites. It is an adapter over model
 dialects, not over wire protocols: one request contract, one protocol, and the
 per-model bends live in `profiles.yaml`.
 
-> **Status: under construction.** `Chat`, `ChatStream` and `Embed` work against
-> the profiled endpoints; pricing and the LiteLLM gateway are still landing. The
-> API is not stable yet.
-
 ```go
 // The host comes from the model's profile (profiles.yaml carries each
 // vendor's base URL); the key from LLMWIRE_<PROVIDER>_API_KEY, the provider
