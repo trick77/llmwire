@@ -2,7 +2,9 @@
 
 A dependency-light Go library for talking to **OpenAI-compatible** inference
 endpoints — chat, tools, vision and embeddings — with each model's quirks kept as
-data rather than scattered through call sites.
+data rather than scattered through call sites. It is an adapter over model
+dialects, not over wire protocols: one request contract, one protocol, and the
+per-model bends live in `profiles.yaml`.
 
 > **Status: under construction.** `Chat`, `ChatStream` and `Embed` work against
 > the profiled endpoints; pricing and the LiteLLM gateway are still landing. The
@@ -151,7 +153,8 @@ for the same reason.
 
 ## Scope
 
-One wire protocol: `/chat/completions` and `/embeddings`. Anthropic, Gemini-native
+One wire protocol: `/chat/completions` and `/embeddings`. llmwire adapts models
+within that protocol; it does not abstract over protocols. Anthropic, Gemini-native
 and Bedrock are permanently out of scope — supporting a second protocol would
 require the provider abstraction this library exists to avoid.
 
