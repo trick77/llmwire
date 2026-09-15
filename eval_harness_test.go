@@ -79,6 +79,8 @@ var evalRates = map[string]evalRate{
 	"gpt-5.4-mini": {0.75, 4.50},
 	// Model page 2.50/15.00, standard tier under 272K input tokens.
 	"gpt-5.4": {2.50, 15.00},
+	// Model page 5.00/30.00, standard tier under 272K input tokens.
+	"gpt-5.5": {5.00, 30.00},
 }
 
 // meter accumulates spend across the whole run. Shared by every probe, because
