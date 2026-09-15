@@ -284,23 +284,25 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Every listed id is checked, not only the one being built: a typo in
+		// The whole list is routed, not only the model being built: a typo in
 		// the list would otherwise route THIS model to its vendor, with the
 		// vendor's key if one happens to be set, and the gateway would be
-		// bypassed without a line of output saying so.
-		for id := range routes {
-			if _, err := reg.Lookup(id); err != nil {
-				return nil, fmt.Errorf("llmwire: %s: %w", GatewayModelsEnv, err)
-			}
+		// bypassed without a line of output saying so; and a client built for
+		// one listed model is reused for the others on the same host.
+		if reg, err = reg.viaGateway(routes); err != nil {
+			return nil, err
 		}
-		if name, ok := routes[model]; ok {
-			if reg, err = reg.viaGateway(model, name); err != nil {
-				return nil, err
-			}
-			cfg.Registry = reg
-			if p, err = reg.Lookup(model); err != nil {
-				return nil, err
-			}
+		cfg.Registry = reg
+		if p, err = reg.Lookup(model); err != nil {
+			return nil, err
+		}
+		// A key the caller set is the vendor's: the application configured it
+		// for the host its profile shipped. Sending it to the gateway would
+		// hand a vendor secret to another host and be answered with a 401
+		// whose log line says only "config".
+		if p.Gateway != "" && cfg.APIKey != "" {
+			return nil, fmt.Errorf("llmwire: model %q is routed through the gateway by %s, but Config.APIKey is set; the gateway's key is %s",
+				model, GatewayModelsEnv, p.APIKeyEnv())
 		}
 	}
 	if p.Provider == "" {

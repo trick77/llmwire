@@ -2,6 +2,7 @@ package llmwire
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -52,11 +53,16 @@ func parseGatewayModels(v string) (map[string]string, error) {
 	return out, nil
 }
 
-// viaGateway returns a copy of the registry in which the named profile is
-// reached through the gateway under wireModelID. The entry keeps its id, so a
-// caller that names the model keeps naming it; what changes is the route: the
-// litellm provider, the alias on the wire, and no cost block, since a proxy
-// prices its own calls (see Profile.resolve).
+// viaGateway returns a copy of the registry in which every listed profile is
+// reached through the gateway under its wire name. Every one, not only the
+// model a client is being built for: a client looks its profile up per
+// request, and one built for the chat model is naturally reused for the
+// embeddings model on the same host, which would otherwise leave under its
+// public name and be priced from the vendor's table.
+//
+// An entry keeps its id, so a caller that names the model keeps naming it;
+// what changes is the route: the litellm provider, the alias on the wire, and
+// no cost block, since a proxy prices its own calls (see Profile.resolve).
 //
 // Built the way a YAML route is, through resolve and validate against the
 // base, so an env-declared route cannot claim what a file-declared one could
@@ -64,36 +70,50 @@ func parseGatewayModels(v string) (map[string]string, error) {
 // that includes a registry this function already routed, so a Client's own
 // Registry() handed back in as Config.Registry is refused rather than routed
 // twice. FromEnv starts from Default() or the caller's untouched document.
-func (r *Registry) viaGateway(id, wireModelID string) (*Registry, error) {
-	base, ok := r.byID[id]
-	if !ok {
-		return nil, &UnknownModelError{ID: id, Known: sortedIDs(r.byID)}
-	}
-	if base.Base != "" {
-		return nil, fmt.Errorf("llmwire: %s names %q, which is already a route (base %q); list the model, not a route",
-			GatewayModelsEnv, id, base.Base)
-	}
-	pv, ok := r.providers[gatewayProvider]
-	if !ok {
+func (r *Registry) viaGateway(routes map[string]string) (*Registry, error) {
+	// A document with no providers: section is allowed by the loader (every
+	// host from the environment), and a litellm route in it resolves to the
+	// empty provider the same way a YAML one does.
+	pv := r.providers[gatewayProvider]
+	if _, ok := r.providers[gatewayProvider]; !ok && len(r.providers) > 0 {
 		return nil, fmt.Errorf("llmwire: this registry has no %q provider, so %s cannot route through it",
 			gatewayProvider, GatewayModelsEnv)
 	}
-	route := Profile{ID: id, Base: id, Gateway: gatewayProvider, Provider: gatewayProvider, WireModelID: wireModelID}
-	// The stored base already carries its defaults, BaseURL and
-	// EmulateOpenCode; resolve replaces provider and clears cost, and the
-	// host fields are re-read from the gateway's provider below.
-	p := route.resolve(*base)
-	applyDefaults(&p)
-	if err := p.validate(); err != nil {
-		return nil, fmt.Errorf("llmwire: %s route for %q: %w", GatewayModelsEnv, id, err)
-	}
-	p.BaseURL = pv.BaseURL
-	p.EmulateOpenCode = pv.EmulateOpenCode
-
 	out := &Registry{byID: make(map[string]*Profile, len(r.byID)), providers: r.providers}
 	for k, v := range r.byID {
 		out.byID[k] = v
 	}
-	out.byID[id] = &p
+	for _, id := range sortedKeys(routes) {
+		base, ok := r.byID[id]
+		if !ok {
+			return nil, fmt.Errorf("llmwire: %s: %w", GatewayModelsEnv, &UnknownModelError{ID: id, Known: sortedIDs(r.byID)})
+		}
+		if base.Base != "" {
+			return nil, fmt.Errorf("llmwire: %s names %q, which is already a route (base %q); list the model, not a route",
+				GatewayModelsEnv, id, base.Base)
+		}
+		route := Profile{ID: id, Base: id, Gateway: gatewayProvider, Provider: gatewayProvider, WireModelID: routes[id]}
+		// The stored base already carries its defaults, BaseURL and
+		// EmulateOpenCode; resolve replaces provider and clears cost, and the
+		// host fields are re-read from the gateway's provider below.
+		p := route.resolve(*base)
+		applyDefaults(&p)
+		if err := p.validate(); err != nil {
+			return nil, fmt.Errorf("llmwire: %s route for %q: %w", GatewayModelsEnv, id, err)
+		}
+		p.BaseURL = pv.BaseURL
+		p.EmulateOpenCode = pv.EmulateOpenCode
+		out.byID[id] = &p
+	}
 	return out, nil
+}
+
+// sortedKeys orders the list so an error names the same entry on every run.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

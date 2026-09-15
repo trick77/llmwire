@@ -191,7 +191,49 @@ profiles:
     provider: litellm
     wire_model_id: alias
 `)
-	if _, err := reg.viaGateway("r", "x"); err == nil || !strings.Contains(err.Error(), "already a route") {
+	// Refused for every model built, not only when r itself is asked for.
+	if _, err := reg.viaGateway(map[string]string{"r": "x"}); err == nil || !strings.Contains(err.Error(), "already a route") {
 		t.Fatalf("err = %v", err)
+	}
+	if _, err := FromEnv("m", Config{Registry: reg, Lookup: gatewayEnv("r=x")}); err == nil || !strings.Contains(err.Error(), "already a route") {
+		t.Fatalf("building m with a route listed: err = %v", err)
+	}
+}
+
+// A client looks its profile up per request, so the one built for the chat
+// model must carry the embeddings route too, or the second model leaves under
+// its public name and is priced from the vendor's table.
+func TestFromEnv_gatewayModelsRoutesTheWholeList(t *testing.T) {
+	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: gatewayEnv("gpt-5.4-mini=a,text-embedding-3-small=b")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := c.Registry().LookupEmbedding("text-embedding-3-small")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.WireModelID != "b" || e.Gateway != "litellm" || e.Cost != nil {
+		t.Fatalf("embeddings route = %s, cost %v", e, e.Cost)
+	}
+}
+
+// The caller's key is the vendor's; the gateway has its own.
+func TestFromEnv_gatewayModelsRefusesACallerKey(t *testing.T) {
+	_, err := FromEnv("gpt-5.4-mini", Config{APIKey: "sk-openai", Lookup: gatewayEnv("gpt-5.4-mini=a")})
+	if err == nil || !strings.Contains(err.Error(), "LLMWIRE_LITELLM_API_KEY") {
+		t.Fatalf("err = %v, want a refusal naming the gateway's key variable", err)
+	}
+}
+
+// The loader allows a document with no providers: section; an env route in
+// such a document resolves to the empty provider the way a YAML route does.
+func TestFromEnv_gatewayModelsWithoutAProvidersSection(t *testing.T) {
+	reg := registryFrom(t, chatHead+"    provider: litellm\n")
+	c, err := FromEnv("m", Config{Registry: reg, Lookup: gatewayEnv("m=alias")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.baseURL != "https://gw.example/v1" {
+		t.Fatalf("base url = %q", c.baseURL)
 	}
 }
