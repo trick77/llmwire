@@ -264,9 +264,6 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 		c.logSettings(model, p, "")
 		return c, nil
 	}
-	if p.Provider == "" {
-		return nil, &MissingEnvError{Model: model}
-	}
 	lookup := cfg.Lookup
 	if lookup == nil {
 		lookup = os.LookupEnv
@@ -277,6 +274,37 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	get := func(name string) string {
 		v, _ := lookup(name)
 		return strings.TrimSpace(v)
+	}
+	// The gateway list is read before the provider is: a listed model's
+	// provider IS the gateway, and everything below (host variable, key
+	// variable, identity) follows from that. The registry is copied, never
+	// mutated: Default() is shared by every caller in the process.
+	if v := get(GatewayModelsEnv); v != "" {
+		routes, err := parseGatewayModels(v)
+		if err != nil {
+			return nil, err
+		}
+		// Every listed id is checked, not only the one being built: a typo in
+		// the list would otherwise route THIS model to its vendor, with the
+		// vendor's key if one happens to be set, and the gateway would be
+		// bypassed without a line of output saying so.
+		for id := range routes {
+			if _, err := reg.Lookup(id); err != nil {
+				return nil, fmt.Errorf("llmwire: %s: %w", GatewayModelsEnv, err)
+			}
+		}
+		if name, ok := routes[model]; ok {
+			if reg, err = reg.viaGateway(model, name); err != nil {
+				return nil, err
+			}
+			cfg.Registry = reg
+			if p, err = reg.Lookup(model); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if p.Provider == "" {
+		return nil, &MissingEnvError{Model: model}
 	}
 	cfg.BaseURL = p.BaseURL
 	if v := get(p.BaseURLEnv()); v != "" {
@@ -331,6 +359,8 @@ func (c *Client) logSettings(model string, p *Profile, keyVar string) {
 	}
 	c.log.Info("llmwire client",
 		"model", model,
+		"wire_model", p.WireModelID,
+		"gateway", p.Gateway,
 		"provider", p.Provider,
 		"base_url", RedactURL(c.baseURL),
 		"api_key", key,
