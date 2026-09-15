@@ -264,9 +264,6 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 		c.logSettings(model, p, "")
 		return c, nil
 	}
-	if p.Provider == "" {
-		return nil, &MissingEnvError{Model: model}
-	}
 	lookup := cfg.Lookup
 	if lookup == nil {
 		lookup = os.LookupEnv
@@ -277,6 +274,39 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 	get := func(name string) string {
 		v, _ := lookup(name)
 		return strings.TrimSpace(v)
+	}
+	// The gateway list is read before the provider is: a listed model's
+	// provider IS the gateway, and everything below (host variable, key
+	// variable, identity) follows from that. The registry is copied, never
+	// mutated: Default() is shared by every caller in the process.
+	if v := get(GatewayModelsEnv); v != "" {
+		routes, err := parseGatewayModels(v)
+		if err != nil {
+			return nil, err
+		}
+		// The whole list is routed, not only the model being built: a typo in
+		// the list would otherwise route THIS model to its vendor, with the
+		// vendor's key if one happens to be set, and the gateway would be
+		// bypassed without a line of output saying so; and a client built for
+		// one listed model is reused for the others on the same host.
+		if reg, err = reg.viaGateway(routes); err != nil {
+			return nil, err
+		}
+		cfg.Registry = reg
+		if p, err = reg.Lookup(model); err != nil {
+			return nil, err
+		}
+		// A key the caller set is the vendor's: the application configured it
+		// for the host its profile shipped. Sending it to the gateway would
+		// hand a vendor secret to another host and be answered with a 401
+		// whose log line says only "config".
+		if p.Gateway != "" && cfg.APIKey != "" {
+			return nil, fmt.Errorf("llmwire: model %q is routed through the gateway by %s, but Config.APIKey is set; the gateway's key is %s",
+				model, GatewayModelsEnv, p.APIKeyEnv())
+		}
+	}
+	if p.Provider == "" {
+		return nil, &MissingEnvError{Model: model}
 	}
 	cfg.BaseURL = p.BaseURL
 	if v := get(p.BaseURLEnv()); v != "" {
@@ -331,6 +361,8 @@ func (c *Client) logSettings(model string, p *Profile, keyVar string) {
 	}
 	c.log.Info("llmwire client",
 		"model", model,
+		"wire_model", p.WireModelID,
+		"gateway", p.Gateway,
 		"provider", p.Provider,
 		"base_url", RedactURL(c.baseURL),
 		"api_key", key,

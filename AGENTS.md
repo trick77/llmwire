@@ -92,7 +92,10 @@ with a named reason. **Hosts live in `profiles.yaml` `providers:`**, never in an
 app's config: an app supplies `LLMWIRE_<PROVIDER>_API_KEY` and nothing else.
 `LLMWIRE_<PROVIDER>_BASE_URL` exists only for a provider that ships no host
 (litellm); beside a shipped host it is **refused** (`StaleEnvError`): no
-override, a different host is a different provider entry. Read by `FromEnv` and the evals. `.env` gitignored, loaded under
+override, a different host is a different provider entry. **A gateway is
+env, not profiles**: `LLMWIRE_LITELLM_MODELS=<id>[=<alias>],...` routes listed
+profiles through litellm (`gateway.go` `viaGateway`, same resolve/validate as a
+YAML route); aliases are the operator's, never shipped. Read by `FromEnv` and the evals. `.env` gitignored, loaded under
 `LLMWIRE_EVAL=1` (real env wins). `hack/secret-scan.sh` runs pre-commit **and** CI.
 CI holds no key.
 

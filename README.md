@@ -203,24 +203,33 @@ wrong.
 
 ### Behind a gateway
 
-A LiteLLM entry is not a new model. It names the model it really is, inherits
-every capability, and adds only what the gateway changes:
+A gateway is a deployment, not a model: its URL, its key and the names it serves
+models under belong to whoever runs it, so they are environment, never
+`profiles.yaml`. Three variables, read by `FromEnv`:
 
-```yaml
-- id: litellm/openai-gpt-5.4
-  base: azure/gpt-5.4          # inherits capabilities and parameters
-  gateway: litellm
-  provider: litellm            # no shipped host: LLMWIRE_LITELLM_BASE_URL and _API_KEY
-  wire_model_id: ai-gateway/gpt-5.4   # the proxy's alias
+```
+LLMWIRE_LITELLM_BASE_URL=https://ai-gateway.example/v1
+LLMWIRE_LITELLM_API_KEY=<the gateway's key>
+LLMWIRE_LITELLM_MODELS=gpt-5.4-mini=ai-gateway-gpt-5.4-mini,text-embedding-3-small
 ```
 
-A gateway entry carries no `cost` block and inherits none: the proxy reports real
+`LLMWIRE_LITELLM_MODELS` lists which profiles the gateway serves, as
+`<profile id>[=<name on the gateway>]`; a bare id means the gateway takes the
+public name. An application keeps asking for `gpt-5.4-mini`; a listed model is
+built as a route to the gateway under its alias, an unlisted one reaches its
+vendor as before. The left-hand side must be a profile id, because that is the
+model the route inherits from: every capability, every parameter rule.
+
+A route carries no `cost` block and inherits none: the proxy reports real
 per-call spend in a response header, and it knows which deployment ran and at what
 discount, where this table does not. No header, no price — never a list rate
 standing in for one.
 
-Because the entry names its base, validation still works behind a proxy whose wire
-id is opaque: `Temperature(0.3)` is rejected locally, since gpt-5.4 rejects it.
+Because the route names its model, validation still works behind a proxy whose
+wire id is opaque: `Temperature(0.3)` is rejected locally, since gpt-5.4-mini
+rejects it. The same shape can be written into a profile document by hand
+(`base` + `gateway` + `provider` + `wire_model_id`); the variable builds it in
+memory.
 
 ## Evals
 

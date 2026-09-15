@@ -69,6 +69,14 @@ truth, comment standard) and the head comment of `profiles.yaml`.
 
 ### 0.3 Gateway route
 
+Usually not a profile entry at all: a deployment's gateway is declared in the
+environment, `LLMWIRE_LITELLM_MODELS=<profile id>[=<alias>],...` beside the
+litellm URL and key (`gateway.go`, README "Behind a gateway"). What gets
+onboarded is the MODEL behind the alias, as a plain vendor profile; the route
+is derived from it at `FromEnv` through the same `resolve`/`validate` path.
+A hand-written route entry is for a gateway the library itself ships, and is
+shaped as follows.
+
 `base` + `gateway` + `provider` + `wire_model_id`, nothing else but the two
 tighten-only sub-keys (`profile.go` `derivedAllowedNestedKeys`:
 `streaming.needs_include_usage`, `tools.recover_inline_markup`). No `cost`
