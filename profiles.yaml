@@ -533,3 +533,161 @@ profiles:
       Every bit source-derived. Reached directly it takes LLMWIRE_OPENAI_API_KEY
       like the embeddings do; the first route through a gateway is the first
       measurement of any of it.
+
+  # ---------------------------------------------------------------------------
+  # The full-size sibling. Same shape as gpt-5.4-mini, from its own model page
+  # (developers.openai.com/api/docs/models/gpt-5.4, read 2026-09-15); the two
+  # differ in what the page states differently, nothing else.
+  # ---------------------------------------------------------------------------
+  - id: gpt-5.4
+    endpoint: chat
+    wire_model_id: gpt-5.4
+    provider: openai
+    verified: source-derived
+
+    # NOT measured: as gpt-5.4-mini, the reasoning series caps output with
+    # max_completion_tokens.
+    max_tokens_param: max_completion_tokens
+
+    # NOT measured, model page 2026-09-15: "none (default), low, medium, high
+    # and xhigh". Unlike mini, the page names the default: none. So the model
+    # does NOT think when the field is omitted, and enabled_by_default is
+    # false; can_be_disabled is true because none is an accepted value.
+    reasoning:
+      supported: true
+      enabled_by_default: false
+      can_be_disabled: true
+      control: effort
+      effort_values: [none, low, medium, high, xhigh]
+      default_effort: none
+
+    # NOT measured on this model; the series' 400 on a non-default
+    # temperature, as gpt-5.4-mini.
+    temperature:
+      supported: true
+      forced_value: 1.0
+    top_p:
+      supported: true
+      forced_value: 1.0
+
+    # NOT measured, API reference.
+    tools:
+      supported: true
+      format: native
+      tool_choice_values: [auto, none, required]
+      supports_forced_choice: true
+      supports_parallel: true
+
+    # NOT measured, API reference.
+    output:
+      json_object: true
+      json_schema: true
+      strict_schema: true
+
+    # NOT measured, API reference.
+    streaming:
+      supported: true
+      needs_include_usage: true
+      accepts_stream_options: true
+
+    # NOT measured, model page: 1,050,000-token context, 128,000 maximum
+    # output. Prompts past 272K input tokens are billed at 2x input and 1.5x
+    # output for the whole session; the cost block below is the rate under it.
+    limits:
+      context: 1050000
+      max_output: 128000
+
+    # NOT measured, model page: text and image in, text out.
+    vision: true
+
+    # Model page, standard tier, under 272K input tokens. cache_write 0 as for
+    # mini. Behind a gateway this block is dropped (Profile.resolve).
+    cost:
+      input: 2.50
+      cache_read: 0.25
+      cache_write: 0
+      output: 15.00
+      source_url: https://developers.openai.com/api/docs/models/gpt-5.4
+      verified_on: 2026-09-15
+
+    notes: >-
+      Every bit source-derived, as gpt-5.4-mini. The one fact the page states
+      that mini's does not: the default effort is none, so an omitted field
+      means no thinking.
+
+  # ---------------------------------------------------------------------------
+  # gpt-5.5, from its model page (developers.openai.com/api/docs/models/gpt-5.5,
+  # read 2026-09-15). Same shape as gpt-5.4; the page names medium as the
+  # default effort, so this one thinks when the field is omitted.
+  # ---------------------------------------------------------------------------
+  - id: gpt-5.5
+    endpoint: chat
+    wire_model_id: gpt-5.5
+    provider: openai
+    verified: source-derived
+
+    # NOT measured: the reasoning series caps output with
+    # max_completion_tokens.
+    max_tokens_param: max_completion_tokens
+
+    # NOT measured, model page 2026-09-15: "none, low, medium (default), high
+    # and xhigh". none is accepted, so it can be told not to think.
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: true
+      control: effort
+      effort_values: [none, low, medium, high, xhigh]
+      default_effort: medium
+
+    # NOT measured on this model; the series' 400 on a non-default
+    # temperature, as gpt-5.4.
+    temperature:
+      supported: true
+      forced_value: 1.0
+    top_p:
+      supported: true
+      forced_value: 1.0
+
+    # NOT measured, API reference.
+    tools:
+      supported: true
+      format: native
+      tool_choice_values: [auto, none, required]
+      supports_forced_choice: true
+      supports_parallel: true
+
+    # NOT measured, API reference.
+    output:
+      json_object: true
+      json_schema: true
+      strict_schema: true
+
+    # NOT measured, API reference.
+    streaming:
+      supported: true
+      needs_include_usage: true
+      accepts_stream_options: true
+
+    # NOT measured, model page: 1,050,000-token context, 128,000 maximum
+    # output. Past 272K input tokens the session bills 2x input, 1.5x output.
+    limits:
+      context: 1050000
+      max_output: 128000
+
+    # NOT measured, model page: text and image in, text out.
+    vision: true
+
+    # Model page, standard tier, under 272K input tokens. cache_write 0 as for
+    # the rest of the series. Behind a gateway this block is dropped.
+    cost:
+      input: 5.00
+      cache_read: 0.50
+      cache_write: 0
+      output: 30.00
+      source_url: https://developers.openai.com/api/docs/models/gpt-5.5
+      verified_on: 2026-09-15
+
+    notes: >-
+      Every bit source-derived. Thinks at medium unless told otherwise, so a
+      caller with a tight output cap sends none or raises the cap.

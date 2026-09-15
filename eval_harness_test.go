@@ -77,6 +77,10 @@ var evalRates = map[string]evalRate{
 	// Model page 0.75/4.50, standard tier; no probe runs against it yet, the
 	// entry is here so the first one is metered rather than breaker-tripped.
 	"gpt-5.4-mini": {0.75, 4.50},
+	// Model page 2.50/15.00, standard tier under 272K input tokens.
+	"gpt-5.4": {2.50, 15.00},
+	// Model page 5.00/30.00, standard tier under 272K input tokens.
+	"gpt-5.5": {5.00, 30.00},
 }
 
 // meter accumulates spend across the whole run. Shared by every probe, because
