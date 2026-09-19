@@ -318,4 +318,7 @@ type ChatResponse struct {
 	// Raw is the undecoded response, kept for fields this package does not model.
 	Raw    json.RawMessage
 	Timing Timing
+	// Gateway is what the proxy said in its headers: call id, deployment, key
+	// spend, the cost text. Empty on a direct route.
+	Gateway Gateway
 }

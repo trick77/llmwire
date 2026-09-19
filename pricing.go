@@ -648,7 +648,7 @@ func priceFromGateway(p *Profile, hdr http.Header, at time.Time) (Cost, []Warnin
 		}}
 	}
 	raw := hdr.Get(litellmCostHeader)
-	if raw == "" {
+	if raw == "" || isNoneLiteral(raw) {
 		return warn("gateway %q reported no cost for model %q (a stream never does), so the cost "+
 			"is unknown, not zero", p.Gateway, p.ID)
 	}

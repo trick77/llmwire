@@ -85,6 +85,9 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
   `FromTable` is an equivalent, **not an invoice**. No rate → `Unpriced` → 0 **with
   a warning**.
 - **Behind a gateway: `x-litellm-response-cost` or nothing.** Streams carry none.
+  Literal `None`/`null` = not reported (LiteLLM sets headers via `str()`), never
+  corrupt. Other proxy headers → `Gateway` block on the response
+  (`gatewayresp.go`): call id, deployment, key spend (**gauge**, never summed).
 - A `cost` block needs `source_url` + `verified_on` and all four chat lanes.
 - **No off-peak window ships attached**: vendors document them against credit burn,
   not USD. Round **up**, once, on the total.
