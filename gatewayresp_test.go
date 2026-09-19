@@ -1,25 +1,93 @@
 package llmwire
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-func gatewayClient(t *testing.T, srv *httptest.Server) *Client {
-	t.Helper()
+func gatewayLookup(srv *httptest.Server) func(string) (string, bool) {
 	env := map[string]string{
 		"LLMWIRE_LITELLM_BASE_URL": srv.URL,
 		"LLMWIRE_LITELLM_API_KEY":  "gw-key",
 		GatewayModelsEnv:           "gpt-5.4-mini=ai-gateway-gpt-5.4-mini",
 	}
-	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: func(k string) (string, bool) { v, ok := env[k]; return v, ok }})
+	return func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+}
+
+func gatewayClient(t *testing.T, srv *httptest.Server) *Client {
+	t.Helper()
+	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: gatewayLookup(srv)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return c
+}
+
+func TestChat_GatewayCallIDIsLoggedOnARejection(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-litellm-call-id", "call-rejected")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"slow down","code":"429"}}`))
+	}))
+	defer srv.Close()
+	var logs bytes.Buffer
+	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: gatewayLookup(srv), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Chat(context.Background(), ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}}); err == nil {
+		t.Fatal("expected the 429")
+	}
+	if !strings.Contains(logs.String(), "gateway_call_id=call-rejected") {
+		t.Errorf("the failure line must carry the call id: %s", logs.String())
+	}
+}
+
+func TestStream_GatewayHeadersSurviveACutStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-litellm-call-id", "call-cut")
+		w.Header().Set("Content-Type", "text/event-stream")
+		// One frame, then EOF without [DONE] or finish_reason: a cut stream.
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+	}))
+	defer srv.Close()
+	st, _, err := gatewayClient(t, srv).ChatStream(context.Background(),
+		ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := st.Collect(nil)
+	if err == nil {
+		t.Fatal("a cut stream is an error")
+	}
+	if res.Gateway.CallID != "call-cut" {
+		t.Errorf("gateway = %+v, want the call id kept on the error path", res.Gateway)
+	}
+}
+
+func TestStream_GatewayCallIDIsLoggedOnARejectedOpen(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-litellm-call-id", "call-stream-rejected")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":{"message":"upstream down","code":"502"}}`))
+	}))
+	defer srv.Close()
+	var logs bytes.Buffer
+	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: gatewayLookup(srv), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}}); err == nil {
+		t.Fatal("expected the 502")
+	}
+	if !strings.Contains(logs.String(), "gateway_call_id=call-stream-rejected") {
+		t.Errorf("the failure line must carry the call id: %s", logs.String())
+	}
 }
 
 const gatewayChatBody = `{"model":"ai-gateway-gpt-5.4-mini","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`

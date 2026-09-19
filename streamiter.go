@@ -138,8 +138,11 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 		guard.stop()
 		cancelReq()
 		cancelCall()
+		// The proxy's call id is worth most on a rejection: it is what
+		// matches this failure to the gateway's own log.
+		gw, _ := parseGatewayHeaders(resp.Header)
 		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err,
-			timing: Timing{Headers: headers, Total: c.now().Sub(start)}})
+			gateway: gw, timing: Timing{Headers: headers, Total: c.now().Sub(start)}})
 		return nil, warnings, err
 	}
 	// Headers are in, so the bound that matters from here is silence.
@@ -176,6 +179,11 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 	stopped := s.stopped
 	s.mu.Unlock()
 
+	// Headers were complete before the body was read, so the gateway block
+	// is filled whichever way the stream ended: a call that timed out or was
+	// cut is exactly the one whose call id has to reach the log.
+	var gwWarnings []Warning
+	res.Gateway, gwWarnings = parseGatewayHeaders(resp.Header)
 	var priceWarnings []Warning
 	switch {
 	case stopped:
@@ -190,8 +198,6 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 		var cost Cost
 		cost, priceWarnings = priceCall(pl.profile, res.Usage, resp.Header, resp.StatusCode, at)
 		res.Usage.Cost = cost
-		var gwWarnings []Warning
-		res.Gateway, gwWarnings = parseGatewayHeaders(resp.Header)
 		priceWarnings = append(priceWarnings, gwWarnings...)
 	}
 
