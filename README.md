@@ -140,6 +140,14 @@ unpriced and unreported calls counted apart so a low total is never read as
 cheap; it is a `slog.LogValuer`, for a shutdown summary. Prompt, answer and
 key never appear.
 
+**Lists what the key may use.** `ListModels(ctx)` is `GET {base}/models`,
+one row per id with the gateway's own `max_input_tokens` / `max_output_tokens`
+as `*int64` (nil when the endpoint does not carry them) and the raw object for
+the rest. Behind LiteLLM the listing is the key's own model set, so it doubles
+as the access check, and a gateway that caps a deployment below the vendor's
+window says so here and nowhere else. A limit present but unusable is a
+`Warning`, not a failed listing.
+
 **Carries the small helpers every consumer was copying.** `Stream.Collect(onDelta)`
 drains a stream into its result. `JSONObject(s)` cuts the first brace-balanced
 object out of a reply that was asked for JSON and came back fenced or wrapped in

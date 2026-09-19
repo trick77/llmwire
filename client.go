@@ -430,7 +430,7 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	reqCtx, cancelReq := context.WithCancel(callCtx)
 	defer cancelReq()
 
-	req, err := c.newRequest(reqCtx, "/chat/completions", body)
+	req, err := c.newRequest(reqCtx, http.MethodPost, "/chat/completions", body)
 	if err != nil {
 		return StreamResult{}, err
 	}
@@ -494,13 +494,21 @@ func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.R
 // rawPost is RawPost with the call's Timing. Separate so the exported signature
 // the probe suite calls stays put while Chat and Embed get the figures.
 func (c *Client) rawPost(ctx context.Context, route string, body []byte) (json.RawMessage, http.Header, Timing, error) {
+	return c.rawCall(ctx, http.MethodPost, route, body)
+}
+
+// rawCall is the one non-streaming exchange: a POST carrying a body, or a GET
+// with none (ListModels). Same bounds, same redaction, same error shapes on
+// both, so a listing that hangs or 401s reads exactly like a completion that
+// does.
+func (c *Client) rawCall(ctx context.Context, method, route string, body []byte) (json.RawMessage, http.Header, Timing, error) {
 	var t Timing
 	callCtx, cancelCall := context.WithTimeout(ctx, c.cap)
 	defer cancelCall()
 	reqCtx, cancelReq := context.WithCancel(callCtx)
 	defer cancelReq()
 
-	req, err := c.newRequest(reqCtx, route, body)
+	req, err := c.newRequest(reqCtx, method, route, body)
 	if err != nil {
 		return nil, nil, t, err
 	}
@@ -549,15 +557,23 @@ func (c *Client) rawPost(ctx context.Context, route string, body []byte) (json.R
 	return raw, resp.Header, t, nil
 }
 
-// newRequest builds a POST with the standard headers.
-func (c *Client) newRequest(ctx context.Context, route string, body []byte) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+route, bytes.NewReader(body))
+// newRequest builds a request with the standard headers. A nil body is a
+// bodiless request (GET), which carries no Content-Type: some gateways reject
+// a GET that declares one.
+func (c *Client) newRequest(ctx context.Context, method, route string, body []byte) (*http.Request, error) {
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+route, rd)
 	if err != nil {
 		// The URL is in this error, so it goes through redaction: a base URL
 		// can carry a key in its query string.
 		return nil, fmt.Errorf("llmwire: building request for %s: %s", RedactURL(c.baseURL+route), Redact(err.Error()))
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("User-Agent", c.userAgent)
 	// Accept-Encoding is left unset on purpose so net/http keeps negotiating
 	// and decompressing gzip transparently. Setting it by hand hands us a

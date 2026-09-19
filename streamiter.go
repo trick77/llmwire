@@ -110,7 +110,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	callCtx, cancelCall := context.WithTimeout(ctx, c.cap)
 	reqCtx, cancelReq := context.WithCancel(callCtx)
 
-	httpReq, err := c.newRequest(reqCtx, routeChat, body)
+	httpReq, err := c.newRequest(reqCtx, http.MethodPost, routeChat, body)
 	if err != nil {
 		cancelReq()
 		cancelCall()
