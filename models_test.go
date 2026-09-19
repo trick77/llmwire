@@ -41,7 +41,7 @@ func TestListModels_ReadsGatewayLimits(t *testing.T) {
 	if seen.Method != http.MethodGet || seen.URL.Path != "/models" {
 		t.Errorf("request = %s %s, want GET /models", seen.Method, seen.URL.Path)
 	}
-	if seen.Header.Get("Authorization") != "Bearer sk-team" {
+	if seen.Header.Get("Authorization") != "Bearer team-key-of-no-known-shape" {
 		t.Error("the key must go out as a bearer token")
 	}
 	if seen.Header.Get("Content-Type") != "" {
