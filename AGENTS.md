@@ -52,6 +52,11 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
 - Logging is `observe.go`, one line per call via `Client.finish` (Debug ok, Warn
   failed/truncated/empty/unaccounted) + `Stats()`. Flat keys, `_ms` ints, never
   prompt/answer/key text. Every new call path ends in `finish`, every error path.
+  `ListModels` is the one exception: no plan, no usage, no model, so it logs its
+  own line instead of polluting per-model stats.
+- `rawCall(method)` is the only non-streaming exchange; a GET (models listing)
+  sends no `Content-Type`. Gateway limits in the listing decode via `limitField`:
+  integral float ok, anything else present → nil + `Warning`, never a cast.
 - Wire mechanics live at their enforcement site. Read `stream.go`'s head comment
   before touching the parser.
 
