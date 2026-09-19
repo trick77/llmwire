@@ -73,6 +73,7 @@ func TestListModels_UnusableLimitIsNilWithAWarning(t *testing.T) {
 		{"null", "null", nil, ""},
 		{"bool", "true", nil, "not a number"},
 		{"string", `"lots"`, nil, "not a number"},
+		{"quoted number", `"400000"`, nil, "not a number"},
 		{"fraction", "16385.5", nil, "not an integer"},
 		{"zero", "0", nil, "not positive"},
 		{"negative", "-1", nil, "not positive"},

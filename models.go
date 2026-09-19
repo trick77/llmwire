@@ -1,6 +1,7 @@
 package llmwire
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -140,11 +141,14 @@ func limitField(model, name string, raw json.RawMessage, warnings *[]Warning) *i
 	}
 	unusable := func(why string) *int64 {
 		*warnings = append(*warnings, Warning{Kind: WarnOther, Feature: name,
-			Details: fmt.Sprintf("model %q lists %s as %s, %s", model, name, string(raw), why)})
+			Details: fmt.Sprintf("model %q lists %s as %s, %s", model, name,
+				Truncate(Redact(string(raw)), maxErrorBody), why)})
 		return nil
 	}
+	// json.Number would also accept a quoted "400000"; a string is not a
+	// number here, whatever it contains.
 	var num json.Number
-	if err := json.Unmarshal(raw, &num); err != nil {
+	if bytes.HasPrefix(bytes.TrimSpace(raw), []byte{'"'}) || json.Unmarshal(raw, &num) != nil {
 		return unusable("not a number")
 	}
 	// big.Rat rather than ParseFloat: it says exactly whether the value is an
