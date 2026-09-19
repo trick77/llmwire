@@ -36,6 +36,7 @@ type callSummary struct {
 	finishReason       string
 	usage              Usage
 	timing             Timing
+	gateway            Gateway
 	warnings           []Warning
 	err                error
 	// closed is a caller-initiated Stream.Close: not a failure, not a success.
@@ -98,6 +99,14 @@ func (c *Client) logCall(s callSummary) {
 	}
 	if u.Cost.Tier != "" {
 		attrs = append(attrs, "cost_tier", u.Cost.Tier)
+	}
+	if g := s.gateway; g.Reported() {
+		// The call id is how a figure here is matched to the proxy's own log;
+		// the deployment is what the body's alias hides.
+		attrs = append(attrs, "gateway_call_id", g.CallID, "gateway_model", g.ModelName)
+		if g.KeySpendNanoUSD != nil {
+			attrs = append(attrs, "key_spend_usd", fmt.Sprintf("%.6f", float64(*g.KeySpendNanoUSD)/1e9))
+		}
 	}
 	t := s.timing
 	attrs = append(attrs, "headers_ms", t.Headers.Milliseconds(),

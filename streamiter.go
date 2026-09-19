@@ -190,6 +190,9 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 		var cost Cost
 		cost, priceWarnings = priceCall(pl.profile, res.Usage, resp.Header, resp.StatusCode, at)
 		res.Usage.Cost = cost
+		var gwWarnings []Warning
+		res.Gateway, gwWarnings = parseGatewayHeaders(resp.Header)
+		priceWarnings = append(priceWarnings, gwWarnings...)
 	}
 
 	// Reported from the locals: s.res and s.err are written under the mutex
@@ -198,7 +201,7 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 	s.client.finish(callSummary{kind: "chat_stream", model: pl.req.Model, plan: pl,
 		content: len(res.Content), reasoning: len(res.Reasoning), toolCalls: len(res.ToolCalls),
 		finishReason: res.FinishReason, usage: res.Usage, timing: res.Timing,
-		warnings: warnings, err: err, closed: stopped})
+		gateway: res.Gateway, warnings: warnings, err: err, closed: stopped})
 
 	s.mu.Lock()
 	// Written under the mutex, all of it. Warnings() is documented as readable

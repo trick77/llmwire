@@ -157,6 +157,9 @@ type StreamResult struct {
 	// against, so comparing it to IdleTimeout says how close a healthy stream
 	// came to a false abort.
 	MaxDataGap time.Duration
+	// Gateway is what the proxy said in its headers. A stream carries no cost
+	// there, but the call id and the deployment still arrive.
+	Gateway Gateway
 	// Bytes counts the SSE payload read, data lines and comments alike.
 	Bytes int64
 }

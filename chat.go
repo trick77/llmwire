@@ -62,6 +62,10 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	cost, priceWarnings := priceCall(pl.profile, resp.Usage, hdr, 200, at)
 	resp.Usage.Cost = cost
 	warnings = append(warnings, priceWarnings...)
+	var gwWarnings []Warning
+	resp.Gateway, gwWarnings = parseGatewayHeaders(hdr)
+	warnings = append(warnings, gwWarnings...)
+	sum.gateway = resp.Gateway
 	sum.content, sum.reasoning, sum.toolCalls = len(resp.Content), len(resp.Reasoning), len(resp.ToolCalls)
 	sum.finishReason, sum.usage, sum.warnings = resp.FinishReason, resp.Usage, warnings
 	return resp, warnings, nil

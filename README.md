@@ -93,7 +93,10 @@ pay-as-you-go rate — a comparable equivalent, **not an invoice**, since a call
 routed over a subscription host is billed in plan credits nobody can compare
 across models. Behind a gateway the cost comes from the proxy's own header or not
 at all. A rate we have not verified reports `Unpriced` and warns, because zero
-means unknown, not free.
+means unknown, not free. What else the proxy said rides on `ChatResponse.Gateway`
+/ `StreamResult.Gateway`: the call id it logged under, the deployment that
+really ran, the key's cumulative spend (a gauge, never summed) and the cost
+header verbatim, so an unpriced call can be matched to the gateway's own log.
 
 **Recovers tool calls a model wrote as markup.** Some deployments answer with
 `<tool_call>…</tool_call>` blocks (or an invented `<tool_invocation …/>`) in the
