@@ -30,7 +30,7 @@ func TestListModels_ReadsGatewayLimits(t *testing.T) {
 		{"id":"plain","object":"model"}
 	]}`, &seen)
 
-	c := New(Config{BaseURL: srv.URL, APIKey: "team-key"})
+	c := New(Config{BaseURL: srv.URL, APIKey: "team-key-of-no-known-shape"})
 	entries, warnings, err := c.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
