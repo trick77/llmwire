@@ -426,7 +426,7 @@ func TestPrice_ReportedHeaderRejectsUnusableValues(t *testing.T) {
 				t.Fatalf("warnings = %v, want one", warnings)
 			}
 			// The budget check a NaN would have broken, asserted directly.
-			if !(cost.NanoUSD >= 0) {
+			if cost.NanoUSD < 0 {
 				t.Error("the cost failed a >= comparison, which is what a NaN does")
 			}
 		})

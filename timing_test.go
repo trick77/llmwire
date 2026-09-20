@@ -79,7 +79,7 @@ func TestReadStream_TimingSetOnErrorPath(t *testing.T) {
 // line, FirstData the pause before the first frame, Total the whole body.
 func TestRawStream_TimingOrderedAndBounded(t *testing.T) {
 	const headerDelay, frameGap = 30 * time.Millisecond, 20 * time.Millisecond
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(headerDelay)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -120,7 +120,7 @@ func TestRawStream_TimingOrderedAndBounded(t *testing.T) {
 // the endpoint took to say so: a 503 after 45s against a 60s header bound is a
 // margin, not nothing.
 func TestRawStream_NonOKCarriesHeadersTiming(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
@@ -160,7 +160,7 @@ func TestChatStream_CollectCarriesTiming(t *testing.T) {
 // is the model's whole latency and FirstData has nothing to measure.
 func TestChat_TimingHeadersIsTheAnswerLatency(t *testing.T) {
 	const delay = 30 * time.Millisecond
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(delay)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))

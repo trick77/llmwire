@@ -55,10 +55,10 @@ import (
 type WarningKind string
 
 const (
-	// WarnUnsupported: the request asked for something the model does not
+	// WarnUnsupported means the request asked for something the model does not
 	// support, and it was dropped.
 	WarnUnsupported WarningKind = "unsupported"
-	// WarnCompatibility: the request was honoured approximately. The call
+	// WarnCompatibility means the request was honoured approximately. The call
 	// worked; the result may differ from what was asked for.
 	WarnCompatibility WarningKind = "compatibility"
 	// WarnOther is anything that fits neither.
@@ -394,7 +394,7 @@ func (v *validation) checkReasoning(req ChatRequest) {
 		}
 		// A toggle model with effort_values takes the level beside its switch;
 		// one without has no such knob and the level is a mismatch.
-		if r.Control != ControlEffort && !(r.Control == ControlToggleObject && len(r.EffortValues) > 0) {
+		if r.Control != ControlEffort && (r.Control != ControlToggleObject || len(r.EffortValues) <= 0) {
 			if !v.refuse("reasoning", reasoningControlMismatch(r.Control, "an effort level"),
 				reasoningControlHint(r.Control)) {
 				v.dropReasoning()

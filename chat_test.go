@@ -271,7 +271,7 @@ func TestChat_StatusErrors(t *testing.T) {
 	})
 
 	t.Run("429 keeps Retry-After", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Retry-After", "17")
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte(`{"error":{"message":"slow down","code":"rate_limit"}}`))
@@ -301,7 +301,7 @@ func TestChat_StatusErrors(t *testing.T) {
 // calls against a 60s default.
 func TestChat_HeaderStallIsNamed(t *testing.T) {
 	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
 		case <-release:
 		case <-r.Context().Done():

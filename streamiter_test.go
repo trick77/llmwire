@@ -319,7 +319,7 @@ func TestChatStream_PreFlightFailuresReturnImmediately(t *testing.T) {
 	})
 
 	t.Run("401 arrives as an error, not as an empty stream", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":{"message":"bad key","code":"401"}}`))
 		}))

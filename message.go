@@ -15,6 +15,7 @@ import (
 // Role is a message author.
 type Role string
 
+// The four roles the wire format defines.
 const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
@@ -56,6 +57,7 @@ type Message struct {
 // PartKind distinguishes the content parts a message can carry.
 type PartKind string
 
+// The content part kinds a message can carry.
 const (
 	PartText  PartKind = "text"
 	PartImage PartKind = "image_url"
@@ -76,9 +78,14 @@ func TextMessage(role Role, text string) Message {
 	return Message{Role: role, Text: text}
 }
 
-// System, User and Assistant are shorthands for the three ordinary roles.
-func System(text string) Message    { return TextMessage(RoleSystem, text) }
-func User(text string) Message      { return TextMessage(RoleUser, text) }
+// System builds a system message. It, User and Assistant are shorthands for
+// the three ordinary roles.
+func System(text string) Message { return TextMessage(RoleSystem, text) }
+
+// User builds a user message.
+func User(text string) Message { return TextMessage(RoleUser, text) }
+
+// Assistant builds an assistant message.
 func Assistant(text string) Message { return TextMessage(RoleAssistant, text) }
 
 // ToolResult builds the reply to a tool call.
@@ -115,8 +122,10 @@ type ToolChoiceMode string
 const (
 	// ToolChoiceUnset leaves the field off the wire entirely.
 	ToolChoiceUnset ToolChoiceMode = ""
-	ToolChoiceAuto  ToolChoiceMode = "auto"
-	ToolChoiceNone  ToolChoiceMode = "none"
+	// ToolChoiceAuto lets the model decide whether to call a tool.
+	ToolChoiceAuto ToolChoiceMode = "auto"
+	// ToolChoiceNone forbids tool calls for this request.
+	ToolChoiceNone ToolChoiceMode = "none"
 	// ToolChoiceRequired compels some tool call.
 	ToolChoiceRequired ToolChoiceMode = "required"
 	// ToolChoiceFunction compels one named tool; set ToolChoice.Name too.
@@ -134,8 +143,10 @@ type ToolChoice struct {
 type ResponseFormatKind string
 
 const (
+	// FormatUnset leaves the field off the wire entirely.
 	FormatUnset ResponseFormatKind = ""
-	FormatText  ResponseFormatKind = "text"
+	// FormatText asks for ordinary text.
+	FormatText ResponseFormatKind = "text"
 	// FormatJSONObject asks for a single JSON object, with no schema.
 	FormatJSONObject ResponseFormatKind = "json_object"
 	// FormatJSONSchema asks for output conforming to a named schema.
@@ -157,7 +168,7 @@ type ResponseFormat struct {
 	Strict bool
 }
 
-// Reasoning is how much thinking to ask for.
+// ReasoningRequest is how much thinking to ask for.
 //
 // A sum type rather than a string, so validation is "does this variant match one
 // the profile allows" rather than a string comparison against a set the caller

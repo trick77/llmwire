@@ -120,7 +120,7 @@ func TestClassify(t *testing.T) {
 		{502, ErrUpstream},
 		{0, ErrUpstream},
 	} {
-		if got := classify(tc.status); got != tc.want {
+		if got := classify(tc.status); !errors.Is(got, tc.want) {
 			t.Errorf("classify(%d) = %v, want %v", tc.status, got, tc.want)
 		}
 	}

@@ -14,7 +14,7 @@ import (
 // sseServer serves a fixed SSE body.
 func sseServer(t *testing.T, body string) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
@@ -122,7 +122,7 @@ func TestRawStream_AppendsRouteToBaseURL(t *testing.T) {
 }
 
 func TestRawStream_ErrorStatusIsDecoded(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":{"message":"thinking cannot be disabled","code":"1210"}}`))
 	}))
@@ -149,7 +149,7 @@ func TestRawStream_ErrorStatusIsDecoded(t *testing.T) {
 // and stops there: it never retries on its own, because a library-level retry
 // turns a transient outage into a permanent failure for a whole job queue.
 func TestRawStream_RateLimitCarriesRetryAfter(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Retry-After", "17")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte(`{"error":{"message":"slow down","code":"1302"}}`))
@@ -174,7 +174,7 @@ func TestRawStream_RateLimitCarriesRetryAfter(t *testing.T) {
 func TestRawStream_ErrorBodyIsRedacted(t *testing.T) {
 	// Assembled, not a literal — see fakeKey in errors_test.go.
 	key := fakeKey("sk", "abcdefghijklmnopqrstuvwxyz01")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":{"message":"invalid key ` + key + `"}}`))
 	}))
@@ -194,7 +194,7 @@ func TestRawStream_ErrorBodyIsRedacted(t *testing.T) {
 // to say which one gave up — that naming is the deliverable of splitting them.
 func TestRawStream_HeaderStallNamesItsBound(t *testing.T) {
 	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
 		case <-release:
 		case <-r.Context().Done():
@@ -328,7 +328,7 @@ func TestRawStream_CallCapNamesItself(t *testing.T) {
 // A caller cancelling is not a stall, and must not be reported as one.
 func TestRawStream_ParentCancellationIsNotReportedAsAStall(t *testing.T) {
 	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
 		case <-release:
 		case <-r.Context().Done():
@@ -356,7 +356,7 @@ func TestRawStream_ParentCancellationIsNotReportedAsAStall(t *testing.T) {
 // --- RawPost -----------------------------------------------------------------
 
 func TestRawPost_ReturnsBodyAndHeaders(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// A gateway reports per-call spend and the real deployment name in
 		// headers and nowhere else, which is why RawPost hands them back.
 		w.Header().Set("x-litellm-response-cost", "1.23e-05")
@@ -387,7 +387,7 @@ func TestRawPost_ReturnsBodyAndHeaders(t *testing.T) {
 }
 
 func TestRawPost_ErrorStatusIsDecodedAndHeadersStillReturned(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("x-litellm-call-id", "abc123")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":{"message":"bad model","code":"1211"}}`))
@@ -505,7 +505,7 @@ func TestErrors_TheKeyIsStrippedBeforeTheShapePassAndAcrossTheCut(t *testing.T) 
 // A base URL that carries its key there would otherwise reach the log through
 // the one error a caller always prints: "could not connect".
 func TestErrors_ADialFailureNamesTheHostNotTheURL(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	addr := srv.URL
 	srv.Close() // nothing listens any more
 

@@ -204,16 +204,12 @@ type embedBatch struct {
 	model   string
 }
 
-// parseEmbedResponse decodes one batch and places its vectors BY INDEX.
+// parseEmbedResponseWith decodes one batch and places its vectors BY INDEX.
 //
 // The spec does not promise ordered data, and trusting the order would
 // misattribute every vector to the wrong input — a failure that produces perfectly
 // shaped output and that no downstream check would ever catch, unlike a missing
 // row. So the index is used, and every way it can be wrong is an error.
-func parseEmbedResponse(raw json.RawMessage, want int) (*embedBatch, error) {
-	return parseEmbedResponseWith(Redact, raw, want)
-}
-
 func parseEmbedResponseWith(redact redactor, raw json.RawMessage, want int) (*embedBatch, error) {
 	var w wireEmbedResponse
 	if err := json.Unmarshal(raw, &w); err != nil {
