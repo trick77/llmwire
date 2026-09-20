@@ -445,7 +445,7 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	if err != nil {
 		return StreamResult{}, c.explain(ctx, callCtx, guard, c.dialError("/chat/completions", err))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	headers := c.now().Sub(start)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -538,7 +538,7 @@ func (c *Client) rawCall(ctx context.Context, method, route string, body []byte)
 		// fired.
 		return nil, nil, t, c.explain(ctx, callCtx, guard, c.dialError(route, err))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	t.Headers = c.now().Sub(start)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

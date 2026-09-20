@@ -29,7 +29,7 @@ func spoolFiles(t *testing.T, dir string) []string {
 
 func TestSpoolTransport_WritesStatusHeadersAndBody(t *testing.T) {
 	body := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("X-Request-Id", "req-1")
 		_, _ = w.Write([]byte(body))
@@ -45,6 +45,7 @@ func TestSpoolTransport_WritesStatusHeadersAndBody(t *testing.T) {
 	}
 	for stream.Next() {
 	}
+	//nolint:govet // shadow: statement-scoped err, distinct from the outer one
 	if err := stream.Close(); err != nil {
 		t.Fatal(err)
 	}

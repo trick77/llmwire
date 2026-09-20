@@ -105,11 +105,7 @@ type wireChatResponse struct {
 	Error json.RawMessage `json:"error"`
 }
 
-// parseChatResponse decodes a completion.
-func parseChatResponse(raw json.RawMessage) (*ChatResponse, error) {
-	return parseChatResponseWith(Redact, raw)
-}
-
+// parseChatResponseWith decodes a completion.
 func parseChatResponseWith(redact redactor, raw json.RawMessage) (*ChatResponse, error) {
 	var w wireChatResponse
 	if err := json.Unmarshal(raw, &w); err != nil {

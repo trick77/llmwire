@@ -116,7 +116,7 @@ func ExampleClient_Chat() {
 // available once the loop finishes — usage arrives in the final chunk, so there is
 // nowhere earlier for it to be.
 func ExampleClient_ChatStream() {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, frame := range []string{
 			`{"choices":[{"delta":{"content":"two "}}]}`,

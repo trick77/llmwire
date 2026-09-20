@@ -323,7 +323,7 @@ func stream(t *testing.T, c *Client, b body) (StreamResult, error) {
 // A truncation (finish_reason "length") counts as ACCEPTED: the parameter under
 // test was honoured, and the answer being cut off is this harness's own tiny
 // token cap doing its job.
-func accepted(res StreamResult, err error) (bool, string) {
+func accepted(_ StreamResult, err error) (bool, string) {
 	if err == nil {
 		return true, ""
 	}

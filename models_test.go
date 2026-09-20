@@ -153,7 +153,7 @@ func TestListModels_ErrorStatusIsTypedAndRedacted(t *testing.T) {
 
 func TestListModels_HonoursTheCallerContext(t *testing.T) {
 	block := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		<-block
 	}))
 	defer srv.Close()

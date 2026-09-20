@@ -21,6 +21,7 @@ import (
 // EventKind says which channel an event came from.
 type EventKind string
 
+// The channels a stream event can arrive on.
 const (
 	EventContent   EventKind = "content"
 	EventReasoning EventKind = "reasoning"
@@ -134,7 +135,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		err = c.httpError(resp)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		guard.stop()
 		cancelReq()
 		cancelCall()
@@ -172,7 +173,7 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 		pl.profile.Tools.recoversInline(), s.client.now, start)
 	res.Timing.Headers = headers
 
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	s.guard.stop()
 
 	s.mu.Lock()

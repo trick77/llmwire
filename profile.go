@@ -26,6 +26,7 @@ import (
 // refused by the schema rather than by the endpoint.
 type Endpoint string
 
+// The endpoints a profile can describe.
 const (
 	EndpointChat       Endpoint = "chat"
 	EndpointEmbeddings Endpoint = "embeddings"
@@ -37,6 +38,7 @@ const (
 type ReasoningControl string
 
 const (
+	// ControlNone is a model that exposes no reasoning knob.
 	ControlNone ReasoningControl = "none"
 	// ControlToggleObject is thinking:{"type":"enabled"|"disabled"}.
 	ControlToggleObject ReasoningControl = "toggle_object"

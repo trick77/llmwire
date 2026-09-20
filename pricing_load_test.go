@@ -20,6 +20,11 @@ const goodProvenance = `      source_url: https://vendor.example/pricing
       verified_on: 2026-09-12
 `
 
+// badWeekday is an intentionally misspelled weekday, kept in its own constant
+// so a spell-checker's --fix cannot quietly repair the invalid input that the
+// "window with a bad day" case depends on.
+const badWeekday = "Wens" + "day"
+
 func TestCostBlock_LoadRefusals(t *testing.T) {
 	for _, tc := range []struct{ name, doc, want string }{
 		{
@@ -204,6 +209,10 @@ func TestCostBlock_LoadRefusals(t *testing.T) {
 			want: "written as two windows",
 		},
 		{
+			// The weekday below is deliberately misspelled: it is the invalid
+			// input under test. misspell's --fix would silently turn it into a
+			// valid day and the case would stop asserting anything, so the
+			// literal is built from a constant the linter does not scan.
 			name: "window with a bad day",
 			doc: chatHead + `    cost:
       input: 0.15
@@ -211,7 +220,7 @@ func TestCostBlock_LoadRefusals(t *testing.T) {
       cache_write: 0
       output: 0.50
       windows:
-        - {name: peak, zone: Asia/Singapore, days: [Wensday], from: "14:00", to: "18:00", multiplier_permille: 500}
+        - {name: peak, zone: Asia/Singapore, days: [` + badWeekday + `], from: "14:00", to: "18:00", multiplier_permille: 500}
 ` + goodProvenance,
 			want: "is not Mon..Sun",
 		},

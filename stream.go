@@ -438,7 +438,7 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bou
 		// The first call's name already went out under this id from the channel
 		// it was recovered from; a consumer that assigns names on first sight
 		// has it. From the other channel it is named again (see earlyName).
-		if !(i == 0 && earlyName == rec.channel) {
+		if i != 0 || earlyName != rec.channel {
 			tc.Function.Name = call.Name
 		}
 		emit(streamEvent{kind: evToolCall, toolCall: tc})
@@ -498,6 +498,12 @@ func newStallGuard(cancel context.CancelFunc, d time.Duration, reason string) *s
 //
 // The deadline is recorded as a timestamp, not merely handed to Reset, because
 // Reset alone is not enough — see fire.
+//
+// Only stallIdle reaches reason today, but stallHeaders is the other half of
+// the pair and the message ends up in the user-visible timeout error, so the
+// parameter stays.
+//
+//nolint:unparam // reason is the stall message, not a constant
 func (g *stallGuard) arm(d time.Duration, reason string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

@@ -29,7 +29,7 @@ func gatewayClient(t *testing.T, srv *httptest.Server) *Client {
 }
 
 func TestChat_GatewayCallIDIsLoggedOnARejection(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("x-litellm-call-id", "call-rejected")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte(`{"error":{"message":"slow down","code":"429"}}`))
@@ -49,7 +49,7 @@ func TestChat_GatewayCallIDIsLoggedOnARejection(t *testing.T) {
 }
 
 func TestStream_GatewayHeadersSurviveACutStream(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("x-litellm-call-id", "call-cut")
 		w.Header().Set("Content-Type", "text/event-stream")
 		// One frame, then EOF without [DONE] or finish_reason: a cut stream.
@@ -71,7 +71,7 @@ func TestStream_GatewayHeadersSurviveACutStream(t *testing.T) {
 }
 
 func TestStream_GatewayCallIDIsLoggedOnARejectedOpen(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("x-litellm-call-id", "call-stream-rejected")
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte(`{"error":{"message":"upstream down","code":"502"}}`))
@@ -93,7 +93,7 @@ func TestStream_GatewayCallIDIsLoggedOnARejectedOpen(t *testing.T) {
 const gatewayChatBody = `{"model":"ai-gateway-gpt-5.4-mini","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`
 
 func TestChat_GatewayHeadersRideOnTheResponse(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("x-litellm-call-id", "call-42")
 		w.Header().Set("x-litellm-model-name", "azure/gpt-5.4-mini")
 		w.Header().Set("x-litellm-key-spend", "12.5")
@@ -124,7 +124,7 @@ func TestChat_GatewayHeadersRideOnTheResponse(t *testing.T) {
 }
 
 func TestChat_DirectRouteHasNoGatewayBlock(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(gatewayChatBody))
 	}))
@@ -156,7 +156,7 @@ func TestChat_KeySpendVariants(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				if tc.value != "" {
 					w.Header().Set("x-litellm-key-spend", tc.value)
 				}
@@ -195,7 +195,7 @@ func TestChat_KeySpendVariants(t *testing.T) {
 }
 
 func TestChat_NoneCostLiteralIsUnpricedNotCorrupt(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("x-litellm-call-id", "call-7")
 		w.Header().Set("x-litellm-response-cost", "None")
 		w.Header().Set("Content-Type", "application/json")
@@ -219,7 +219,7 @@ func TestChat_NoneCostLiteralIsUnpricedNotCorrupt(t *testing.T) {
 }
 
 func TestStream_GatewayHeadersRideOnTheResult(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("x-litellm-call-id", "call-stream")
 		w.Header().Set("x-litellm-model-name", "azure/gpt-5.4-mini")
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -242,5 +242,3 @@ func TestStream_GatewayHeadersRideOnTheResult(t *testing.T) {
 		t.Errorf("a stream is never priced from headers, got %v", res.Usage.Cost.Provenance)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

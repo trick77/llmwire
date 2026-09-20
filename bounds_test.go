@@ -118,7 +118,7 @@ func TestToolCallIdleTimeout_WidensOnInlineMarker(t *testing.T) {
 func TestBoundSentinels(t *testing.T) {
 	// Headers never arrive.
 	release := make(chan struct{})
-	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
 		case <-release:
 		case <-r.Context().Done():

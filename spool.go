@@ -114,6 +114,6 @@ func (b *spoolBody) write() {
 		return
 	}
 	out.WriteString("\n")
-	b.body.WriteTo(&out)
+	_, _ = b.body.WriteTo(&out)
 	_ = os.WriteFile(b.path, out.Bytes(), 0o600)
 }

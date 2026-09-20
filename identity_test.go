@@ -174,6 +174,7 @@ func TestEmulateOpenCode_rotatesAfterAnIdleGap(t *testing.T) {
 		t.Fatal("the first call reported a rotation; the id was minted at construction")
 	}
 	now = now.Add(sessionIdleRotation - time.Second)
+	//nolint:govet // shadow: statement-scoped, deliberately not the outer rotated
 	if id, rotated := s.current(); id != first || rotated {
 		t.Fatal("rotated inside the idle window: a burst of related calls must stay one session")
 	}
@@ -181,6 +182,7 @@ func TestEmulateOpenCode_rotatesAfterAnIdleGap(t *testing.T) {
 	// a session alive indefinitely, the way it does for a person who keeps
 	// working.
 	now = now.Add(sessionIdleRotation - time.Second)
+	//nolint:govet // shadow: statement-scoped, deliberately not the outer rotated
 	if id, rotated := s.current(); id != first || rotated {
 		t.Fatal("rotated while still active; the gap is measured from the last call")
 	}
