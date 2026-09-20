@@ -100,4 +100,4 @@ jobs:
           cache: false
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.11
+          version: v2.13

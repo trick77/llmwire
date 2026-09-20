@@ -24,6 +24,10 @@ linters:
       enable-all: true
       disable:
         - fieldalignment
+        # shadow fires on `if err := f(); err != nil`, which is idiomatic Go and
+        # statement-scoped. Every hit across the repo family was that pattern,
+        # so the check was pure noise.
+        - shadow
     revive:
       rules:
         - name: var-naming
