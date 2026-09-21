@@ -455,3 +455,91 @@ func TestChatStream_CollectWithoutACallbackStillCollects(t *testing.T) {
 		t.Errorf("result = %+v, err = %v", res, err)
 	}
 }
+
+// gatewayStreamDoc is gatewayDoc's shape with streaming declared, so the
+// gateway route can be driven through ChatStream. Kept separate rather than
+// adding streaming to gatewayDoc, which a dozen pricing tests read.
+const gatewayStreamDoc = `profiles:
+  - id: m
+    wire_model_id: m
+    max_tokens_param: max_tokens
+    verified: measured
+    streaming:
+      supported: true
+      accepts_stream_options: true
+    cost:
+      input: 0.15
+      cache_read: 0.03
+      cache_write: 0
+      output: 0.50
+      source_url: https://vendor.example/pricing
+      verified_on: 2026-09-12
+  - id: m-via
+    base: m
+    gateway: litellm
+    wire_model_id: proxy/m
+`
+
+// The whole point of the usage.cost lane, end to end: a STREAM behind a gateway
+// carries no cost header (it is written before the body is consumed), so without
+// the field on the final chunk the most expensive call in a turn is unpriced.
+func TestChatStream_PricesAGatewayStreamFromTheUsageBody(t *testing.T) {
+	srv := flushingServer(t, []string{
+		`data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10,"cost":0.0000123}}`,
+		"data: [DONE]",
+	}, 0)
+	c := New(Config{
+		BaseURL:     srv.URL,
+		Registry:    registryFrom(t, gatewayStreamDoc),
+		CallTimeout: 20 * time.Second,
+		Now:         func() time.Time { return time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC) },
+	})
+	s, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "m-via", Messages: []Message{User("hi")}})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	defer s.Close()
+
+	res, err := s.Collect(nil)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if res.Usage.Cost.Provenance != Reported {
+		t.Errorf("provenance = %v, want reported", res.Usage.Cost.Provenance)
+	}
+	if res.Usage.Cost.NanoUSD != 12_300 {
+		t.Errorf("cost = %d nano, want 12300", res.Usage.Cost.NanoUSD)
+	}
+}
+
+// Without the field the call stays unpriced — never zero, and never the table
+// rate, which behind a gateway would be a confident figure for a call nobody
+// priced. This is intg's state until the gateway sets
+// include_cost_in_streaming_usage.
+func TestChatStream_AGatewayStreamWithoutTheFieldStaysUnpriced(t *testing.T) {
+	srv := flushingServer(t, []string{
+		`data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10}}`,
+		"data: [DONE]",
+	}, 0)
+	c := New(Config{
+		BaseURL:     srv.URL,
+		Registry:    registryFrom(t, gatewayStreamDoc),
+		CallTimeout: 20 * time.Second,
+		Now:         func() time.Time { return time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC) },
+	})
+	s, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "m-via", Messages: []Message{User("hi")}})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	defer s.Close()
+
+	res, err := s.Collect(nil)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if res.Usage.Cost.Provenance != Unpriced || res.Usage.Cost.NanoUSD != 0 {
+		t.Fatalf("cost = %+v, want unpriced", res.Usage.Cost)
+	}
+}

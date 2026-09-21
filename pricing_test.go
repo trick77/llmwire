@@ -2,6 +2,7 @@ package llmwire
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -500,5 +501,139 @@ func TestPrice_AppliedAtIsAlwaysRecorded(t *testing.T) {
 	cost, _ = priceWith(t, pricedChat, "m", Usage{}, at)
 	if !cost.AppliedAt.Equal(at) {
 		t.Errorf("an unpriced call lost its instant: %v", cost.AppliedAt)
+	}
+}
+
+// usageWithCost builds the usage a gateway sends on the final stream chunk when
+// include_cost_in_streaming_usage is on: the token lanes plus the gateway's own
+// figure on usage.cost. Raw is what priceFromGateway reads, so it carries the
+// literal bytes rather than a float that has already been rounded.
+func usageWithCost(promptTotal, outputTotal int64, cost string) Usage {
+	u := usageOf(promptTotal, 0, outputTotal)
+	u.Raw = []byte(`{"prompt_tokens":` + itoa(promptTotal) +
+		`,"completion_tokens":` + itoa(outputTotal) +
+		`,"cost":` + cost + `}`)
+	return u
+}
+
+func itoa(v int64) string { return strconv.FormatInt(v, 10) }
+
+// A stream cannot be priced from the header — it is written before the body is
+// consumed — so the gateway puts the figure on usage.cost instead. This is the
+// lane that makes a streamed answer cost anything at all.
+func TestPrice_ReportedReadsCostFromTheUsageBody(t *testing.T) {
+	p := mustLookup(t, registryFrom(t, gatewayDoc), "m-via")
+	for _, tc := range []struct {
+		cost string
+		want int64
+	}{
+		{"0.0000123", 12_300},
+		{"1.23e-05", 12_300},
+		// Below a nano rounds up to 1, the same direction as every other lane.
+		{"0.0000000001", 1},
+		{"0", 0},
+	} {
+		t.Run(tc.cost, func(t *testing.T) {
+			u := usageWithCost(100, 100, tc.cost)
+			cost, warnings := priceCall(p, u, nil, 200, time.Unix(0, 0).UTC())
+			if len(warnings) != 0 {
+				t.Errorf("warnings = %v", warnings)
+			}
+			if cost.Provenance != Reported {
+				t.Errorf("provenance = %v, want reported", cost.Provenance)
+			}
+			if cost.NanoUSD != tc.want {
+				t.Errorf("cost = %d, want %d", cost.NanoUSD, tc.want)
+			}
+		})
+	}
+}
+
+// The body is the only figure that can be right on a stream, so it wins. A
+// gateway that sends BOTH — LiteLLM has shipped the header as "0" on streams —
+// must not have its zero recorded as a confident price.
+func TestPrice_ReportedBodyCostBeatsTheHeader(t *testing.T) {
+	p := mustLookup(t, registryFrom(t, gatewayDoc), "m-via")
+	u := usageWithCost(100, 100, "0.0000123")
+	cost, warnings := priceCall(p, u, costHeader("0"), 200, time.Unix(0, 0).UTC())
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v", warnings)
+	}
+	if cost.Provenance != Reported || cost.NanoUSD != 12_300 {
+		t.Fatalf("cost = %+v, want 12300 reported from the body", cost)
+	}
+}
+
+// Neither lane reporting is the honest unknown, and it must stay Unpriced rather
+// than falling through to the table: a list rate here would be a confident figure
+// for a call nobody priced.
+func TestPrice_ReportedWithNeitherLaneStaysUnpriced(t *testing.T) {
+	p := mustLookup(t, registryFrom(t, gatewayDoc), "m-via")
+	u := usageOf(100, 0, 100)
+	u.Raw = []byte(`{"prompt_tokens":100,"completion_tokens":100}`)
+	cost, warnings := priceCall(p, u, http.Header{}, 200, time.Unix(0, 0).UTC())
+	if cost.Provenance != Unpriced || cost.NanoUSD != 0 {
+		t.Fatalf("cost = %+v, want unpriced", cost)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one", warnings)
+	}
+}
+
+// A cost field this package cannot read is not a reason to price the call from
+// somewhere else, and not a reason to record zero.
+//
+// The header is set to "0" throughout, which is what LiteLLM sends on a stream:
+// a body value wrongly judged ABSENT falls through to that header and records a
+// confident zero with no warning. With nil headers this test passed against a
+// decoder that rejected nothing, because the warning it counted came from the
+// header lane. The assertion on the warning text is what nails the lane.
+func TestPrice_ReportedRejectsAnUnusableBodyCost(t *testing.T) {
+	p := mustLookup(t, registryFrom(t, gatewayDoc), "m-via")
+	// A STRING cost is the case that fails a json.Number decode, which is how an
+	// unusable value once passed for an absent one.
+	for _, raw := range []string{`"NaN"`, `"abc"`, `"Inf"`, `-0.01`, `"-0.01"`} {
+		t.Run(raw, func(t *testing.T) {
+			u := usageWithCost(100, 100, raw)
+			cost, warnings := priceCall(p, u, costHeader("0"), 200, time.Unix(0, 0).UTC())
+			if cost.Provenance != Unpriced || cost.NanoUSD != 0 {
+				t.Fatalf("cost = %+v, want unpriced", cost)
+			}
+			if len(warnings) != 1 {
+				t.Fatalf("warnings = %v, want one", warnings)
+			}
+			if !strings.Contains(warnings[0].Details, "usage.cost") {
+				t.Errorf("warning came from the header lane, not the body: %q", warnings[0].Details)
+			}
+		})
+	}
+}
+
+// null is "not reported", the JSON analog of the None literal the header lane
+// already accepts — so it falls through to the header on purpose, and a real
+// header still prices the call.
+func TestPrice_ReportedTreatsANullBodyCostAsAbsent(t *testing.T) {
+	p := mustLookup(t, registryFrom(t, gatewayDoc), "m-via")
+	u := usageWithCost(100, 100, `null`)
+	cost, warnings := priceCall(p, u, costHeader("1.23e-05"), 200, time.Unix(0, 0).UTC())
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v", warnings)
+	}
+	if cost.Provenance != Reported || cost.NanoUSD != 12_300 {
+		t.Fatalf("cost = %+v, want the header's 12300", cost)
+	}
+}
+
+// A gateway sending the cost as a decimal STRING is priced, not discarded: the
+// quotes are packaging, and the text inside is the same decimal.
+func TestPrice_ReportedAcceptsAStringBodyCost(t *testing.T) {
+	p := mustLookup(t, registryFrom(t, gatewayDoc), "m-via")
+	u := usageWithCost(100, 100, `"1.23e-05"`)
+	cost, warnings := priceCall(p, u, costHeader("0"), 200, time.Unix(0, 0).UTC())
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v", warnings)
+	}
+	if cost.Provenance != Reported || cost.NanoUSD != 12_300 {
+		t.Fatalf("cost = %+v, want 12300 from the body", cost)
 	}
 }
