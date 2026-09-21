@@ -89,8 +89,11 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
   never carries it (LiteLLM #12689) — the figure rides on `usage.cost` in the
   final chunk, and only with `include_cost_in_streaming_usage` set gateway-side.
   Body wins: LiteLLM has shipped the header as `0` on streams, and recording
-  that is a confident zero for the most expensive call in a turn. Neither lane
-  → `Unpriced`, never the table.
+  that is a confident zero for the most expensive call in a turn. Present in ANY
+  shape counts as present — a STRING `"NaN"` is unusable, never absent, or it
+  falls through to exactly that zero. Neither lane → `Unpriced`, never the table.
+  **Still unguarded**: header `0` with the setting OFF (the default) records
+  `Reported 0`, because nothing distinguishes it from a genuinely free call.
   Literal `None`/`null` = not reported (LiteLLM sets headers via `str()`), never
   corrupt. Other proxy headers → `Gateway` block on the response
   (`gatewayresp.go`): call id, deployment, key spend (**gauge**, never summed).

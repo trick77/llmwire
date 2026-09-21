@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -652,7 +653,7 @@ func costFromUsageBody(u Usage) (nano int64, ok bool, err error) {
 		return 0, false, nil
 	}
 	var body struct {
-		Cost *json.Number `json:"cost"`
+		Cost json.RawMessage `json:"cost"`
 	}
 	// A usage object this package cannot parse is the same fact as one without
 	// the field: no cost was reported here. parseUsage already kept the bytes in
@@ -661,10 +662,21 @@ func costFromUsageBody(u Usage) (nano int64, ok bool, err error) {
 	if err := json.Unmarshal(u.Raw, &body); err != nil {
 		return 0, false, nil
 	}
-	if body.Cost == nil {
+	// RawMessage, not *json.Number: a STRING cost ("NaN", "abc") fails a Number
+	// decode, and treating that as "absent" hands the call to the header lane,
+	// where LiteLLM's "0" on a stream becomes a confident zero with no warning —
+	// precisely the figure this whole lane exists to refuse. Present in any shape
+	// means present; parseReportedCost decides whether it is usable.
+	raw := strings.TrimSpace(string(body.Cost))
+	if raw == "" || raw == "null" {
 		return 0, false, nil
 	}
-	nano, err = parseReportedCost(body.Cost.String())
+	// A JSON string carries the same decimal a bare number would, so the quotes
+	// come off and the value is judged on its text either way.
+	if unquoted, qErr := strconv.Unquote(raw); qErr == nil {
+		raw = unquoted
+	}
+	nano, err = parseReportedCost(raw)
 	if err != nil {
 		return 0, true, err
 	}
