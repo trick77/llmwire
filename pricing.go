@@ -654,7 +654,14 @@ func costFromUsageBody(u Usage) (nano int64, ok bool, err error) {
 	var body struct {
 		Cost *json.Number `json:"cost"`
 	}
-	if err := json.Unmarshal(u.Raw, &body); err != nil || body.Cost == nil {
+	// A usage object this package cannot parse is the same fact as one without
+	// the field: no cost was reported here. parseUsage already kept the bytes in
+	// Raw for exactly this reason, and it does not fail a call over them either.
+	//nolint:nilerr // an unreadable usage object is "not reported", not a failure
+	if err := json.Unmarshal(u.Raw, &body); err != nil {
+		return 0, false, nil
+	}
+	if body.Cost == nil {
 		return 0, false, nil
 	}
 	nano, err = parseReportedCost(body.Cost.String())
