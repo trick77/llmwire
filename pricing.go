@@ -1,6 +1,7 @@
 package llmwire
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -512,7 +513,7 @@ func priceCall(p *Profile, u Usage, hdr http.Header, status int, at time.Time) (
 	}
 
 	if p.Gateway != "" {
-		return priceFromGateway(p, hdr, at)
+		return priceFromGateway(p, u, hdr, at)
 	}
 	if p.Cost == nil {
 		return unpriced("no verified rate for model %q; the cost is unknown, not zero", p.ID)
@@ -632,14 +633,50 @@ func (b *CostBlock) selectWindow(at time.Time) (string, int32) {
 // litellmCostHeader carries the gateway's own per-call spend.
 const litellmCostHeader = "x-litellm-response-cost"
 
+// costFromUsageBody reads the gateway's figure off the usage object itself.
+//
+// This is the only lane that can price a STREAM. The cost header is written
+// before the body is consumed, so on a streamed response it is absent (LiteLLM
+// issue #12689) — the gateway puts the number on usage.cost instead, behind
+// litellm_settings.include_cost_in_streaming_usage.
+//
+// json.Number, so the literal text reaches parseReportedCost and big.Rat converts
+// it exactly. Decoding into a float64 first would round the value before the
+// function whose whole purpose is not rounding it ever sees it.
+//
+// Returns ok=false when the field is absent, which is not an error: a gateway
+// without the setting simply does not send it. A present-but-unusable value IS an
+// error, and never degrades to zero.
+func costFromUsageBody(u Usage) (nano int64, ok bool, err error) {
+	if len(u.Raw) == 0 {
+		return 0, false, nil
+	}
+	var body struct {
+		Cost *json.Number `json:"cost"`
+	}
+	if err := json.Unmarshal(u.Raw, &body); err != nil || body.Cost == nil {
+		return 0, false, nil
+	}
+	nano, err = parseReportedCost(body.Cost.String())
+	if err != nil {
+		return 0, true, err
+	}
+	return nano, true, nil
+}
+
 // priceFromGateway reads a proxy's reported cost.
 //
 // Never falls back to the table: the proxy knows which deployment ran and what it
 // is charged at, and a list rate substituted here would be a confident figure for
-// a call nobody priced. An absent header is normal — a LiteLLM STREAM carries no
-// cost header at all, because the headers are built before the stream is consumed
-// — so that case degrades to Unpriced rather than to a guess.
-func priceFromGateway(p *Profile, hdr http.Header, at time.Time) (Cost, []Warning) {
+// a call nobody priced. Neither lane reporting degrades to Unpriced rather than
+// to a guess.
+//
+// The BODY wins over the header. On a stream the header cannot hold a real value,
+// and LiteLLM has shipped versions that send it as "0" there — recording that
+// would be a confident zero for the most expensive call in the turn. Where both
+// are real (a non-streamed call under include_cost_in_usage) they are the same
+// number anyway.
+func priceFromGateway(p *Profile, u Usage, hdr http.Header, at time.Time) (Cost, []Warning) {
 	warn := func(format string, args ...any) (Cost, []Warning) {
 		return Cost{AppliedAt: at}, []Warning{{
 			Kind:    WarnOther,
@@ -647,10 +684,17 @@ func priceFromGateway(p *Profile, hdr http.Header, at time.Time) (Cost, []Warnin
 			Details: fmt.Sprintf(format, args...),
 		}}
 	}
+	if nano, ok, err := costFromUsageBody(u); ok {
+		if err != nil {
+			return warn("gateway %q reported an unusable cost on usage.cost: %v", p.Gateway, err)
+		}
+		return Cost{NanoUSD: nano, Provenance: Reported, AppliedAt: at}, nil
+	}
 	raw := hdr.Get(litellmCostHeader)
 	if raw == "" || isNoneLiteral(raw) {
-		return warn("gateway %q reported no cost for model %q (a stream never does), so the cost "+
-			"is unknown, not zero", p.Gateway, p.ID)
+		return warn("gateway %q reported no cost for model %q (a stream sends it on usage.cost, "+
+			"and only with include_cost_in_streaming_usage set), so the cost is unknown, not zero",
+			p.Gateway, p.ID)
 	}
 	nano, err := parseReportedCost(raw)
 	if err != nil {

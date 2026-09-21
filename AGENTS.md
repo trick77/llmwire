@@ -84,7 +84,13 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
 - **Always USD at the vendor's list rate.** Plan credits still report list rate;
   `FromTable` is an equivalent, **not an invoice**. No rate → `Unpriced` → 0 **with
   a warning**.
-- **Behind a gateway: `x-litellm-response-cost` or nothing.** Streams carry none.
+- **Behind a gateway: `usage.cost` first, then `x-litellm-response-cost`, else
+  nothing.** The HEADER is written before the body is consumed, so a STREAM
+  never carries it (LiteLLM #12689) — the figure rides on `usage.cost` in the
+  final chunk, and only with `include_cost_in_streaming_usage` set gateway-side.
+  Body wins: LiteLLM has shipped the header as `0` on streams, and recording
+  that is a confident zero for the most expensive call in a turn. Neither lane
+  → `Unpriced`, never the table.
   Literal `None`/`null` = not reported (LiteLLM sets headers via `str()`), never
   corrupt. Other proxy headers → `Gateway` block on the response
   (`gatewayresp.go`): call id, deployment, key spend (**gauge**, never summed).
