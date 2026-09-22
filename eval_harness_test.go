@@ -41,7 +41,16 @@ const (
 	// defaultMaxCalls trips independently of cost. It is the one that catches a
 	// retry loop or a test that never terminates, where each call is cheap but
 	// the count is not.
-	defaultMaxCalls = 60
+	//
+	// Raised 60 -> 160 on 2026-09-22, when onboarding the V2.6 pair pushed a
+	// full `-run Probe` sweep past the old ceiling: four MiMo models across the
+	// per-model tables is ~75 calls, and MiMoEffortLadderIsReal adds 40 on its
+	// own. At 60 the documented command died partway with "eval call ceiling
+	// reached", which reads as a harness failure rather than as the budget
+	// guard working. Raised rather than disabled, per ONBOARDING.md: the USD
+	// breaker below is the one that bounds real spend, and a full sweep is
+	// about $0.10 against its $0.50.
+	defaultMaxCalls = 160
 	// defaultMaxUSD is a circuit breaker, not a budget. A full run at the
 	// per-call caps below costs well under a cent.
 	defaultMaxUSD = 0.50

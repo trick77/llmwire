@@ -462,17 +462,29 @@ profiles:
       # and high return 200, xhigh is a 400 "Invalid request parameters". Same
       # set as V2.5.
       #
-      # What the levels DO is not established. One sample each on the same
-      # prompt, reasoning tokens:
-      #   no level  197
-      #   low        67
-      #   medium     69
-      #   high       74
-      # The three levels do not separate from each other; they only separate
-      # from sending nothing, and in the direction a caller would not expect —
-      # every level thought LESS than no level at all. Not reproduced on
-      # -flash, where the same table reads 43 / 27 / 55 / 43. Treat the ladder
-      # as accepted-and-flat until a probe with more samples says otherwise.
+      # THE LADDER IS NOT A LADDER. Settled 2026-09-22 by
+      # MiMoEffortLadderIsReal, five samples per level on a variable-depth
+      # prompt ("list every prime between 100 and 200"), reasoning tokens:
+      #   no level  104-656   mean 254.6   [120 120 656 273 104]
+      #   low       120-507   mean 198.2   [121 507 120 122 121]
+      #   medium    120-148   mean 125.8   [120 148 120 120 121]
+      #   high      104-1088  mean 337.8   [121 255 121 1088 104]
+      # Every range overlaps every other. The means look directional (high
+      # 337.8 against low 198.2) and are an artefact: read the samples, not the
+      # means. Four of five samples at EVERY level sit in a ~104-150 band, and
+      # the mean is set by whether that level happened to draw one outlier
+      # (507, 656, 1088). What varies is not the level — it is whether this
+      # deployment takes a deep pass on a given call.
+      #
+      # So a caller gets a floor with occasional deep thinks, not three
+      # settings. Use the thinking toggle, which IS honoured cleanly; treat a
+      # level as a hint the endpoint accepts and largely ignores. Do not build
+      # a cost model on it.
+      #
+      # An earlier one-sample-per-level run read 67/69/74 against 197 for no
+      # level and suggested any level SUPPRESSES thinking. That does not
+      # reproduce: at n=5 the no-level range (104-656) overlaps every level.
+      # Kept as the reason this file trusts ranges over points.
       effort_values: [low, medium, high]
       # NOT measured: reasoning arrived on every probe, but stream.go reads both
       # `reasoning_content` and `reasoning` and content wins, so which key the
@@ -504,10 +516,18 @@ profiles:
       # not build. Failing to reproduce is not refuting, and recovery only acts
       # when the markup appears, so a clean answer costs nothing.
       recover_inline_markup: true
-      # NOT measured: no probe offered a forced choice or two tools in one turn
-      # to this endpoint. Vendor documentation, carried at the same values as
-      # the rest of the family. tool_choice_values cannot be empty while tools
-      # are supported, so this is the doc's value rather than an absence.
+      # NOT measured, all three: no probe has offered a forced choice or two
+      # tools in one turn to ANY MiMo endpoint. Vendor documentation, at the
+      # same values as the rest of the family.
+      #
+      # They are present rather than absent for two different reasons, neither
+      # of which is evidence. tool_choice_values cannot be empty while tools
+      # are supported (profile.go validate), so the doc's value is the only
+      # loadable option short of dropping tool support. supports_parallel has
+      # no reader in the library at all today — grep finds only its field
+      # declaration — so the `true` here gates nothing and refuses nothing; it
+      # records the vendor's claim. If a caller ever routes on it, measure it
+      # first.
       tool_choice_values: [auto]
       supports_forced_choice: false
       supports_parallel: true
@@ -587,13 +607,16 @@ profiles:
       does not think" will now see the real figure. Measured 2026-09-22:
       cached_tokens sits INSIDE prompt_tokens (0 then 10880 against a
       prompt_tokens of 10909 on the identical prompt), so the full-rate lane is
-      the difference and pricing subtracts it. Unlike -pro this endpoint starts
-      COLD — 0 cached on a fresh 10.9k prompt, where -pro reported 192 of 258
-      because it injects its own system message. Latency is 1-5 seconds per
-      call, not the 25-64 seconds the V2.5 notes describe. reasoning_effort is
-      accepted with an enforced set despite appearing in no vendor document for
-      this model; see the reasoning block for what the levels did and did not
-      show.
+      the difference and pricing subtracts it. Unlike mimo-v2.5-pro this
+      endpoint starts COLD — 0 cached on a fresh 10.9k prompt, where
+      mimo-v2.5-pro reported 192 of 258 because it injects its own system
+      message. Latency is 1-5 seconds per call, not the 25-64 seconds the V2.5
+      notes describe. reasoning_effort is accepted with an enforced set despite
+      appearing in no vendor document for this model, but it does NOT give a
+      caller three settings: at five samples per level every range overlaps
+      every other, and what varies is whether the deployment takes a deep pass,
+      not the level. Reach for the thinking toggle instead, which is honoured
+      cleanly and wins over an effort level sent in the same request.
 
   - id: mimo-v2.6-flash
     endpoint: chat
@@ -619,9 +642,21 @@ profiles:
       can_be_disabled: true
       control: toggle_object
       # MEASURED 2026-09-22: same enforced set as -pro, xhigh a 400 "Invalid
-      # request parameters". The levels separate no better here, and not even in
-      # -pro's direction — reasoning tokens were 43 with no level, then 27 / 55
-      # / 43 for low / medium / high, one sample each. Accepted and flat.
+      # request parameters".
+      #
+      # THE LADDER IS NOT A LADDER, and the case is even plainer here than on
+      # -pro. Five samples per level, same prompt, reasoning tokens:
+      #   no level  117-1784  mean 451.0   [1784 120 117 117 117]
+      #   low       104-121   mean 115.2   [104 117 117 117 121]
+      #   medium    117-121   mean 118.6   [121 117 117 118 120]
+      #   high      104-117   mean 111.8   [104 104 117 117 117]
+      # The three levels span 17 tokens between them and high is the LOWEST
+      # mean of the three. Not noise around a trend: there is no trend. The
+      # no-level mean of 451 is one 1784-token outlier in five; its other four
+      # samples sit in the same ~117-120 band as every level.
+      #
+      # Use the thinking toggle, which is honoured cleanly. A level is accepted
+      # and does not buy a caller a different amount of thinking.
       effort_values: [low, medium, high]
       # NOT measured, for the same reason as -pro: the delta key cannot be read
       # back out of a StreamResult. Load default.
@@ -641,7 +676,9 @@ profiles:
       format: native
       # Same serving layer and same defensive reasoning as -pro.
       recover_inline_markup: true
-      # NOT measured, vendor documentation.
+      # NOT measured, all three; see the -pro entry for why they are present
+      # rather than absent. supports_parallel has no reader in the library, so
+      # it records the vendor's claim and gates nothing.
       tool_choice_values: [auto]
       supports_forced_choice: false
       supports_parallel: true
@@ -694,9 +731,15 @@ profiles:
       seconds per call, and a longest data-frame gap of 522ms against the 90s
       idle bound. Like -pro it populates the reasoning lane rather than hiding
       thinking inside completion_tokens, starts with a cold cache, and contains
-      cached_tokens inside prompt_tokens. Disabling thinking made it answer a
-      one-step arithmetic prompt incorrectly in the one sample taken; see the
-      reasoning block.
+      cached_tokens inside prompt_tokens. reasoning_effort is accepted but buys
+      nothing measurable: five samples per level span 17 tokens between low,
+      medium and high. Use the thinking toggle, which is honoured cleanly and
+      wins over an effort level sent in the same request.
+      DISABLING THINKING COSTS CORRECTNESS HERE. Two separate runs of the same
+      one-step arithmetic prompt (answer 205) returned 155 and 145 with
+      thinking disabled, and the correct answer with it on. Two samples, not a
+      study, but both wrong in the same direction: on this model
+      ReasoningOff() is a quality decision, not only a latency one.
   # ---------------------------------------------------------------------------
   # OpenAI embeddings.
   # ---------------------------------------------------------------------------
