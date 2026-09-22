@@ -58,6 +58,19 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 		return nil, warnings, err
 	}
 	resp.Timing = timing
+	// Before inline recovery: the draft is not the answer, so markup in it
+	// must neither become a call nor cut the answer away.
+	if pl.profile.Reasoning.LeaksCloseTag && leakCanApply(pl.req) {
+		var cut bool
+		resp.Content, resp.Reasoning, cut = cutStrayCloseTag(resp.Content, resp.Reasoning)
+		if cut {
+			warnings = append(warnings, Warning{
+				Kind:    WarnOther,
+				Feature: "content",
+				Details: "a stray </think> in content was cut; the text before it moved to reasoning",
+			})
+		}
+	}
 	if pl.profile.Tools.recoversInline() {
 		rec := recoverInline(resp.Content, resp.Reasoning, len(resp.ToolCalls))
 		resp.Content, resp.Reasoning = rec.content, rec.reasoning

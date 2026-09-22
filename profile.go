@@ -102,6 +102,14 @@ type Reasoning struct {
 	// the endpoint ignores — the same silent failure max_tokens_param exists to
 	// prevent. Must be empty for every other control.
 	BudgetParam string `yaml:"budget_param"`
+	// LeaksCloseTag: the model writes a stray "</think>" into content, after a
+	// draft of its answer, even with thinking disabled. Chat then cuts content
+	// at the first such tag, on requests with thinking off and no JSON format,
+	// and moves the part before it to Reasoning. Observed,
+	// not documented by any vendor; see profiles.yaml for the case. Applies to
+	// Chat only: a stream has already sent the draft by the time the tag
+	// arrives.
+	LeaksCloseTag bool `yaml:"leaks_close_tag"`
 }
 
 // Accepts reports whether effort is in the model's accepted set.
