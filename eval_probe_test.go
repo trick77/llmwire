@@ -593,7 +593,7 @@ func TestProbe_MiMoEffortLadderIsReal(t *testing.T) {
 			// means alone would call a 67/69/74 spread a ladder, which is
 			// exactly the mistake this probe exists to avoid.
 			separated := lo.max < mid.min && mid.max < hi.min
-			anyOverlap := !(lo.max < mid.min) || !(mid.max < hi.min)
+			anyOverlap := !separated
 
 			switch {
 			case separated:
