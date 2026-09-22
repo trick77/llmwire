@@ -245,11 +245,13 @@ Measured on 2026-09-22.
 Every bit matches `-pro` except the ones below. The thinking toggle is honoured
 independently here too: reasoning tokens 42 with no knob, 0 with the toggle.
 
-**Disabling thinking made it answer incorrectly.** With `thinking: disabled` it
-returned `155` for a one-step arithmetic prompt whose answer is `205`, which it
-gives correctly with thinking on. One sample, so not a law — but on this model
-disabling thinking is a quality decision, not only a latency one. `-pro` kept the
-correct answer both ways.
+**Disabling thinking made it answer incorrectly, every time it was asked.**
+With `thinking: disabled` it returned `155`, `145` and `195` across three runs
+of a one-step arithmetic prompt whose answer is `205`, and the correct answer
+with thinking on. `-pro` answered correctly with thinking off in all three. See
+the "Still open" bullet: three distinct wrong answers reads as guessing rather
+than as a coin landing badly, and makes `ReasoningOff()` a quality decision on
+this model.
 
 **`max_output` moved 4x across the version bump.** `mimo-v2.5` shipped 32768;
 this model's card documents 128K, the same ceiling as `-pro`. Not measured — no
@@ -258,6 +260,52 @@ silently.
 
 **Fastest endpoint in this file**: 0.9-2.6 seconds per call, longest
 comment-only gap 522ms over 353 frames.
+
+### `reasoning_effort` on the V2.6 pair: the ladder is not a ladder
+
+Measured 2026-09-22 by `MiMoEffortLadderIsReal`, five samples per level on a
+variable-depth prompt ("list every prime number between 100 and 200"), which
+replaced the one-step arithmetic prompt that produced the earlier n=1 reading.
+Reasoning tokens:
+
+| level | `mimo-v2.6-pro` | `mimo-v2.6-flash` |
+|---|---|---|
+| none sent | 104-656, mean 254.6 | 117-1784, mean 451.0 |
+| `low` | 120-507, mean 198.2 | 104-121, mean 115.2 |
+| `medium` | 120-148, mean 125.8 | 117-121, mean 118.6 |
+| `high` | 104-1088, mean 337.8 | 104-117, mean 111.8 |
+
+**Every range overlaps every other, on both models.** On `-flash` the three
+levels span 17 tokens between them and `high` has the *lowest* mean of the
+three — there is no trend to be noisy around.
+
+**Read the samples, not the means.** `-pro`'s means look directional (338 for
+high against 198 for low) and that is an artefact. The raw draws are
+`[121 255 121 1088 104]` for high and `[121 507 120 122 121]` for low: four of
+five samples at every level sit in a ~104-150 band, and the mean is decided by
+whether that level happened to draw one outlier. What varies is not the level.
+It is whether the deployment takes a deep pass on a given call. The same
+applies to `-flash`'s no-level mean of 451, which is one 1784-token draw in
+five whose other four samples sit at 117-120.
+
+So a caller gets **a floor with occasional deep thinks, not three settings**.
+`effort_values` stays `[low, medium, high]` because the endpoint enforces that
+set and `xhigh` is a 400 — the profile describes the wire — but the thinking
+toggle is the control that works.
+
+**The earlier suppression reading does not reproduce.** At n=1 every level on
+`-pro` appeared to reason *less* than sending no level (67/69/74 against 197),
+which suggested `reasoning_effort` was a second disable switch. At n=5 the
+no-level range (104-656) overlaps every level. This is the reason the profile
+comments now carry ranges and raw draws rather than point figures.
+
+### The thinking toggle wins over an effort level
+
+`MiMoThinkingToggleBeatsEffort`, one call per model: `thinking: {"type":
+"disabled"}` and `reasoning_effort: "high"` sent in the same request are not
+refused, and the toggle wins — reasoning tokens 0 on both. A caller that
+disables thinking while also passing an effort gets what it asked for, so
+`ReasoningOff()` needs no special handling to strip the level.
 
 ## Where the documentation is wrong
 
@@ -330,6 +378,18 @@ The same run showed `mimo-v2.5-pro` answering in **3.5-18 seconds**, not the
 latency class of that endpoint has evidently improved and has not been re-probed
 deliberately.
 
+Settling the effort ladder cost a further **46 calls and roughly $0.034**:
+40 for `MiMoEffortLadderIsReal` (four levels, five samples, two models, on a
+prompt that produces real reasoning rather than the ~10 tokens the arithmetic
+prompt drew), 4 to re-confirm the thinking toggle after fixing a nil-versus-zero
+bug in its own probe, and 2 for `MiMoThinkingToggleBeatsEffort`.
+
+`defaultMaxCalls` moved 60 -> 160 at the same time. With four MiMo models in the
+per-model tables a full `-run Probe` sweep is ~75 calls before the ladder probe's
+40, so the documented command was dying partway at the old ceiling and reading as
+a harness failure rather than as the guard working. The USD breaker is unchanged
+and is what bounds real spend: a full sweep is about $0.10 against $0.50.
+
 ## Still open
 
 - **Everything LiteLLM.** No instance was reachable. Header names, the cost-header
@@ -347,11 +407,9 @@ deliberately.
   reproduced it, but neither reproduced loom's exact conditions either: a long,
   tool-saturated history in production. Recovery is on for the MiMo profiles;
   the `tool_calls` warning it emits is how a recurrence gets noticed.
-- **What `reasoning_effort` actually does on the V2.6 pair.** The accepted set is
-  measured and enforced, but one sample per level showed the three levels flat
-  against each other and *below* sending no level at all on `-pro`, with a
-  different and equally flat shape on `-flash`. Needs several samples per level on
-  a prompt with real thinking depth before the ladder can be described as working.
+- ~~**What `reasoning_effort` actually does on the V2.6 pair.**~~ **Closed
+  2026-09-22 by measurement: the ladder is not a ladder.** See the
+  `reasoning_effort` section below.
 - **`stream_field` on the V2.6 pair.** Left at the load default. `stream.go` reads
   both `reasoning_content` and `reasoning` with content winning, so which key the
   delta carried cannot be read back out of a `StreamResult`; confirming it needs a
@@ -371,7 +429,12 @@ deliberately.
   `MiMoThinkingCanBeDisabled` covers the V2.6 ids only. Adding the two V2.5 rows
   would close a bit those entries have carried on documentation since they
   shipped — about four calls — but they are deprecated on 2026-10-21.
-- **Whether disabling thinking systematically degrades `-flash`.** It answered a
-  one-step arithmetic prompt wrong with thinking off and right with it on, in a
-  single sample. Worth a real accuracy comparison before anyone ships
-  `ReasoningOff()` against this model.
+- **Whether disabling thinking systematically degrades `-flash`.** Three
+  samples now, and **three for three wrong**: the same one-step arithmetic
+  prompt (answer 205) returned **155**, **145** and **195** with thinking
+  disabled, a different wrong number each time, and the correct answer with
+  thinking on. `-pro` answered correctly with thinking off in all three. Three
+  draws is not a study, but three distinct wrong answers is not a coin landing
+  badly either — with thinking off this model appears to guess at one-step
+  arithmetic. `ReasoningOff()` against `-flash` is a quality decision. An
+  accuracy comparison over a prompt set would quantify it.

@@ -361,18 +361,38 @@ func TestProbe_MiMoThinkingCanBeDisabled(t *testing.T) {
 			t.Logf("  content disabled=%q, no knob=%q",
 				Truncate(res.Content, 40), Truncate(cres.Content, 40))
 
+			// "Not reported" is not zero (AGENTS.md, and Usage lanes are
+			// pointers for exactly this reason). A response that omits
+			// completion_tokens_details says NOTHING about whether the model
+			// thought, so it must not reach the honoured branch below: that
+			// branch is what sets can_be_disabled, and concluding it from a
+			// missing field is concluding it from no evidence.
+			offReported := res.Usage.Output.Reasoning != nil
+			onReported := cres.Usage.Output.Reasoning != nil
+
 			switch {
-			case on <= 0 && off <= 0 && onTotal > 0 && offTotal > 0 && onTotal > offTotal*2:
-				// This family counts thinking inside completion_tokens and
-				// reports the reasoning lane as 0 (measured on mimo-v2.5), so a
-				// large completion-token drop is the signal when the lane is silent.
-				t.Logf("  => reasoning lane reports 0 on this endpoint, but completion tokens " +
-					"fell by more than half with the toggle. Reads as HONOURED; " +
-					"record can_be_disabled: true with this table in the comment.")
+			case !offReported || !onReported:
+				// The completion-token fallback, and the only case where the
+				// silent lane is still informative: this family has been seen
+				// counting thinking inside completion_tokens (mimo-v2.5 reports
+				// the lane as 0 throughout), so a large drop is the signal.
+				if onTotal > 0 && offTotal > 0 && onTotal > offTotal*2 {
+					t.Logf("  => reasoning lane NOT REPORTED on at least one call "+
+						"(disabled reported=%v, control reported=%v), but completion tokens "+
+						"fell by more than half with the toggle (%v -> %v). Reads as HONOURED "+
+						"on the completion-token lane; record can_be_disabled: true and say "+
+						"in the comment that the reasoning lane was silent.",
+						offReported, onReported, onTotal, offTotal)
+					return
+				}
+				t.Skipf("inconclusive: the reasoning lane was not reported "+
+					"(disabled reported=%v, control reported=%v) and completion tokens did "+
+					"not move materially (%v vs %v). Not reported is not zero.",
+					offReported, onReported, offTotal, onTotal)
 			case off > 0:
 				t.Logf("  => ACCEPTED AND IGNORED: it still reasoned with the toggle set. " +
 					"can_be_disabled must NOT be set true on acceptance alone.")
-			case on > 0 && off <= 0:
+			case on > 0 && off == 0:
 				t.Logf("  => HONOURED: reasoning on the control, none with the toggle. " +
 					"can_be_disabled: true, enabled_by_default: true.")
 			default:
@@ -457,6 +477,225 @@ func TestProbe_MiMoReasoningEffortValues(t *testing.T) {
 					res.FinishReason, Truncate(res.Content, 40))
 			})
 		}
+	}
+}
+
+// Does reasoning_effort actually form a ladder on the V2.6 pair, or is the
+// toggle the only real control?
+//
+// MiMoReasoningEffortValues established the ACCEPTED SET and nothing more. Its
+// per-level token counts were one sample each on a one-step arithmetic prompt,
+// and they came out flat: mimo-v2.6-pro read 67 / 69 / 74 for low / medium /
+// high against 197 for no level at all, and mimo-v2.6-flash read 27 / 55 / 43
+// against 43. Two ways to read that — the levels do nothing, or the prompt had
+// too little thinking in it for a level to vary — and one sample per cell
+// cannot tell them apart.
+//
+// This probe fixes both weaknesses: a prompt with genuine variable depth, and
+// five samples per cell so a range can be compared instead of a point. It emits
+// a VERDICT, not a table, because the verdict is what goes in the profile
+// comment.
+//
+// Deliberately not included: xhigh (already measured as a 400, would waste ten
+// calls) and the old arithmetic prompt (a different prompt is the entire point).
+func TestProbe_MiMoEffortLadderIsReal(t *testing.T) {
+	c := mimoEndpoint.client(t)
+
+	// Variable-depth and cheaply checkable. Listing primes in a range is work
+	// the model must actually do rather than recall, it scales with how much
+	// checking the model chooses to do, and the answer is short — so the cap
+	// below bounds nothing and finish_reason "length" means the sample is
+	// invalid rather than merely truncated.
+	const prompt = "List every prime number between 100 and 200. " +
+		"Reply with the numbers only, comma-separated, nothing else."
+
+	// The number of samples per cell. Five is what makes min/max ranges mean
+	// anything; the levels differed by single tokens at n=1.
+	const samples = 5
+
+	type cell struct {
+		vals       []int64
+		mean       float64
+		min, max   int64
+		invalidate string
+	}
+
+	for _, model := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
+		t.Run(model, func(t *testing.T) {
+			// "" is the control: the same prompt with no level sent at all. On
+			// -pro at n=1 this reasoned MORE than any level, which is the claim
+			// most worth rechecking.
+			levels := []string{"", "low", "medium", "high"}
+			cells := map[string]*cell{}
+
+			for _, effort := range levels {
+				cl := &cell{min: 1 << 62}
+				for i := 0; i < samples; i++ {
+					b := probeBody(model, prompt)
+					if effort != "" {
+						b["reasoning_effort"] = effort
+					}
+					// Large enough that the ANSWER never hits it; a sample that
+					// does is thrown away rather than recorded short.
+					b["max_completion_tokens"] = 8192
+					res, err := stream(t, c, b)
+					if ok, why := accepted(res, err); !ok {
+						cl.invalidate = fmt.Sprintf("sample %d REJECTED: %s", i, why)
+						break
+					}
+					if res.FinishReason == "length" {
+						cl.invalidate = fmt.Sprintf("sample %d hit the output cap; "+
+							"the cap is binding and the reasoning figure is not comparable", i)
+						break
+					}
+					r := valueOr(res.Usage.Output.Reasoning, -1)
+					if r < 0 {
+						cl.invalidate = fmt.Sprintf("sample %d reported no reasoning lane", i)
+						break
+					}
+					cl.vals = append(cl.vals, r)
+					if r < cl.min {
+						cl.min = r
+					}
+					if r > cl.max {
+						cl.max = r
+					}
+				}
+				if cl.invalidate == "" && len(cl.vals) > 0 {
+					var sum int64
+					for _, v := range cl.vals {
+						sum += v
+					}
+					cl.mean = float64(sum) / float64(len(cl.vals))
+				}
+				cells[effort] = cl
+				label := effort
+				if label == "" {
+					label = "(none)"
+				}
+				if cl.invalidate != "" {
+					t.Logf("FINDING %s effort=%s: INVALID, %s", model, label, cl.invalidate)
+					continue
+				}
+				t.Logf("FINDING %s effort=%s: reasoning tokens n=%d mean=%.1f min=%d max=%d %v",
+					model, label, len(cl.vals), cl.mean, cl.min, cl.max, cl.vals)
+			}
+
+			for _, effort := range levels {
+				if cells[effort].invalidate != "" {
+					t.Skipf("inconclusive: the %q cell did not produce %d clean samples", effort, samples)
+				}
+			}
+
+			lo, mid, hi, none := cells["low"], cells["medium"], cells["high"], cells[""]
+
+			// A ladder is only real if the ranges do not overlap. Comparing
+			// means alone would call a 67/69/74 spread a ladder, which is
+			// exactly the mistake this probe exists to avoid.
+			separated := lo.max < mid.min && mid.max < hi.min
+
+			// The middle verdict is deliberately gated on RANGES, never on a
+			// mean ratio. An earlier draft asked whether hi.mean exceeded
+			// lo.mean by half, and on the -pro data that fires (337.8 against
+			// 198.2) purely because `high` drew one 1088-token sample — it
+			// would have printed "the knob moves something" over the same
+			// numbers this file reads as no ladder at all. A mean over five
+			// draws is one outlier away from any verdict you like, which is
+			// the whole reason this probe compares ranges.
+			//
+			// So: low and high must not overlap EACH OTHER for the knob to be
+			// credited with moving anything, even where medium sits astride
+			// them.
+			endsSeparated := lo.max < hi.min || hi.max < lo.min
+
+			switch {
+			case separated:
+				t.Logf("FINDING %s: LADDER IS REAL. low/medium/high ranges do not overlap "+
+					"(%d-%d, %d-%d, %d-%d). reasoning_effort is a working control; "+
+					"record the means in the profile comment.",
+					model, lo.min, lo.max, mid.min, mid.max, hi.min, hi.max)
+			case endsSeparated:
+				t.Logf("FINDING %s: PARTIAL. low and high do not overlap (%d-%d vs %d-%d) "+
+					"but medium (%d-%d) does not sit cleanly between them. The knob moves "+
+					"something; it does not give a caller three distinguishable settings.",
+					model, lo.min, lo.max, hi.min, hi.max, mid.min, mid.max)
+			default:
+				t.Logf("FINDING %s: LADDER IS NOT REAL. low/medium/high overlap "+
+					"(%d-%d, %d-%d, %d-%d), means %.1f / %.1f / %.1f. "+
+					"The three levels are not three settings.",
+					model, lo.min, lo.max, mid.min, mid.max, hi.min, hi.max,
+					lo.mean, mid.mean, hi.mean)
+			}
+
+			// The separate question, and the surprising one at n=1: sending ANY
+			// level reasoned less than sending none. If that holds at n=5,
+			// reasoning_effort on this model is a second "think less" switch
+			// rather than a ladder, which is a cost and quality surprise in the
+			// direction no caller expects.
+			maxLevel := lo.max
+			for _, cl := range []*cell{mid, hi} {
+				if cl.max > maxLevel {
+					maxLevel = cl.max
+				}
+			}
+			switch {
+			case maxLevel < none.min:
+				t.Logf("FINDING %s: ANY LEVEL SUPPRESSES THINKING. no level reasoned %d-%d "+
+					"(mean %.1f); every level stayed at or below %d. Sending a level is "+
+					"closer to a second disable switch than to a ladder.",
+					model, none.min, none.max, none.mean, maxLevel)
+			case none.max < lo.min && none.max < hi.min:
+				t.Logf("FINDING %s: any level INCREASES thinking over sending none "+
+					"(none %d-%d).", model, none.min, none.max)
+			default:
+				t.Logf("FINDING %s: no level (%d-%d, mean %.1f) overlaps the levels; "+
+					"the n=1 suppression reading does not reproduce.",
+					model, none.min, none.max, none.mean)
+			}
+		})
+	}
+}
+
+// What happens when a caller disables thinking AND sends an effort level in the
+// same request. ReasoningOff() has to be safe against a caller that also set an
+// effort, and plan() needs to know which one the endpoint honours: if the level
+// wins, a caller who asked for no thinking silently gets thinking.
+func TestProbe_MiMoThinkingToggleBeatsEffort(t *testing.T) {
+	c := mimoEndpoint.client(t)
+	for _, model := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
+		t.Run(model, func(t *testing.T) {
+			b := probeBody(model, "A train leaves at 09:40 and arrives at 13:05 the same day. "+
+				"How many minutes is the journey? Reply with the number only.")
+			b["thinking"] = map[string]any{"type": "disabled"}
+			b["reasoning_effort"] = "high"
+			b["max_completion_tokens"] = 4096
+			res, err := stream(t, c, b)
+			if ok, why := accepted(res, err); !ok {
+				t.Logf("FINDING %s: thinking:disabled + reasoning_effort:high REJECTED: %s", model, why)
+				t.Logf("  => the two parameters conflict at the endpoint; plan() must not send both.")
+				return
+			}
+			// Not reported is not zero. A response that omits
+			// completion_tokens_details says nothing about whether the model
+			// thought, so it must not land in either verdict below — the same
+			// guard MiMoThinkingCanBeDisabled needs, for the same reason.
+			if res.Usage.Output.Reasoning == nil {
+				t.Skipf("inconclusive: the reasoning lane was not reported at all, so "+
+					"whether the toggle or the effort won cannot be read off this call "+
+					"(finish=%s, content=%q)", res.FinishReason, Truncate(res.Content, 40))
+			}
+			r := *res.Usage.Output.Reasoning
+			if r == 0 {
+				t.Logf("FINDING %s: thinking:disabled WINS over reasoning_effort:high "+
+					"(reasoning tokens 0, content %q). ReasoningOff() is safe against a "+
+					"caller that also set an effort.", model, Truncate(res.Content, 40))
+				return
+			}
+			t.Logf("FINDING %s: reasoning_effort:high WINS or both are ignored — reasoning "+
+				"tokens %d with thinking disabled. A caller asking for no thinking would "+
+				"silently get thinking; plan() must drop the effort when reasoning is off.",
+				model, r)
+		})
 	}
 }
 
