@@ -71,7 +71,7 @@ func TestDefault_MeasuredFactsMatchFindings(t *testing.T) {
 	})
 
 	t.Run("json_schema is supported despite the docs", func(t *testing.T) {
-		for _, id := range []string{"glm-5.3-flash", "mimo-v2.5-pro"} {
+		for _, id := range []string{"glm-5.3-flash", "mimo-v2.5-pro", "mimo-v2.6-pro", "mimo-v2.6-flash"} {
 			p := mustLookup(t, reg, id)
 			if !p.Output.JSONSchema {
 				t.Errorf("%s: json_schema should be true; ResponseFormatSupport measured "+
@@ -81,7 +81,7 @@ func TestDefault_MeasuredFactsMatchFindings(t *testing.T) {
 	})
 
 	t.Run("neither endpoint needs stream_options", func(t *testing.T) {
-		for _, id := range []string{"glm-5.3-flash", "mimo-v2.5-pro"} {
+		for _, id := range []string{"glm-5.3-flash", "mimo-v2.5-pro", "mimo-v2.6-pro", "mimo-v2.6-flash"} {
 			p := mustLookup(t, reg, id)
 			if p.Streaming.NeedsIncludeUsage {
 				t.Errorf("%s: needs_include_usage should be false; usage arrives unasked", id)
@@ -104,11 +104,59 @@ func TestDefault_MeasuredFactsMatchFindings(t *testing.T) {
 	})
 
 	t.Run("MiMo returns native tool calls", func(t *testing.T) {
-		for _, id := range []string{"mimo-v2.5-pro", "mimo-v2.5"} {
+		for _, id := range []string{"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2.6-pro", "mimo-v2.6-flash"} {
 			p := mustLookup(t, reg, id)
 			if p.Tools.Format != FormatNative {
 				t.Errorf("%s: tools.format = %q, want %q (MiMoToolCallFormat)",
 					id, p.Tools.Format, FormatNative)
+			}
+		}
+	})
+
+	// The V2.5 split above is generation-specific and does NOT carry forward:
+	// mimo-v2.6-pro accepts the image part that 404s on mimo-v2.5-pro, measured
+	// in the same run as the V2.5 control.
+	t.Run("V2.6 closes the MiMo vision split", func(t *testing.T) {
+		for _, id := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
+			p := mustLookup(t, reg, id)
+			if !p.Vision {
+				t.Errorf("%s: vision should be true; it accepts an image_url part "+
+					"where mimo-v2.5-pro returns 404 (MiMoProRejectsImageInput)", id)
+			}
+		}
+	})
+
+	// The first direct measurement of MiMo's thinking toggle: the V2.5 entries
+	// carry these two bools on vendor documentation alone. Z.ai is the reason
+	// this needs a test — there the vendor documents the same toggle and the
+	// endpoint refuses it outright with code 1210.
+	t.Run("V2.6 honours the thinking toggle", func(t *testing.T) {
+		for _, id := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
+			p := mustLookup(t, reg, id)
+			if !p.Reasoning.CanBeDisabled {
+				t.Errorf("%s: can_be_disabled should be true; the disable toggle drove "+
+					"reasoning tokens to 0 (MiMoThinkingCanBeDisabled)", id)
+			}
+			if !p.Reasoning.EnabledByDefault {
+				t.Errorf("%s: enabled_by_default should be true; a request with no knob "+
+					"reported reasoning tokens (MiMoThinkingCanBeDisabled)", id)
+			}
+		}
+	})
+
+	// max_output moved 4x on the cheaper model across the version bump:
+	// mimo-v2.5 shipped 32768, mimo-v2.6-flash documents 128K, same as -pro.
+	// Pinned so a future copy-paste cannot quietly re-import the old ceiling.
+	t.Run("V2.6 raised the flash output ceiling", func(t *testing.T) {
+		if old := mustLookup(t, reg, "mimo-v2.5"); old.Limits.MaxOutput != 32768 {
+			t.Errorf("mimo-v2.5: max_output = %d, want 32768 (the figure V2.6 moved from)",
+				old.Limits.MaxOutput)
+		}
+		for _, id := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
+			p := mustLookup(t, reg, id)
+			if p.Limits.MaxOutput != 131072 {
+				t.Errorf("%s: max_output = %d, want 131072 (vendor model card)",
+					id, p.Limits.MaxOutput)
 			}
 		}
 	})

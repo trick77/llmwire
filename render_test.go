@@ -46,6 +46,10 @@ func TestRender_OutputCapUsesTheProfilesSpelling(t *testing.T) {
 		{"glm-5.3-flash", "max_tokens", "max_completion_tokens"},
 		{"mimo-v2.5-pro", "max_completion_tokens", "max_tokens"},
 		{"mimo-v2.5", "max_completion_tokens", "max_tokens"},
+		// Both names are honoured on V2.6 too, so the profile's spelling is what
+		// decides which one goes on the wire.
+		{"mimo-v2.6-pro", "max_completion_tokens", "max_tokens"},
+		{"mimo-v2.6-flash", "max_completion_tokens", "max_tokens"},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
 			body := renderFor(t, c, ChatRequest{

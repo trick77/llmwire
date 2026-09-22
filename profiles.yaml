@@ -187,6 +187,17 @@ profiles:
   # credits rather than dollars. `provider: mimo` means THAT host; the
   # pay-as-you-go API is a different host with a different key and would be
   # its own provider.
+  #
+  # DEPRECATED BY THE VENDOR 2026-10-21, both entries below. They stay until the
+  # endpoint stops serving the ids — as of 2026-09-22 the host's /models still
+  # lists both — and mimo-v2.6-pro / mimo-v2.6-flash succeed them.
+  #
+  # Their cost blocks now outlive their source: the vendor's Overseas (USD)
+  # table lists only the V2.6 ids, and V2.5 survives only in the domestic RMB
+  # table marked "(deprecated)". So the source_url below no longer carries the
+  # USD figures it is cited for. The rates are kept as verified on 2026-09-12
+  # rather than dropped: they were read off that page when it did carry them,
+  # and pricing something at Unpriced instead would silently zero the lane.
   # ---------------------------------------------------------------------------
   - id: mimo-v2.5-pro
     endpoint: chat
@@ -401,6 +412,340 @@ profiles:
       The vision-capable sibling of mimo-v2.5-pro. Not "the weaker model": it is
       the same reasoning family and thinks when asked to.
 
+
+  # ---------------------------------------------------------------------------
+  # MiMo V2.6, the successor generation, measured 2026-09-22 on the same Token
+  # Plan host as the V2.5 pair above and with the same "list USD rate, not the
+  # credit invoice" caveat.
+  #
+  # Nothing here is inherited from the V2.5 entries. Identical published prices
+  # and an identically documented thinking toggle made a copy tempting, and a
+  # copy would have shipped two wrong bits: V2.5-pro REJECTS image input and
+  # V2.6-pro accepts it, and V2.5 reports a reasoning lane of 0 while V2.6
+  # populates it. Every bit below is marked MEASURED or NOT measured.
+  #
+  # Both ids are served: the host's own /models listed mimo-v2.6-pro and
+  # mimo-v2.6-flash beside the V2.5 family and the ASR/TTS models.
+  # ---------------------------------------------------------------------------
+  - id: mimo-v2.6-pro
+    endpoint: chat
+    wire_model_id: mimo-v2.6-pro
+    provider: mimo
+    verified: measured
+
+    # MEASURED: this endpoint honours BOTH max_tokens and max_completion_tokens
+    # — each returned exactly 16 tokens with finish_reason "length", the same
+    # result as V2.5-pro. The explicit one is sent because it is the name the
+    # vendor's own model card uses in its sample code.
+    max_tokens_param: max_completion_tokens
+
+    reasoning:
+      supported: true
+      # MEASURED 2026-09-22, and this is the first direct measurement of MiMo's
+      # thinking toggle in either direction: both V2.5 entries carry these two
+      # bools on vendor documentation alone.
+      #
+      # The card documents the disable shape as extra_body {"thinking":
+      # {"type": "disabled"}}; extra_body is the OpenAI SDK's passthrough, so
+      # on the wire it is a top-level "thinking" object. Sent as such it is
+      # ACCEPTED AND HONOURED: on the arithmetic prompt below, reasoning tokens
+      # went 54 -> 0 while the answer stayed correct ("205" both ways).
+      #
+      # enabled_by_default is read off the same pair: the request with NO knob
+      # at all reported 54 reasoning tokens, so thinking is on unless switched
+      # off. Worth contrasting with Z.ai, where the vendor also documents this
+      # toggle and the endpoint refuses it outright (code 1210).
+      enabled_by_default: true
+      can_be_disabled: true
+      control: toggle_object
+      # MEASURED 2026-09-22: the set is enforced by the endpoint — low, medium
+      # and high return 200, xhigh is a 400 "Invalid request parameters". Same
+      # set as V2.5.
+      #
+      # THE LADDER IS NOT A LADDER. Settled 2026-09-22 by
+      # MiMoEffortLadderIsReal, five samples per level on a variable-depth
+      # prompt ("list every prime between 100 and 200"), reasoning tokens:
+      #   no level  104-656   mean 254.6   [120 120 656 273 104]
+      #   low       120-507   mean 198.2   [121 507 120 122 121]
+      #   medium    120-148   mean 125.8   [120 148 120 120 121]
+      #   high      104-1088  mean 337.8   [121 255 121 1088 104]
+      # Every range overlaps every other. The means look directional (high
+      # 337.8 against low 198.2) and are an artefact: read the samples, not the
+      # means. Four of five samples at EVERY level sit in a ~104-150 band, and
+      # the mean is set by whether that level happened to draw one outlier
+      # (507, 656, 1088). What varies is not the level — it is whether this
+      # deployment takes a deep pass on a given call.
+      #
+      # So a caller gets a floor with occasional deep thinks, not three
+      # settings. Use the thinking toggle, which IS honoured cleanly; treat a
+      # level as a hint the endpoint accepts and largely ignores. Do not build
+      # a cost model on it.
+      #
+      # An earlier one-sample-per-level run read 67/69/74 against 197 for no
+      # level and suggested any level SUPPRESSES thinking. That does not
+      # reproduce: at n=5 the no-level range (104-656) overlaps every level.
+      # Kept as the reason this file trusts ranges over points.
+      effort_values: [low, medium, high]
+      # NOT measured: reasoning arrived on every probe, but stream.go reads both
+      # `reasoning_content` and `reasoning` and content wins, so which key the
+      # delta carried cannot be read back out of a StreamResult. This is the
+      # load default, not a measurement.
+      stream_field: reasoning_content
+
+    # NOT measured on this generation. supported stays true because these are
+    # accepted — dropping the block would have Validate refuse a caller that
+    # sends either — but inert_while_reasoning is deliberately ABSENT, unlike
+    # the V2.5 entries: that bit rests on a vendor statement that the model
+    # forcibly overrides both while thinking, and no V2.6 source has been found
+    # repeating it. Absent means the warning is not emitted; it does not change
+    # what is sent.
+    temperature:
+      supported: true
+    top_p:
+      supported: true
+
+    tools:
+      supported: true
+      # MEASURED: native tool_calls, both with tools offered (name came back as
+      # get_weather) and on a forced tool-free call, which returned clean prose
+      # with no markup in either channel.
+      format: native
+      # recover_inline_markup is ON although no probe reproduces the leak here
+      # either, for the same reason as the V2.5 entries: loom captured it in
+      # production against a long, tool-saturated history that this probe does
+      # not build. Failing to reproduce is not refuting, and recovery only acts
+      # when the markup appears, so a clean answer costs nothing.
+      recover_inline_markup: true
+      # NOT measured, all three: no probe has offered a forced choice or two
+      # tools in one turn to ANY MiMo endpoint. Vendor documentation, at the
+      # same values as the rest of the family.
+      #
+      # They are present rather than absent for two different reasons, neither
+      # of which is evidence. tool_choice_values cannot be empty while tools
+      # are supported (profile.go validate), so the doc's value is the only
+      # loadable option short of dropping tool support. supports_parallel has
+      # no reader in the library at all today — grep finds only its field
+      # declaration — so the `true` here gates nothing and refuses nothing; it
+      # records the vendor's claim. If a caller ever routes on it, measure it
+      # first.
+      tool_choice_values: [auto]
+      supports_forced_choice: false
+      supports_parallel: true
+
+    output:
+      # MEASURED: accepted and the raw reply parsed as JSON.
+      json_object: true
+      # MEASURED: accepted and honoured, though the model card documents only
+      # "Structured Output" without naming the parameter.
+      json_schema: true
+      # MEASURED: the probe sent "strict": true inside the json_schema block.
+      strict_schema: true
+
+    # MEASURED both ways: usage arrives without asking (raw
+    # completion_tokens/prompt_tokens/total_tokens plus
+    # completion_tokens_details.reasoning_tokens and
+    # prompt_tokens_details.cached_tokens), and stream_options is accepted.
+    streaming:
+      supported: true
+      needs_include_usage: false
+      accepts_stream_options: true
+
+    # NOT measured, vendor model card: "Context Window 1M tokens" /
+    # "Max Output 128K tokens". No probe sent a cap above the ceiling; every
+    # endpoint measured so far clamps silently rather than erroring.
+    limits:
+      context: 1048576
+      max_output: 131072
+
+    # MEASURED 2026-09-22, and this REVERSES the V2.5 split. An image_url part
+    # is ACCEPTED here, where the same part against mimo-v2.5-pro returns HTTP
+    # 404 "No endpoints found that support image input" — re-confirmed as a
+    # control in the same run. The vendor's own model card is self-contradictory
+    # on this point: the prose sells "Omni-Modal Understanding" and "joint input
+    # and understanding of images, video, audio, and text", while the
+    # specification table on the same page lists "Input Modality: Text", and
+    # OpenRouter documents text only. The prose is right.
+    vision: true
+    # NOT measured: vendor documentation. Only "stop" and "length" have been
+    # seen from this endpoint.
+    finish_reasons_extra: [repetition_truncation]
+
+    # Published pay-as-you-go USD list rate per 1M tokens, from the vendor's own
+    # page, Overseas (USD) table. THIS IS NOT AN INVOICE: this deployment is
+    # reached over a Token Plan host that bills subscription credits, and
+    # llmwire reports the list USD rate anyway, because a credit figure is not
+    # comparable between models and reporting nothing leaves a budget cap with
+    # nothing to check.
+    #
+    # No cross-check exists for this generation: models.dev carries no
+    # mimo-v2.6 entry at all as of verified_on. Both earlier MiMo prices in this
+    # file had a third-party figure to disagree with; this one stands on the
+    # vendor page alone. The rates happen to equal mimo-v2.5-pro's exactly.
+    #
+    # cache_write 0: the vendor lists cache writes as "Limited-time Free" — a
+    # promotion as of verified_on, not a property of the lane.
+    #
+    # Not attached, deliberately: the page also advertises a 50% Batch API
+    # discount for this model. Batch is a different route with its own latency
+    # contract, not a window on this one.
+    cost:
+      input: 0.435
+      cache_read: 0.0036
+      cache_write: 0
+      output: 0.87
+      source_url: https://mimo.mi.com/docs/en-US/price/pay-as-you-go
+      verified_on: 2026-09-22
+
+    notes: >-
+      Succeeds mimo-v2.5-pro, which the vendor deprecates 2026-10-21, and
+      differs from it in two ways a caller can trip over. It ACCEPTS image
+      input where -pro returns 404, so the vision split this library used to
+      route around does not exist at this generation. And it populates the
+      reasoning lane: 197 of 202 completion tokens on one arithmetic prompt
+      came back as reasoning_tokens, where mimo-v2.5 reported 0 and counted
+      thinking inside completion_tokens. Code that read the lane as "this model
+      does not think" will now see the real figure. Measured 2026-09-22:
+      cached_tokens sits INSIDE prompt_tokens (0 then 10880 against a
+      prompt_tokens of 10909 on the identical prompt), so the full-rate lane is
+      the difference and pricing subtracts it. Unlike mimo-v2.5-pro this
+      endpoint starts COLD — 0 cached on a fresh 10.9k prompt, where
+      mimo-v2.5-pro reported 192 of 258 because it injects its own system
+      message. Latency is 1-5 seconds per call, not the 25-64 seconds the V2.5
+      notes describe. reasoning_effort is accepted with an enforced set despite
+      appearing in no vendor document for this model, but it does NOT give a
+      caller three settings: at five samples per level every range overlaps
+      every other, and what varies is whether the deployment takes a deep pass,
+      not the level. Reach for the thinking toggle instead, which is honoured
+      cleanly and wins over an effort level sent in the same request.
+
+  - id: mimo-v2.6-flash
+    endpoint: chat
+    wire_model_id: mimo-v2.6-flash
+    provider: mimo
+    verified: measured
+
+    # MEASURED: both names honoured, 16 tokens with finish_reason "length",
+    # same as -pro. The documented one is sent.
+    max_tokens_param: max_completion_tokens
+
+    reasoning:
+      supported: true
+      # MEASURED 2026-09-22, independently of -pro: the thinking toggle is
+      # ACCEPTED AND HONOURED here too, reasoning tokens 42 -> 0, and the
+      # no-knob control reported 42, so thinking is on by default.
+      #
+      # One caveat the -pro run did not show: with thinking disabled this model
+      # answered the arithmetic prompt WRONG in EVERY run that sent it — "155",
+      # "145" and "195" across three, against the correct "205" it gives with
+      # thinking on. Three draws is not a study, but three for three, each a
+      # different wrong number, is not a coin landing badly either: with
+      # thinking off this model guesses at one-step arithmetic. Disabling it
+      # here is a quality decision, not only a latency one. -pro answered
+      # correctly with thinking off in all three.
+      enabled_by_default: true
+      can_be_disabled: true
+      control: toggle_object
+      # MEASURED 2026-09-22: same enforced set as -pro, xhigh a 400 "Invalid
+      # request parameters".
+      #
+      # THE LADDER IS NOT A LADDER, and the case is even plainer here than on
+      # -pro. Five samples per level, same prompt, reasoning tokens:
+      #   no level  117-1784  mean 451.0   [1784 120 117 117 117]
+      #   low       104-121   mean 115.2   [104 117 117 117 121]
+      #   medium    117-121   mean 118.6   [121 117 117 118 120]
+      #   high      104-117   mean 111.8   [104 104 117 117 117]
+      # The three levels span 17 tokens between them and high is the LOWEST
+      # mean of the three. Not noise around a trend: there is no trend. The
+      # no-level mean of 451 is one 1784-token outlier in five; its other four
+      # samples sit in the same ~117-120 band as every level.
+      #
+      # Use the thinking toggle, which is honoured cleanly. A level is accepted
+      # and does not buy a caller a different amount of thinking.
+      effort_values: [low, medium, high]
+      # NOT measured, for the same reason as -pro: the delta key cannot be read
+      # back out of a StreamResult. Load default.
+      stream_field: reasoning_content
+
+    # NOT measured; same reasoning as -pro above, including why
+    # inert_while_reasoning is absent rather than carried over from V2.5.
+    temperature:
+      supported: true
+    top_p:
+      supported: true
+
+    tools:
+      supported: true
+      # MEASURED: native tool_calls with tools offered, clean prose on a
+      # tool-free call.
+      format: native
+      # Same serving layer and same defensive reasoning as -pro.
+      recover_inline_markup: true
+      # NOT measured, all three; see the -pro entry for why they are present
+      # rather than absent. supports_parallel has no reader in the library, so
+      # it records the vendor's claim and gates nothing.
+      tool_choice_values: [auto]
+      supports_forced_choice: false
+      supports_parallel: true
+
+    # MEASURED: accepted, and the raw reply parsed as JSON in both shapes;
+    # strict was sent inside the schema block.
+    output:
+      json_object: true
+      json_schema: true
+      strict_schema: true
+
+    # MEASURED both ways, same as -pro.
+    streaming:
+      supported: true
+      needs_include_usage: false
+      accepts_stream_options: true
+
+    # NOT measured, vendor model card: 1M context / 128K max output. Note the
+    # version delta — mimo-v2.5 shipped max_output 32768, so the ceiling on the
+    # cheaper model moved 4x at this bump and now matches -pro.
+    limits:
+      context: 1048576
+      max_output: 131072
+
+    # MEASURED: accepts an image_url part, like its V2.5 predecessor and unlike
+    # mimo-v2.5-pro. Carries the same card-versus-spec-table contradiction as
+    # -pro; the prose is right here too.
+    vision: true
+    # NOT measured: vendor documentation.
+    finish_reasons_extra: [repetition_truncation]
+
+    # Same page, same table, same caveats as mimo-v2.6-pro above: list USD rate
+    # rather than the credit invoice this route bills, no models.dev entry to
+    # cross-check against, cache_write a promotion, and the 50% Batch API
+    # discount deliberately not modelled as a window. Rates equal mimo-v2.5's
+    # exactly.
+    cost:
+      input: 0.14
+      cache_read: 0.0028
+      cache_write: 0
+      output: 0.28
+      source_url: https://mimo.mi.com/docs/en-US/price/pay-as-you-go
+      verified_on: 2026-09-22
+
+    notes: >-
+      Succeeds mimo-v2.5, which the vendor deprecates 2026-10-21. The vendor
+      describes a 309B-parameter Mixture-of-Experts model with 15B activated per
+      token, and gives it the same 1M/128K window as -pro where its predecessor
+      had max_output 32768. Fastest endpoint measured in this file: 0.9-2.6
+      seconds per call, and a longest data-frame gap of 522ms against the 90s
+      idle bound. Like -pro it populates the reasoning lane rather than hiding
+      thinking inside completion_tokens, starts with a cold cache, and contains
+      cached_tokens inside prompt_tokens. reasoning_effort is accepted but buys
+      nothing measurable: five samples per level span 17 tokens between low,
+      medium and high. Use the thinking toggle, which is honoured cleanly and
+      wins over an effort level sent in the same request.
+      DISABLING THINKING COSTS CORRECTNESS HERE. Three separate runs of the
+      same one-step arithmetic prompt (answer 205) returned 155, 145 and 195
+      with thinking disabled, and the correct answer with it on. Three samples
+      are not a study, but three for three wrong with a different number each
+      time is not a coin landing badly: on this model ReasoningOff() is a
+      quality decision, not only a latency one. mimo-v2.6-pro answered
+      correctly with thinking off in all three.
   # ---------------------------------------------------------------------------
   # OpenAI embeddings.
   # ---------------------------------------------------------------------------
