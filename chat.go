@@ -64,6 +64,17 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 		resp.ToolCalls = append(resp.ToolCalls, rec.calls...)
 		warnings = append(warnings, rec.warnings()...)
 	}
+	if pl.profile.Reasoning.LeaksCloseTag {
+		var cut bool
+		resp.Content, resp.Reasoning, cut = cutStrayCloseTag(resp.Content, resp.Reasoning)
+		if cut {
+			warnings = append(warnings, Warning{
+				Kind:    WarnOther,
+				Feature: "content",
+				Details: "a stray </think> in content was cut; the text before it moved to reasoning",
+			})
+		}
+	}
 	cost, priceWarnings := priceCall(pl.profile, resp.Usage, hdr, 200, at)
 	resp.Usage.Cost = cost
 	warnings = append(warnings, priceWarnings...)

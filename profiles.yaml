@@ -644,6 +644,13 @@ profiles:
       # correctly with thinking off in all three.
       enabled_by_default: true
       can_be_disabled: true
+      # OBSERVED 2026-09-22 in production, not reproduced by a probe: a
+      # tool-free call with thinking disabled, after a multi-turn tool
+      # history, answered with a draft, a stray "</think>" and then the
+      # answer, all in content, and 0 reasoning tokens. The caller parsed the
+      # draft as the answer. A short probe prompt never showed it. Not seen on
+      # -pro, so not set there.
+      leaks_close_tag: true
       control: toggle_object
       # MEASURED 2026-09-22: same enforced set as -pro, xhigh a 400 "Invalid
       # request parameters".

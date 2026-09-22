@@ -261,6 +261,22 @@ silently.
 **Fastest endpoint in this file**: 0.9-2.6 seconds per call, longest
 comment-only gap 522ms over 353 frames.
 
+**A stray `</think>` in content, with thinking disabled.** Observed once in
+production on 2026-09-22, never by a probe: a tool-free call after a
+multi-turn tool history, `thinking: disabled`, 0 reasoning tokens, came back
+with a draft of the answer, a closing `</think>` and then the answer, all in
+`content`. No opening tag, nothing on the reasoning channel. The caller parsed
+the draft as the answer. `reasoning.leaks_close_tag` makes `Chat` cut content
+at the last such tag and move the draft to `Reasoning`, with a warning.
+Streams are not covered: the draft is already sent when the tag arrives. Not
+seen on `-pro`.
+
+**Parallel tool calls without bound.** The same deployment answered one tool
+round with 38 `tool_calls` under `tool_choice: auto` and ran into a 700-token
+`max_tokens`, `finish_reason: length`, the last call's arguments cut mid-JSON.
+Parallel calls are real on this model; a caller capping a tool turn should cap
+the calls it runs too.
+
 ### `reasoning_effort` on the V2.6 pair: the ladder is not a ladder
 
 Measured 2026-09-22 by `MiMoEffortLadderIsReal`, five samples per level on a
