@@ -396,6 +396,11 @@ func TestDefault_ShippedRatesMatchTheVendorPages(t *testing.T) {
 		{id: "glm-5.3-flash", input: 150_000_000, cacheRead: 30_000_000, cacheWrite: 0, out: 500_000_000, hasOutput: true},
 		{id: "mimo-v2.5-pro", input: 435_000_000, cacheRead: 3_600_000, cacheWrite: 0, out: 870_000_000, hasOutput: true},
 		{id: "mimo-v2.5", input: 140_000_000, cacheRead: 2_800_000, cacheWrite: 0, out: 280_000_000, hasOutput: true},
+		// V2.6 is priced exactly as the V2.5 pair on the vendor page. models.dev
+		// carries no v2.6 entry, so these have no third-party cross-check and
+		// this test is the only thing pinning them.
+		{id: "mimo-v2.6-pro", input: 435_000_000, cacheRead: 3_600_000, cacheWrite: 0, out: 870_000_000, hasOutput: true},
+		{id: "mimo-v2.6-flash", input: 140_000_000, cacheRead: 2_800_000, cacheWrite: 0, out: 280_000_000, hasOutput: true},
 		{id: "text-embedding-3-small", input: 20_000_000},
 		{id: "text-embedding-3-large", input: 130_000_000},
 	} {

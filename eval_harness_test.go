@@ -74,6 +74,13 @@ var evalRates = map[string]evalRate{
 	// figure is a proxy bound, which is all a circuit breaker needs.
 	"mimo-v2.5-pro": {1.00, 3.00},
 	"mimo-v2.5":     {0.40, 2.00},
+	// V2.6 is priced identically to the V2.5 pair on the vendor page
+	// (0.435/0.87 and 0.14/0.28), and models.dev carries no v2.6 entry at all,
+	// so there is no third-party figure to be higher. The V2.5 over-bounds are
+	// kept rather than tightened to the vendor rate: over-estimating is the
+	// correct direction for a breaker.
+	"mimo-v2.6-pro":   {1.00, 3.00},
+	"mimo-v2.6-flash": {0.40, 2.00},
 	// Model page 0.75/4.50, standard tier; no probe runs against it yet, the
 	// entry is here so the first one is metered rather than breaker-tripped.
 	"gpt-5.4-mini": {0.75, 4.50},

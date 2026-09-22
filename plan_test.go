@@ -30,6 +30,8 @@ func TestPlan_CapParamComesFromTheProfile(t *testing.T) {
 	for _, tc := range []struct{ model, want string }{
 		{"glm-5.3-flash", ParamMaxTokens},
 		{"mimo-v2.5-pro", ParamMaxCompletionTokens},
+		{"mimo-v2.6-pro", ParamMaxCompletionTokens},
+		{"mimo-v2.6-flash", ParamMaxCompletionTokens},
 	} {
 		pl := mustPlan(t, c, ChatRequest{
 			Model:    tc.model,
