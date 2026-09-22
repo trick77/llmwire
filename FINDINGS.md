@@ -267,7 +267,9 @@ multi-turn tool history, `thinking: disabled`, 0 reasoning tokens, came back
 with a draft of the answer, a closing `</think>` and then the answer, all in
 `content`. No opening tag, nothing on the reasoning channel. The caller parsed
 the draft as the answer. `reasoning.leaks_close_tag` makes `Chat` cut content
-at the last such tag and move the draft to `Reasoning`, with a warning.
+at the first such tag and move the draft to `Reasoning`, with a warning, on
+requests with thinking off and no JSON format, before inline tool-call
+recovery.
 Streams are not covered: the draft is already sent when the tag arrives. Not
 seen on `-pro`.
 

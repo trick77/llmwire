@@ -58,13 +58,9 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 		return nil, warnings, err
 	}
 	resp.Timing = timing
-	if pl.profile.Tools.recoversInline() {
-		rec := recoverInline(resp.Content, resp.Reasoning, len(resp.ToolCalls))
-		resp.Content, resp.Reasoning = rec.content, rec.reasoning
-		resp.ToolCalls = append(resp.ToolCalls, rec.calls...)
-		warnings = append(warnings, rec.warnings()...)
-	}
-	if pl.profile.Reasoning.LeaksCloseTag {
+	// Before inline recovery: the draft is not the answer, so markup in it
+	// must neither become a call nor cut the answer away.
+	if pl.profile.Reasoning.LeaksCloseTag && leakCanApply(pl.req) {
 		var cut bool
 		resp.Content, resp.Reasoning, cut = cutStrayCloseTag(resp.Content, resp.Reasoning)
 		if cut {
@@ -74,6 +70,12 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 				Details: "a stray </think> in content was cut; the text before it moved to reasoning",
 			})
 		}
+	}
+	if pl.profile.Tools.recoversInline() {
+		rec := recoverInline(resp.Content, resp.Reasoning, len(resp.ToolCalls))
+		resp.Content, resp.Reasoning = rec.content, rec.reasoning
+		resp.ToolCalls = append(resp.ToolCalls, rec.calls...)
+		warnings = append(warnings, rec.warnings()...)
 	}
 	cost, priceWarnings := priceCall(pl.profile, resp.Usage, hdr, 200, at)
 	resp.Usage.Cost = cost

@@ -104,7 +104,8 @@ type Reasoning struct {
 	BudgetParam string `yaml:"budget_param"`
 	// LeaksCloseTag: the model writes a stray "</think>" into content, after a
 	// draft of its answer, even with thinking disabled. Chat then cuts content
-	// at the last such tag and moves the part before it to Reasoning. Observed,
+	// at the first such tag, on requests with thinking off and no JSON format,
+	// and moves the part before it to Reasoning. Observed,
 	// not documented by any vendor; see profiles.yaml for the case. Applies to
 	// Chat only: a stream has already sent the draft by the time the tag
 	// arrives.

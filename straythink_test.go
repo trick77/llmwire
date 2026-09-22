@@ -2,6 +2,7 @@ package llmwire
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -19,8 +20,9 @@ func TestChat_StrayCloseTagIsCutWhereTheProfileSaysItLeaks(t *testing.T) {
 	  "usage":{"prompt_tokens":10,"completion_tokens":5}}`
 	srv, _ := jsonServer(t, 200, body)
 	resp, warnings, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
-		Model:    "mimo-v2.6-flash",
-		Messages: []Message{User("hi")},
+		Model:     "mimo-v2.6-flash",
+		Messages:  []Message{User("hi")},
+		Reasoning: ReasoningOff(),
 	})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
@@ -55,5 +57,64 @@ func TestChat_StrayCloseTagIsLeftAloneWithoutTheBit(t *testing.T) {
 	}
 	if resp.Content != "a</think>b" {
 		t.Errorf("content = %q, want it untouched: the bit is off", resp.Content)
+	}
+}
+
+// cutCase runs one flash reply through Chat and returns what the caller gets.
+func cutCase(t *testing.T, content string, req ChatRequest) *ChatResponse {
+	t.Helper()
+	b, _ := json.Marshal(content)
+	body := `{"model":"mimo-v2.6-flash","choices":[{"finish_reason":"stop","message":{"content":` +
+		string(b) + `}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+	srv, _ := jsonServer(t, 200, body)
+	req.Model, req.Messages = "mimo-v2.6-flash", []Message{User("hi")}
+	resp, _, err := chatClient(t, srv).Chat(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	return resp
+}
+
+func TestChat_StrayCloseTagCutsOnlyALeak(t *testing.T) {
+	off := ChatRequest{Reasoning: ReasoningOff()}
+	cases := []struct {
+		name, content string
+		req           ChatRequest
+		want          string
+	}{
+		{"an answer quoting the tag after the leak keeps its start",
+			"draft</think>the answer quotes `</think>` here", off,
+			"the answer quotes `</think>` here"},
+		{"a quoted pair inside an answer is not a leak",
+			"the tags are `<think>` and `</think>`", off,
+			"the tags are `<think>` and `</think>`"},
+		{"a leading think block is reasoning",
+			"<think>draft</think>answer", off, "answer"},
+		{"thinking not switched off: untouched",
+			"a</think>b", ChatRequest{}, "a</think>b"},
+		{"a JSON reply: untouched",
+			`{"k":"a</think>b"}`, ChatRequest{Reasoning: ReasoningOff(),
+				ResponseFormat: ResponseFormat{Kind: FormatJSONObject}}, `{"k":"a</think>b"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := cutCase(t, c.content, c.req).Content; got != c.want {
+				t.Errorf("content = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// Inline tool-call recovery runs on the answer, never on the draft: markup in
+// a discarded draft must not become a call, and a broken marker there must not
+// cut the answer away.
+func TestChat_StrayCloseTagIsCutBeforeInlineRecovery(t *testing.T) {
+	resp := cutCase(t, "draft <tool_call><function=x>broken</think>the answer",
+		ChatRequest{Reasoning: ReasoningOff()})
+	if resp.Content != "the answer" {
+		t.Errorf("content = %q, want the answer", resp.Content)
+	}
+	if len(resp.ToolCalls) != 0 {
+		t.Errorf("tool calls = %v, want none from the draft", resp.ToolCalls)
 	}
 }
