@@ -635,9 +635,13 @@ profiles:
       # no-knob control reported 42, so thinking is on by default.
       #
       # One caveat the -pro run did not show: with thinking disabled this model
-      # answered the arithmetic prompt WRONG ("155" against the correct "205"
-      # it gives with thinking on). One sample, so not a law — but disabling
-      # thinking on this model is a quality decision, not just a latency one.
+      # answered the arithmetic prompt WRONG in EVERY run that sent it — "155",
+      # "145" and "195" across three, against the correct "205" it gives with
+      # thinking on. Three draws is not a study, but three for three, each a
+      # different wrong number, is not a coin landing badly either: with
+      # thinking off this model guesses at one-step arithmetic. Disabling it
+      # here is a quality decision, not only a latency one. -pro answered
+      # correctly with thinking off in all three.
       enabled_by_default: true
       can_be_disabled: true
       control: toggle_object
@@ -735,11 +739,13 @@ profiles:
       nothing measurable: five samples per level span 17 tokens between low,
       medium and high. Use the thinking toggle, which is honoured cleanly and
       wins over an effort level sent in the same request.
-      DISABLING THINKING COSTS CORRECTNESS HERE. Two separate runs of the same
-      one-step arithmetic prompt (answer 205) returned 155 and 145 with
-      thinking disabled, and the correct answer with it on. Two samples, not a
-      study, but both wrong in the same direction: on this model
-      ReasoningOff() is a quality decision, not only a latency one.
+      DISABLING THINKING COSTS CORRECTNESS HERE. Three separate runs of the
+      same one-step arithmetic prompt (answer 205) returned 155, 145 and 195
+      with thinking disabled, and the correct answer with it on. Three samples
+      are not a study, but three for three wrong with a different number each
+      time is not a coin landing badly: on this model ReasoningOff() is a
+      quality decision, not only a latency one. mimo-v2.6-pro answered
+      correctly with thinking off in all three.
   # ---------------------------------------------------------------------------
   # OpenAI embeddings.
   # ---------------------------------------------------------------------------

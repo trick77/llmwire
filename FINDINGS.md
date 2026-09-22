@@ -245,11 +245,13 @@ Measured on 2026-09-22.
 Every bit matches `-pro` except the ones below. The thinking toggle is honoured
 independently here too: reasoning tokens 42 with no knob, 0 with the toggle.
 
-**Disabling thinking made it answer incorrectly.** With `thinking: disabled` it
-returned `155` for a one-step arithmetic prompt whose answer is `205`, which it
-gives correctly with thinking on. One sample, so not a law — but on this model
-disabling thinking is a quality decision, not only a latency one. `-pro` kept the
-correct answer both ways.
+**Disabling thinking made it answer incorrectly, every time it was asked.**
+With `thinking: disabled` it returned `155`, `145` and `195` across three runs
+of a one-step arithmetic prompt whose answer is `205`, and the correct answer
+with thinking on. `-pro` answered correctly with thinking off in all three. See
+the "Still open" bullet: three distinct wrong answers reads as guessing rather
+than as a coin landing badly, and makes `ReasoningOff()` a quality decision on
+this model.
 
 **`max_output` moved 4x across the version bump.** `mimo-v2.5` shipped 32768;
 this model's card documents 128K, the same ceiling as `-pro`. Not measured — no
@@ -427,10 +429,12 @@ and is what bounds real spend: a full sweep is about $0.10 against $0.50.
   `MiMoThinkingCanBeDisabled` covers the V2.6 ids only. Adding the two V2.5 rows
   would close a bit those entries have carried on documentation since they
   shipped — about four calls — but they are deprecated on 2026-10-21.
-- **Whether disabling thinking systematically degrades `-flash`.** Now two
-  samples, both wrong and in the same direction: the same one-step arithmetic
-  prompt (answer 205) returned **155** and **145** with thinking disabled, and
-  the correct answer with it on. `-pro` kept the correct answer both ways. Two
-  draws is not a study, but it is enough that `ReasoningOff()` against `-flash`
-  should be treated as a quality decision. A real accuracy comparison over a
-  prompt set would settle it.
+- **Whether disabling thinking systematically degrades `-flash`.** Three
+  samples now, and **three for three wrong**: the same one-step arithmetic
+  prompt (answer 205) returned **155**, **145** and **195** with thinking
+  disabled, a different wrong number each time, and the correct answer with
+  thinking on. `-pro` answered correctly with thinking off in all three. Three
+  draws is not a study, but three distinct wrong answers is not a coin landing
+  badly either — with thinking off this model appears to guess at one-step
+  arithmetic. `ReasoningOff()` against `-flash` is a quality decision. An
+  accuracy comparison over a prompt set would quantify it.

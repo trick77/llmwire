@@ -593,7 +593,20 @@ func TestProbe_MiMoEffortLadderIsReal(t *testing.T) {
 			// means alone would call a 67/69/74 spread a ladder, which is
 			// exactly the mistake this probe exists to avoid.
 			separated := lo.max < mid.min && mid.max < hi.min
-			anyOverlap := !separated
+
+			// The middle verdict is deliberately gated on RANGES, never on a
+			// mean ratio. An earlier draft asked whether hi.mean exceeded
+			// lo.mean by half, and on the -pro data that fires (337.8 against
+			// 198.2) purely because `high` drew one 1088-token sample — it
+			// would have printed "the knob moves something" over the same
+			// numbers this file reads as no ladder at all. A mean over five
+			// draws is one outlier away from any verdict you like, which is
+			// the whole reason this probe compares ranges.
+			//
+			// So: low and high must not overlap EACH OTHER for the knob to be
+			// credited with moving anything, even where medium sits astride
+			// them.
+			endsSeparated := lo.max < hi.min || hi.max < lo.min
 
 			switch {
 			case separated:
@@ -601,11 +614,11 @@ func TestProbe_MiMoEffortLadderIsReal(t *testing.T) {
 					"(%d-%d, %d-%d, %d-%d). reasoning_effort is a working control; "+
 					"record the means in the profile comment.",
 					model, lo.min, lo.max, mid.min, mid.max, hi.min, hi.max)
-			case anyOverlap && hi.mean > lo.mean*1.5:
-				t.Logf("FINDING %s: DIRECTIONAL BUT NOISY. high means %.1f against low %.1f, "+
-					"but the ranges overlap (%d-%d vs %d-%d). The knob moves something; "+
-					"it does not give a caller three distinguishable settings.",
-					model, hi.mean, lo.mean, lo.min, lo.max, hi.min, hi.max)
+			case endsSeparated:
+				t.Logf("FINDING %s: PARTIAL. low and high do not overlap (%d-%d vs %d-%d) "+
+					"but medium (%d-%d) does not sit cleanly between them. The knob moves "+
+					"something; it does not give a caller three distinguishable settings.",
+					model, lo.min, lo.max, hi.min, hi.max, mid.min, mid.max)
 			default:
 				t.Logf("FINDING %s: LADDER IS NOT REAL. low/medium/high overlap "+
 					"(%d-%d, %d-%d, %d-%d), means %.1f / %.1f / %.1f. "+
@@ -662,7 +675,16 @@ func TestProbe_MiMoThinkingToggleBeatsEffort(t *testing.T) {
 				t.Logf("  => the two parameters conflict at the endpoint; plan() must not send both.")
 				return
 			}
-			r := valueOr(res.Usage.Output.Reasoning, -1)
+			// Not reported is not zero. A response that omits
+			// completion_tokens_details says nothing about whether the model
+			// thought, so it must not land in either verdict below — the same
+			// guard MiMoThinkingCanBeDisabled needs, for the same reason.
+			if res.Usage.Output.Reasoning == nil {
+				t.Skipf("inconclusive: the reasoning lane was not reported at all, so "+
+					"whether the toggle or the effort won cannot be read off this call "+
+					"(finish=%s, content=%q)", res.FinishReason, Truncate(res.Content, 40))
+			}
+			r := *res.Usage.Output.Reasoning
 			if r == 0 {
 				t.Logf("FINDING %s: thinking:disabled WINS over reasoning_effort:high "+
 					"(reasoning tokens 0, content %q). ReasoningOff() is safe against a "+
@@ -670,7 +692,7 @@ func TestProbe_MiMoThinkingToggleBeatsEffort(t *testing.T) {
 				return
 			}
 			t.Logf("FINDING %s: reasoning_effort:high WINS or both are ignored — reasoning "+
-				"tokens %v with thinking disabled. A caller asking for no thinking would "+
+				"tokens %d with thinking disabled. A caller asking for no thinking would "+
 				"silently get thinking; plan() must drop the effort when reasoning is off.",
 				model, r)
 		})
