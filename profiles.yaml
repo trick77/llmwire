@@ -455,6 +455,12 @@ profiles:
       # at all reported 54 reasoning tokens, so thinking is on unless switched
       # off. Worth contrasting with Z.ai, where the vendor also documents this
       # toggle and the endpoint refuses it outright (code 1210).
+      #
+      # RE-MEASURED 2026-09-23, two runs: 78 -> 0 on the same prompt, answer
+      # "205" both ways. The other run's control call got no response headers
+      # within 60s, so it has only the disabled half (0). The direction holds;
+      # the count on the control moves run to run (54, 78), so read it as
+      # "tens of tokens", not as a figure.
       enabled_by_default: true
       can_be_disabled: true
       control: toggle_object
@@ -462,24 +468,26 @@ profiles:
       # and high return 200, xhigh is a 400 "Invalid request parameters". Same
       # set as V2.5.
       #
-      # THE LADDER IS NOT A LADDER. Settled 2026-09-22 by
-      # MiMoEffortLadderIsReal, five samples per level on a variable-depth
-      # prompt ("list every prime between 100 and 200"), reasoning tokens:
-      #   no level  104-656   mean 254.6   [120 120 656 273 104]
-      #   low       120-507   mean 198.2   [121 507 120 122 121]
-      #   medium    120-148   mean 125.8   [120 148 120 120 121]
-      #   high      104-1088  mean 337.8   [121 255 121 1088 104]
-      # Every range overlaps every other. The means look directional (high
-      # 337.8 against low 198.2) and are an artefact: read the samples, not the
-      # means. Four of five samples at EVERY level sit in a ~104-150 band, and
-      # the mean is set by whether that level happened to draw one outlier
-      # (507, 656, 1088). What varies is not the level — it is whether this
-      # deployment takes a deep pass on a given call.
+      # THE LADDER IS NOT A LADDER. MiMoEffortLadderIsReal, five samples per
+      # level on a variable-depth prompt ("list every prime between 100 and
+      # 200"), reasoning tokens, two runs a day apart:
+      #               2026-09-22                 2026-09-23
+      #   no level  [120 120 656 273 104]    [117 117 121 272 120]
+      #   low       [121 507 120 122 121]    [351 125 632 121 2230]
+      #   medium    [120 148 120 120 121]    [120 120 121 120 117]
+      #   high      [121 255 121 1088 104]   [1923 1024 1252 536 121]
+      # Every range overlaps every other in both runs, so the three levels are
+      # not three settings. The first run read as "a ~104-150 floor at every
+      # level with one outlier each"; the second does not: high went deep in
+      # four of five, low in three. Both runs together: medium stayed in
+      # 117-148 in ten of ten, high went past 500 in five of ten. That leans
+      # towards high thinking deeper more often and medium capping it, but
+      # ten samples a cell with overlapping ranges does not settle it.
       #
-      # So a caller gets a floor with occasional deep thinks, not three
-      # settings. Use the thinking toggle, which IS honoured cleanly; treat a
-      # level as a hint the endpoint accepts and largely ignores. Do not build
-      # a cost model on it.
+      # What a caller can rely on: a level does not buy a predictable amount
+      # of thinking, and high can cost 15x medium on the same prompt. Use the
+      # thinking toggle, which IS honoured cleanly. Do not build a cost model
+      # on a level.
       #
       # An earlier one-sample-per-level run read 67/69/74 against 197 for no
       # level and suggested any level SUPPRESSES thinking. That does not
@@ -610,13 +618,18 @@ profiles:
       the difference and pricing subtracts it. Unlike mimo-v2.5-pro this
       endpoint starts COLD — 0 cached on a fresh 10.9k prompt, where
       mimo-v2.5-pro reported 192 of 258 because it injects its own system
-      message. Latency is 1-5 seconds per call, not the 25-64 seconds the V2.5
-      notes describe. reasoning_effort is accepted with an enforced set despite
-      appearing in no vendor document for this model, but it does NOT give a
-      caller three settings: at five samples per level every range overlaps
-      every other, and what varies is whether the deployment takes a deep pass,
-      not the level. Reach for the thinking toggle instead, which is honoured
-      cleanly and wins over an effort level sent in the same request.
+      message. Latency is NOT reliably low. On 2026-09-22 every call took 1-5
+      seconds. On 2026-09-23 typical calls took 1.5-9 seconds, and two of about
+      45 failed outright: one with no response headers within 60s, one with a
+      stream that stopped mid-answer until the 90s idle guard aborted it, where
+      the day before its longest data-frame gap was 1.2s. One evening's
+      sample, so vendor load may be part of it; a caller should still budget
+      for the timeout, not the median. reasoning_effort is accepted with an
+      enforced set despite appearing in no vendor document for this model, but
+      it does NOT give a caller three settings: at five samples per level,
+      twice, every range overlaps every other. Reach for the thinking toggle
+      instead, which is honoured cleanly and wins over an effort level sent in
+      the same request.
 
   - id: mimo-v2.6-flash
     endpoint: chat
@@ -634,14 +647,17 @@ profiles:
       # ACCEPTED AND HONOURED here too, reasoning tokens 42 -> 0, and the
       # no-knob control reported 42, so thinking is on by default.
       #
-      # One caveat the -pro run did not show: with thinking disabled this model
-      # answered the arithmetic prompt WRONG in EVERY run that sent it — "155",
-      # "145" and "195" across three, against the correct "205" it gives with
-      # thinking on. Three draws is not a study, but three for three, each a
-      # different wrong number, is not a coin landing badly either: with
-      # thinking off this model guesses at one-step arithmetic. Disabling it
-      # here is a quality decision, not only a latency one. -pro answered
-      # correctly with thinking off in all three.
+      # RE-MEASURED 2026-09-23, two runs: 27 -> 0 and 54 -> 0 (42 the day
+      # before). Honoured every time; the control count is not a figure.
+      #
+      # One caveat -pro does not show: with thinking disabled this model
+      # answers the arithmetic prompt WRONG. Seven of seven calls that sent the
+      # toggle got it wrong, each a different number: "155", "145", "195" on
+      # 2026-09-22, then "145", "195", and "105", "185" with reasoning_effort
+      # high beside the toggle, on 2026-09-23. The correct "205" came back on
+      # every thinking-on call. With thinking off this model guesses at
+      # one-step arithmetic; disabling it here is a quality decision, not only
+      # a latency one. -pro answered correctly with thinking off every time.
       enabled_by_default: true
       can_be_disabled: true
       # OBSERVED 2026-09-22 in production, not reproduced by a probe: a
@@ -655,16 +671,19 @@ profiles:
       # MEASURED 2026-09-22: same enforced set as -pro, xhigh a 400 "Invalid
       # request parameters".
       #
-      # THE LADDER IS NOT A LADDER, and the case is even plainer here than on
-      # -pro. Five samples per level, same prompt, reasoning tokens:
-      #   no level  117-1784  mean 451.0   [1784 120 117 117 117]
-      #   low       104-121   mean 115.2   [104 117 117 117 121]
-      #   medium    117-121   mean 118.6   [121 117 117 118 120]
-      #   high      104-117   mean 111.8   [104 104 117 117 117]
-      # The three levels span 17 tokens between them and high is the LOWEST
-      # mean of the three. Not noise around a trend: there is no trend. The
-      # no-level mean of 451 is one 1784-token outlier in five; its other four
-      # samples sit in the same ~117-120 band as every level.
+      # THE LADDER IS NOT A LADDER. Five samples per level, same prompt as
+      # -pro, reasoning tokens, two runs a day apart:
+      #               2026-09-22                 2026-09-23
+      #   no level  [1784 120 117 117 117]   [117 2328 117 104 118]
+      #   low       [104 117 117 117 121]    [15 117 120 117 118]
+      #   medium    [121 117 117 118 120]    [117 104 104 625 120]
+      #   high      [104 104 117 117 117]    [118 847 117 104 118]
+      # The first run had the three levels within 17 tokens of each other; the
+      # second drew deep passes at medium (625) and high (847). Every range
+      # overlaps every other in both. All but three samples sit in ~104-121
+      # whatever the level, and the deepest pass either day (2328) came with no
+      # level at all. What varies is whether a call takes a deep pass, not the
+      # level.
       #
       # Use the thinking toggle, which is honoured cleanly. A level is accepted
       # and does not buy a caller a different amount of thinking.
@@ -738,21 +757,23 @@ profiles:
       Succeeds mimo-v2.5, which the vendor deprecates 2026-10-21. The vendor
       describes a 309B-parameter Mixture-of-Experts model with 15B activated per
       token, and gives it the same 1M/128K window as -pro where its predecessor
-      had max_output 32768. Fastest endpoint measured in this file: 0.9-2.6
-      seconds per call, and a longest data-frame gap of 522ms against the 90s
-      idle bound. Like -pro it populates the reasoning lane rather than hiding
-      thinking inside completion_tokens, starts with a cold cache, and contains
-      cached_tokens inside prompt_tokens. reasoning_effort is accepted but buys
-      nothing measurable: five samples per level span 17 tokens between low,
-      medium and high. Use the thinking toggle, which is honoured cleanly and
-      wins over an effort level sent in the same request.
-      DISABLING THINKING COSTS CORRECTNESS HERE. Three separate runs of the
-      same one-step arithmetic prompt (answer 205) returned 155, 145 and 195
-      with thinking disabled, and the correct answer with it on. Three samples
-      are not a study, but three for three wrong with a different number each
-      time is not a coin landing badly: on this model ReasoningOff() is a
-      quality decision, not only a latency one. mimo-v2.6-pro answered
-      correctly with thinking off in all three.
+      had max_output 32768. On 2026-09-22 it was the fastest endpoint measured
+      in this file, 0.9-2.6 seconds per call; on 2026-09-23 short calls took
+      1.8-3.5 seconds to headers, a probe of two calls took 29 seconds, and
+      output ran at 18-36 tokens per second. No call failed, and the longest
+      data-frame gap stayed under 522ms against the 90s idle bound. Like -pro
+      it populates the reasoning lane rather than hiding thinking inside
+      completion_tokens, starts with a cold cache, and contains cached_tokens
+      inside prompt_tokens. reasoning_effort is accepted but buys nothing
+      measurable: at five samples per level, twice, every range overlaps every
+      other. Use the thinking toggle, which is honoured cleanly and wins over
+      an effort level sent in the same request.
+      DISABLING THINKING COSTS CORRECTNESS HERE. The same one-step arithmetic
+      prompt (answer 205) came back wrong on seven of seven thinking-off calls
+      across two days, a different number each time (155, 145, 195, 105,
+      185), and correct on every thinking-on call. On this model ReasoningOff()
+      is a quality decision, not only a latency one. mimo-v2.6-pro answered
+      correctly with thinking off every time.
   # ---------------------------------------------------------------------------
   # OpenAI embeddings.
   # ---------------------------------------------------------------------------
