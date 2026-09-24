@@ -200,7 +200,7 @@ func parseUsage(raw json.RawMessage) Usage {
 		return Usage{Raw: raw}
 	}
 
-	u := Usage{Raw: raw, reported: w.reported()}
+	u := Usage{Raw: raw}
 	u.Input.Total = nonNegative(w.PromptTokens)
 	u.Output.Total = nonNegative(w.CompletionTokens)
 
@@ -212,6 +212,13 @@ func parseUsage(raw json.RawMessage) Usage {
 		u.Output.Reasoning = nonNegative(d.ReasoningTokens)
 		u.Output.Text = nonNegative(d.TextTokens)
 	}
+
+	// Reported is judged on what SURVIVED, not on the wire struct: a usage
+	// object whose every figure was negative has nothing countable in it, and
+	// must read as unreported so the call is flagged, not merely unpriced.
+	u.reported = u.Input.Total != nil || u.Output.Total != nil || w.TotalTokens != nil ||
+		u.Input.CacheRead != nil || u.Input.CacheWrite != nil ||
+		u.Output.Reasoning != nil || u.Output.Text != nil
 
 	// Derive the lanes nobody reports. Clamped rather than trusted: both
 	// operands arrive from the wire, and a cached count exceeding the prompt

@@ -400,7 +400,7 @@ func TestParseAPIError_FieldsAreRedactedAndBounded(t *testing.T) {
 	}
 	// A code that is a whole document is bounded too.
 	e := parseAPIErrorWith(Redact, 400, []byte(`{"error":{"code":{"nested":"`+huge+`"}}}`))
-	if len(e.Code) > maxErrorCode+len("…(truncated)") {
-		t.Errorf("object code length %d, want bounded to %d", len(e.Code), maxErrorCode)
+	if len(e.Code) > maxErrorBody+len("…(truncated)") {
+		t.Errorf("object code length %d, want bounded to %d", len(e.Code), maxErrorBody)
 	}
 }

@@ -204,8 +204,20 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 	// received the figures; and a stream cut after its usage frame was paid
 	// for. Where nothing arrived priceCall says Unpriced with a warning, which
 	// is the contract: a zero cost is never silent.
+	//
+	// The header lane is withheld unless the stream ended cleanly. A proxy
+	// writes x-litellm-response-cost before the body, and on a stream has
+	// shipped it as a literal 0; on a clean ending that hole is the documented
+	// one, but on a stream that stalled or was Closed the header cannot
+	// describe the call at all, and pricing it would record a confident zero
+	// for exactly the call that was cut. usage.cost in the body, when it
+	// arrived, still counts.
+	hdr := resp.Header
+	if stopped || err != nil {
+		hdr = nil
+	}
 	var priceWarnings []Warning
-	res.Usage.Cost, priceWarnings = priceCall(pl.profile, res.Usage, resp.Header, resp.StatusCode, at)
+	res.Usage.Cost, priceWarnings = priceCall(pl.profile, res.Usage, hdr, resp.StatusCode, at)
 	priceWarnings = append(priceWarnings, gwWarnings...)
 
 	// Reported from the locals: s.res and s.err are written under the mutex

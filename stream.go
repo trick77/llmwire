@@ -419,22 +419,28 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 		res.ToolCalls = append(res.ToolCalls, *tools[i])
 	}
 
-	if frameErr != nil {
-		return res, nil, frameErr
-	}
-	// A scanner failure is a stream cut short: a line past the cap, a body
-	// that ended mid-line. Wrapped in the sentinel a caller dispatches on for
-	// "the endpoint did not finish", the same one the missing-finish case
-	// below carries.
-	if err := sc.Err(); err != nil {
-		return res, nil, fmt.Errorf("llmwire: %w: reading stream: %w", ErrMalformedResponse, err)
-	}
-	if !res.Done && res.FinishReason == "" {
-		return res, nil, fmt.Errorf("llmwire: %w: stream ended after %d events (%d chars) without finish_reason or %s",
+	// How the stream ended, decided before the recovery tail rather than
+	// returned from inside it: with recovery on, the gates may still hold text
+	// the consumer has not seen and the markup may still be in Content, and
+	// a partial result that skipped that step would hand back raw markup as
+	// the answer. So the tail runs on every ending, and the error rides out
+	// beside whatever it assembled.
+	var endErr error
+	switch {
+	case frameErr != nil:
+		endErr = frameErr
+	case sc.Err() != nil:
+		// A scanner failure is a stream cut short: a line past the cap, a
+		// body that ended mid-line. Wrapped in the sentinel a caller
+		// dispatches on for "the endpoint did not finish", the same one the
+		// missing-finish case carries.
+		endErr = fmt.Errorf("llmwire: %w: reading stream: %w", ErrMalformedResponse, sc.Err())
+	case !res.Done && res.FinishReason == "":
+		endErr = fmt.Errorf("llmwire: %w: stream ended after %d events (%d chars) without finish_reason or %s",
 			ErrMalformedResponse, res.Events, res.Chars, doneMarker)
 	}
 	if !recover {
-		return res, nil, nil
+		return res, nil, endErr
 	}
 	defer func() {
 		if heldFinish != nil {
@@ -467,7 +473,7 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 		emit(streamEvent{kind: evToolCall, toolCall: tc})
 		res.ToolCalls = append(res.ToolCalls, call)
 	}
-	return res, rec.warnings(), nil
+	return res, rec.warnings(), endErr
 }
 
 // isJSONNull reports whether raw is the literal null, so a `"error": null` field

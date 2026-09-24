@@ -198,16 +198,18 @@ func parseAPIError(status int, body []byte) *APIError {
 	return parseAPIErrorWith(Redact, status, body)
 }
 
-// bodySnippet is the bounded, redacted slice of a body that an error may
-// quote: enough to name what answered, never enough to leak what it said.
-func bodySnippet(redact redactor, raw []byte) string {
-	return Truncate(redact(string(raw)), maxErrorBody)
+// cleanText is THE rule for upstream text an error keeps: redacted, then
+// bounded, in that order. A cut that lands inside a credential leaves its
+// head behind for a pass that only knows the whole value.
+func cleanText(redact redactor, s string) string {
+	return Truncate(redact(s), maxErrorBody)
 }
 
-// maxErrorCode bounds a code that arrived as a whole JSON document instead
-// of a scalar. A real code is a few characters; this is only a cap on a shape
-// nobody documents.
-const maxErrorCode = 64
+// bodySnippet is cleanText over a body that an error may quote: enough to
+// name what answered, never enough to leak what it said.
+func bodySnippet(redact redactor, raw []byte) string {
+	return cleanText(redact, string(raw))
+}
 
 // redactor is what turns upstream text into loggable text. Redact is the
 // shape-only default; a Client supplies one that also strips its own key by
@@ -220,12 +222,10 @@ func parseAPIErrorWith(redact redactor, status int, body []byte) *APIError {
 	e := &APIError{StatusCode: status, Class: classify(status)}
 	body = unframeSSE(body)
 
-	// Every field kept from the body goes through clean: redacted, then
-	// bounded, in that order. A cut that lands inside a credential leaves its
-	// head behind for a pass that only knows the whole value. Bounded because
+	// Every field kept from the body goes through cleanText. Bounded because
 	// an in-band error in a 200 body or a stream frame is not read through
 	// httpError's LimitReader, so nothing upstream has capped it.
-	clean := func(s string) string { return Truncate(redact(s), maxErrorBody) }
+	clean := func(s string) string { return cleanText(redact, s) }
 
 	var env errorEnvelope
 	if err := json.Unmarshal(body, &env); err == nil {
@@ -313,9 +313,8 @@ func decodeCode(raw json.RawMessage) string {
 		return strconv.FormatFloat(f, 'f', -1, 64)
 	}
 	// An object or array where a scalar belongs: kept as text so a caller
-	// still sees what was sent, but bounded, since it is an arbitrary
-	// document from the wire.
-	return Truncate(strings.Trim(string(raw), `"`), maxErrorCode)
+	// still sees what was sent. fill bounds it with every other field.
+	return strings.Trim(string(raw), `"`)
 }
 
 // renderDetail flattens the FastAPI "detail" field to one line. An object with a

@@ -676,10 +676,6 @@ func (v *validation) checkTools(req ChatRequest) {
 	v.out.ToolChoice = ToolChoice{Mode: ToolChoiceAuto}
 }
 
-// toolChoiceAccepted says whether the profile takes a mode as sent. The
-// string modes are looked up in tool_choice_values; a forced function is an
-// OBJECT on the wire, {"type":"function",…}, and has its own bit, because a
-// list of strings cannot say whether the object form is honoured.
 // checkExtraBody refuses the keys ExtraBody may not override. It wins over
 // every other generated key by design, but these four would make the body
 // lie about itself: `stream` swaps the parser out from under the call the
@@ -710,6 +706,10 @@ func (v *validation) checkExtraBody(req ChatRequest) {
 	}
 }
 
+// toolChoiceAccepted says whether the profile takes a mode as sent. The
+// string modes are looked up in tool_choice_values; a forced function is an
+// OBJECT on the wire, {"type":"function",…}, and has its own bit, because a
+// list of strings cannot say whether the object form is honoured.
 func toolChoiceAccepted(t Tools, mode ToolChoiceMode) bool {
 	if mode == ToolChoiceFunction {
 		return t.SupportsForcedChoice

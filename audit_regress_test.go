@@ -472,6 +472,86 @@ func TestValidateStream_SeesTheStreamingRefusal(t *testing.T) {
 	}
 }
 
+// --- review findings on the sweep itself ---------------------------------------
+
+// A proxy writes its cost header before the body, and on a stream has
+// shipped it as a literal 0. A stream that was cut cannot be described by
+// that header at all, so pricing it would record a confident zero for
+// exactly the call that failed: the header lane is withheld unless the
+// stream ended cleanly.
+func TestChatStream_CutGatewayStreamIgnoresTheCostHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set(litellmCostHeader, "0")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"half\"}}]}\n\n"))
+	}))
+	t.Cleanup(srv.Close)
+	reg := registryFrom(t, `profiles:
+  - id: m
+    wire_model_id: m
+    max_tokens_param: max_tokens
+    verified: measured
+    streaming: {supported: true, accepts_stream_options: true}
+  - id: m-via
+    base: m
+    gateway: litellm
+    wire_model_id: proxy/m
+`)
+	c := New(Config{BaseURL: srv.URL, Registry: reg})
+	s, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "m-via", Messages: []Message{User("hi")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	res, err := s.Collect(nil)
+	if !errors.Is(err, ErrMalformedResponse) {
+		t.Fatalf("err = %v, want the cut-stream error", err)
+	}
+	if res.Usage.Cost.Provenance != Unpriced {
+		t.Errorf("cost = %+v, want Unpriced: the header cannot describe a cut stream", res.Usage.Cost)
+	}
+}
+
+// With recovery on, an error frame ends the scan but not the recovery tail:
+// the markup that arrived before it is still turned into calls, and text the
+// gate was holding still reaches the sink.
+func TestReadStream_ErrorFrameStillRecoversInline(t *testing.T) {
+	body := "data: " + contentDelta("<tool_call><function=search><parameter=q>x</parameter></function></tool_call>") + "\n\n" +
+		"data: {\"error\":{\"message\":\"upstream exploded\",\"code\":\"1210\"}}\n\n"
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	guard := newStallGuard(cancel, time.Hour, stallHeaders)
+	defer guard.stop()
+	var calls int
+	res, _, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, func(ev streamEvent) {
+		if ev.kind == evToolCall {
+			calls++
+		}
+	}, Redact, true, time.Now, time.Now())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "1210" {
+		t.Fatalf("err = %v, want the frame's *APIError", err)
+	}
+	if len(res.ToolCalls) != 1 || res.ToolCalls[0].Name != "search" || strings.Contains(res.Content, "<tool_call>") {
+		t.Errorf("res = %+v, want the markup recovered into a call despite the error", res)
+	}
+	if calls == 0 {
+		t.Error("no tool-call event reached the sink")
+	}
+}
+
+// A usage object whose every figure was negative has nothing countable in
+// it and reads as unreported, so the call is flagged, not merely unpriced.
+func TestParseUsage_AllNegativeIsUnreported(t *testing.T) {
+	u := parseUsage(json.RawMessage(`{"prompt_tokens":-1,"completion_tokens":-1}`))
+	if u.Reported() {
+		t.Error("Reported() is true for a usage object with nothing countable in it")
+	}
+	if parseUsage(json.RawMessage(`{"prompt_tokens":-1,"completion_tokens":3}`)).Reported() != true {
+		t.Error("one surviving lane must still count as reported")
+	}
+}
+
 // Arguments that arrive as an object instead of a string are kept as their
 // JSON text rather than failing the whole response.
 func TestParseChatResponse_ObjectArgumentsAreKeptAsText(t *testing.T) {

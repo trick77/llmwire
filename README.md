@@ -225,6 +225,11 @@ LLMWIRE_LITELLM_API_KEY=<the gateway's key>
 LLMWIRE_LITELLM_MODELS=gpt-5.4-mini=ai-gateway-gpt-5.4-mini,text-embedding-3-small
 ```
 
+The URL passes the same checks a shipped host does: `https`, a bare root
+with no query string or credentials, no route suffix. Plain `http://` is
+accepted for `localhost`, `127.0.0.1` and `::1` only, where the key never
+crosses a wire; a gateway on any other host needs TLS in front of it.
+
 `LLMWIRE_LITELLM_MODELS` lists which profiles the gateway serves, as
 `<profile id>[=<name on the gateway>]`; a bare id means the gateway takes the
 public name. An application keeps asking for `gpt-5.4-mini`; a listed model is

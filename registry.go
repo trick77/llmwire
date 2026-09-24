@@ -308,7 +308,7 @@ func validateBaseURL(raw string, allowLoopbackHTTP bool) error {
 // resolves to loopback is not trusted, since resolution is not this
 // package's to inspect.
 func isLoopbackHost(host string) bool {
-	switch host {
+	switch strings.ToLower(host) {
 	case "localhost", "127.0.0.1", "::1":
 		return true
 	}
@@ -382,14 +382,12 @@ func strictDecode(node yaml.Node, into any) error {
 	return dec.Decode(into)
 }
 
-// isYAMLFalse matches every spelling yaml.v3 decodes into a false bool, so
-// a route written with "no" or "off" is caught like one written with "false".
-func isYAMLFalse(v string) bool {
-	switch strings.ToLower(v) {
-	case "false", "no", "off", "n":
-		return true
-	}
-	return false
+// isYAMLFalse asks the decoder itself whether a scalar reads as false, so
+// every spelling yaml.v3 accepts ("no", "off", "False") is caught and no
+// second table of them lives here.
+func isYAMLFalse(node *yaml.Node) bool {
+	var b bool
+	return strictDecode(*node, &b) == nil && !b
 }
 
 // checkDerivedKeys rejects a based profile that sets a capability field.
@@ -418,7 +416,7 @@ func checkDerivedKeys(id string, node yaml.Node) error {
 			switch {
 			case !allowedSub[sub]:
 				offending = append(offending, key+"."+sub)
-			case subValue.Kind == yaml.ScalarNode && isYAMLFalse(subValue.Value):
+			case subValue.Kind == yaml.ScalarNode && isYAMLFalse(subValue):
 				// Tighten-only means ON is the only value a route can say.
 				// resolve would ignore a false, so it is refused rather than
 				// loaded as a no-op the author thinks took effect.
