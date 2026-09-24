@@ -75,9 +75,11 @@ const (
 
 var sessionCounter atomic.Uint64
 
-// newSessionID mints an id in the shape opencode's upstream issues.
-func newSessionID() string {
-	millis := uint64(time.Now().UnixMilli())
+// newSessionID mints an id in the shape opencode's upstream issues. The
+// timestamp comes from the session's clock, the same one that decides when
+// the id rotates, so a test with a fixed clock mints a fixed stamp.
+func newSessionID(now time.Time) string {
+	millis := uint64(now.UnixMilli())
 	counter := sessionCounter.Add(1) & 0xFFF // 12 bits
 	stamp := ^(millis<<12 | counter) & 0xFFFFFFFFFFFF
 	return fmt.Sprintf("%s%012x%s", sessionIDPrefix, stamp, randomBase62(sessionIDRandomLn))
@@ -135,7 +137,8 @@ type session struct {
 }
 
 func newSession(now func() time.Time) *session {
-	return &session{id: newSessionID(), lastUsed: now(), now: now}
+	at := now()
+	return &session{id: newSessionID(at), lastUsed: at, now: now}
 }
 
 // current returns the id to send on a call made now, rotating it first if the
@@ -145,7 +148,7 @@ func (s *session) current() (id string, rotated bool) {
 	defer s.mu.Unlock()
 	now := s.now()
 	if now.Sub(s.lastUsed) > sessionIdleRotation {
-		s.id = newSessionID()
+		s.id = newSessionID(now)
 		rotated = true
 	}
 	s.lastUsed = now

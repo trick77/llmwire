@@ -111,8 +111,9 @@ type Tool struct {
 	// Parameters is a JSON Schema object. Held as a decoded value rather than a
 	// string so a caller can build it however it likes.
 	Parameters map[string]any
-	// Strict asks for strict schema adherence. Profile-gated: some compat
-	// servers reject the field outright.
+	// Strict asks for strict schema adherence. Passed through as sent: no
+	// profile measures tool-level strictness, so it is not gated on the
+	// unrelated response_format bit. Some compat servers reject the field.
 	Strict bool
 }
 
@@ -221,13 +222,20 @@ type ChatRequest struct {
 
 	ResponseFormat ResponseFormat
 
-	// Stop sequences, when the endpoint supports them.
+	// Stop sequences. Always sent when non-empty: no profile in the registry
+	// records an endpoint refusing them, so there is no capability to gate on.
 	Stop []string
 
 	// ExtraBody is merged into the request body verbatim, for the long tail of
 	// provider-specific parameters this package does not model. Keys collide
 	// with generated ones at the caller's risk: they win, deliberately, since
 	// the point is to reach something the package does not know about.
+	//
+	// Four keys are refused by plan rather than merged, because each would
+	// make the body lie about itself: "stream" and "stream_options" (the
+	// method called and the profile decide them), "model" (the route decides
+	// what goes on the wire) and the output-cap spelling this model does NOT
+	// take (the one an endpoint accepts and silently ignores).
 	ExtraBody map[string]any
 
 	// ToolCallIdleTimeout replaces the client's IdleTimeout for the rest of a
@@ -259,9 +267,9 @@ type ChatRequest struct {
 // read-only quietly editing the caller's request — and with Validate exported,
 // checking a request at boot would mutate the very thing being checked.
 //
-// Tool.Parameters and the values inside ExtraBody are NOT deep-copied: nothing in
-// this package writes through them, and copying an arbitrary caller-supplied
-// JSON tree would be both expensive and lossy.
+// Tool.Parameters, ResponseFormat.Schema and the values inside ExtraBody are
+// NOT deep-copied: nothing in this package writes through them, and copying an
+// arbitrary caller-supplied JSON tree would be both expensive and lossy.
 func (r ChatRequest) clone() ChatRequest {
 	out := r
 	if r.Messages != nil {
@@ -274,12 +282,9 @@ func (r ChatRequest) clone() ChatRequest {
 	}
 	out.Tools = append([]Tool(nil), r.Tools...)
 	out.Stop = append([]string(nil), r.Stop...)
-	out.Temperature = copyFloat(r.Temperature)
-	out.TopP = copyFloat(r.TopP)
-	if r.MaxTokens != nil {
-		v := *r.MaxTokens
-		out.MaxTokens = &v
-	}
+	out.Temperature = copyPtr(r.Temperature)
+	out.TopP = copyPtr(r.TopP)
+	out.MaxTokens = copyPtr(r.MaxTokens)
 	if r.ExtraBody != nil {
 		out.ExtraBody = make(map[string]any, len(r.ExtraBody))
 		for k, v := range r.ExtraBody {

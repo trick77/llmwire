@@ -90,7 +90,10 @@ func NewRegistry(doc []byte) (*Registry, error) {
 		return nil, fmt.Errorf("llmwire: profiles document has no entries")
 	}
 	providers := make(map[string]Provider, len(file.Providers))
-	for name, node := range file.Providers {
+	// In name order, so a document with two bad providers fails on the same
+	// one every run; a map walk would name either.
+	for _, name := range sortedKeys(file.Providers) {
+		node := file.Providers[name]
 		if !providerName.MatchString(name) {
 			return nil, fmt.Errorf("llmwire: provider %q must be lowercase letters and digits", name)
 		}
@@ -112,8 +115,8 @@ func NewRegistry(doc []byte) (*Registry, error) {
 	seen := map[string]bool{}
 
 	for i, node := range file.Profiles {
-		p, err := decodeStrict(node)
-		if err != nil {
+		var p Profile
+		if err := strictDecode(node, &p); err != nil {
 			return nil, fmt.Errorf("llmwire: profile #%d: %w", i, err)
 		}
 		if p.ID == "" {
@@ -161,6 +164,16 @@ func NewRegistry(doc []byte) (*Registry, error) {
 			if err := checkDerivedKeys(p.ID, e.node); err != nil {
 				return nil, fmt.Errorf("llmwire: %w", err)
 			}
+			// A different provider is a different host, and a different host
+			// is a different party pricing the call. Naming the gateway is
+			// what drops the base's cost block; without it the route would
+			// keep the vendor's list rate for calls the vendor never sees,
+			// and be priced from the table behind a proxy.
+			if p.Provider != "" && p.Provider != base.Provider && p.Gateway == "" {
+				return nil, fmt.Errorf("llmwire: profile %q changes provider from %q to %q but names no gateway; "+
+					"a route through another host must say so, so it is priced by that host and never from the table",
+					p.ID, base.Provider, p.Provider)
+			}
 			p = p.resolve(base)
 		}
 		applyDefaults(&p)
@@ -176,7 +189,7 @@ func NewRegistry(doc []byte) (*Registry, error) {
 		if p.Provider != "" && len(providers) > 0 {
 			if _, ok := providers[p.Provider]; !ok {
 				return nil, fmt.Errorf("llmwire: profile %q names provider %q, which is not in providers: (known: %v)",
-					p.ID, p.Provider, sortedProviderNames(providers))
+					p.ID, p.Provider, sortedKeys(providers))
 			}
 		}
 		p.BaseURL = providers[p.Provider].BaseURL
@@ -239,13 +252,15 @@ func (r *Registry) Provider(name string) (Provider, error) {
 	if pv, ok := r.providers[name]; ok {
 		return pv, nil
 	}
-	return Provider{}, fmt.Errorf("llmwire: unknown provider %q; known: %v", name, sortedProviderNames(r.providers))
+	return Provider{}, fmt.Errorf("llmwire: unknown provider %q; known: %v", name, sortedKeys(r.providers))
 }
 
-func sortedProviderNames(m map[string]Provider) []string {
+// sortedKeys orders a map's keys, so every listing and every error names
+// things in the same order on every run.
+func sortedKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
-	for name := range m {
-		out = append(out, name)
+	for k := range m {
+		out = append(out, k)
 	}
 	sort.Strings(out)
 	return out
@@ -259,22 +274,45 @@ func (pv Provider) validate() error {
 	if pv.BaseURL == "" {
 		return nil
 	}
-	u, err := url.Parse(pv.BaseURL)
+	return validateBaseURL(pv.BaseURL, false)
+}
+
+// validateBaseURL is the host check, shared by the shipped hosts and the one
+// read from the environment. allowLoopbackHTTP admits http:// for a host on
+// this machine only: a self-hosted gateway on localhost has no TLS and no
+// wire for the key to cross, while the same scheme on any other host sends
+// the key in clear.
+func validateBaseURL(raw string, allowLoopbackHTTP bool) error {
+	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("base_url %q: %w", pv.BaseURL, err)
+		return fmt.Errorf("base_url %q: %w", raw, err)
 	}
 	switch {
+	case u.Scheme == "http" && allowLoopbackHTTP && isLoopbackHost(u.Hostname()):
 	case u.Scheme != "https":
-		return fmt.Errorf("base_url %q must be https", pv.BaseURL)
+		return fmt.Errorf("base_url %q must be https", raw)
+	}
+	switch {
 	case u.Host == "":
-		return fmt.Errorf("base_url %q has no host", pv.BaseURL)
+		return fmt.Errorf("base_url %q has no host", raw)
 	case u.RawQuery != "" || u.Fragment != "" || u.User != nil:
-		return fmt.Errorf("base_url %q must be a bare root: no query, fragment or credentials", pv.BaseURL)
+		return fmt.Errorf("base_url %q must be a bare root: no query, fragment or credentials", raw)
 	case strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/chat/completions"),
 		strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/embeddings"):
-		return fmt.Errorf("base_url %q ends in a route; the client appends /chat/completions and /embeddings itself", pv.BaseURL)
+		return fmt.Errorf("base_url %q ends in a route; the client appends /chat/completions and /embeddings itself", raw)
 	}
 	return nil
+}
+
+// isLoopbackHost is the literal loopback names only; a hostname that merely
+// resolves to loopback is not trusted, since resolution is not this
+// package's to inspect.
+func isLoopbackHost(host string) bool {
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // Lookup returns the profile for an exact model id.
@@ -292,7 +330,7 @@ func (r *Registry) Lookup(id string) (*Profile, error) {
 	if p, ok := r.byID[id]; ok {
 		return p.clone(), nil
 	}
-	return nil, &UnknownModelError{ID: id, Known: sortedIDs(r.byID)}
+	return nil, &UnknownModelError{ID: id, Known: sortedKeys(r.byID)}
 }
 
 // LookupEmbedding is Lookup for a model that must be an embeddings model. An
@@ -324,9 +362,9 @@ func (e *UnknownModelError) Error() string {
 }
 
 // Models lists every registered id, sorted.
-func (r *Registry) Models() []string { return sortedIDs(r.byID) }
+func (r *Registry) Models() []string { return sortedKeys(r.byID) }
 
-// decodeStrict decodes one profile entry, refusing unknown keys.
+// strictDecode decodes one entry, refusing unknown keys.
 //
 // yaml.Node.Decode has no strict mode, so the node is re-encoded and read back
 // through a decoder that does. The round trip is worth it: without it a typo
@@ -334,15 +372,6 @@ func (r *Registry) Models() []string { return sortedIDs(r.byID) }
 // vision false. For a package whose entire purpose is that a wrong assumption
 // fails loudly, a mistyped capability turning into an assumed-absent one is the
 // worst available failure.
-func decodeStrict(node yaml.Node) (Profile, error) {
-	var p Profile
-	if err := strictDecode(node, &p); err != nil {
-		return Profile{}, err
-	}
-	return p, nil
-}
-
-// strictDecode is the round trip decodeStrict describes, for any target.
 func strictDecode(node yaml.Node, into any) error {
 	raw, err := yaml.Marshal(&node)
 	if err != nil {
@@ -351,6 +380,14 @@ func strictDecode(node yaml.Node, into any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	return dec.Decode(into)
+}
+
+// isYAMLFalse asks the decoder itself whether a scalar reads as false, so
+// every spelling yaml.v3 accepts ("no", "off", "False") is caught and no
+// second table of them lives here.
+func isYAMLFalse(node *yaml.Node) bool {
+	var b bool
+	return strictDecode(*node, &b) == nil && !b
 }
 
 // checkDerivedKeys rejects a based profile that sets a capability field.
@@ -363,7 +400,7 @@ func checkDerivedKeys(id string, node yaml.Node) error {
 	if node.Kind != yaml.MappingNode {
 		return nil
 	}
-	var offending []string
+	var offending, loosened []string
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		key, value := node.Content[i].Value, node.Content[i+1]
 		if !derivedAllowedKeys[key] {
@@ -375,10 +412,22 @@ func checkDerivedKeys(id string, node yaml.Node) error {
 			continue
 		}
 		for j := 0; j+1 < len(value.Content); j += 2 {
-			if sub := value.Content[j].Value; !allowedSub[sub] {
+			sub, subValue := value.Content[j].Value, value.Content[j+1]
+			switch {
+			case !allowedSub[sub]:
 				offending = append(offending, key+"."+sub)
+			case subValue.Kind == yaml.ScalarNode && isYAMLFalse(subValue):
+				// Tighten-only means ON is the only value a route can say.
+				// resolve would ignore a false, so it is refused rather than
+				// loaded as a no-op the author thinks took effect.
+				loosened = append(loosened, key+"."+sub)
 			}
 		}
+	}
+	if len(loosened) > 0 {
+		sort.Strings(loosened)
+		return fmt.Errorf("profile %q sets %v to false, but those keys are tighten-only: "+
+			"a route can switch them on, never off, so a false would load and change nothing", id, loosened)
 	}
 	if len(offending) == 0 {
 		return nil

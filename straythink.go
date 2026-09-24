@@ -31,8 +31,11 @@ func cutStrayCloseTag(content, reasoning string) (string, string, bool) {
 		return content, reasoning, false
 	}
 	head := strings.TrimSpace(content[:i])
-	draft, opened := strings.CutPrefix(head, thinkOpenTag)
-	if strings.Contains(draft, thinkOpenTag) || (!opened && strings.Contains(head, thinkOpenTag)) {
+	// After cutting a leading open tag, any open tag still in the draft is
+	// quoted text. When there was no leading tag the draft IS the head, so
+	// this one test covers both.
+	draft, _ := strings.CutPrefix(head, thinkOpenTag)
+	if strings.Contains(draft, thinkOpenTag) {
 		return content, reasoning, false
 	}
 	if draft = strings.TrimSpace(draft); draft != "" {

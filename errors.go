@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -122,7 +123,8 @@ func (e *APIError) Error() string {
 // status mapped to.
 func (e *APIError) Is(target error) bool { return target == e.Class }
 
-// RateLimitError is a 429 that carried a Retry-After header.
+// RateLimitError is every 429, whether or not it carried a Retry-After
+// header: the type is what a caller dispatches on, and the hint is optional.
 type RateLimitError struct {
 	*APIError
 	// RetryAfter is how long the endpoint asked us to wait. Zero means it sent
@@ -166,18 +168,22 @@ func classify(status int) error {
 	}
 }
 
+// errorObject is the error record itself, as it appears under {"error": …}
+// and, on some endpoints and in every SSE error frame, bare.
+type errorObject struct {
+	Message string          `json:"message"`
+	Type    string          `json:"type"`
+	Param   *string         `json:"param"`
+	Code    json.RawMessage `json:"code"`
+}
+
 // errorEnvelope is the dominant shape: {"error": {...}}.
 //
 // Code is json.RawMessage because the wire type genuinely varies (see
 // APIError.Code); decoding it into a string field directly fails on Z.ai, and
 // into a number fails on MiMo.
 type errorEnvelope struct {
-	Error struct {
-		Message string          `json:"message"`
-		Type    string          `json:"type"`
-		Param   *string         `json:"param"`
-		Code    json.RawMessage `json:"code"`
-	} `json:"error"`
+	Error errorObject `json:"error"`
 	// Detail is the FastAPI shape a LiteLLM proxy falls back to for validation
 	// failures and for its catch-all handler. It is a string, an object or an
 	// array depending on which handler produced it, so it is kept raw and
@@ -192,6 +198,19 @@ func parseAPIError(status int, body []byte) *APIError {
 	return parseAPIErrorWith(Redact, status, body)
 }
 
+// cleanText is THE rule for upstream text an error keeps: redacted, then
+// bounded, in that order. A cut that lands inside a credential leaves its
+// head behind for a pass that only knows the whole value.
+func cleanText(redact redactor, s string) string {
+	return Truncate(redact(s), maxErrorBody)
+}
+
+// bodySnippet is cleanText over a body that an error may quote: enough to
+// name what answered, never enough to leak what it said.
+func bodySnippet(redact redactor, raw []byte) string {
+	return cleanText(redact, string(raw))
+}
+
 // redactor is what turns upstream text into loggable text. Redact is the
 // shape-only default; a Client supplies one that also strips its own key by
 // value, and runs that FIRST — the shape pass can eat the middle of a key
@@ -203,19 +222,19 @@ func parseAPIErrorWith(redact redactor, status int, body []byte) *APIError {
 	e := &APIError{StatusCode: status, Class: classify(status)}
 	body = unframeSSE(body)
 
+	// Every field kept from the body goes through cleanText. Bounded because
+	// an in-band error in a 200 body or a stream frame is not read through
+	// httpError's LimitReader, so nothing upstream has capped it.
+	clean := func(s string) string { return cleanText(redact, s) }
+
 	var env errorEnvelope
 	if err := json.Unmarshal(body, &env); err == nil {
 		if env.Error.Message != "" || len(env.Error.Code) > 0 || env.Error.Type != "" {
-			e.Message = redact(env.Error.Message)
-			e.Type = env.Error.Type
-			if env.Error.Param != nil {
-				e.Param = *env.Error.Param
-			}
-			e.Code = decodeCode(env.Error.Code)
+			e.fill(clean, env.Error)
 			return e
 		}
 		if len(env.Detail) > 0 {
-			e.Message = redact(renderDetail(env.Detail))
+			e.Message = clean(renderDetail(env.Detail))
 			return e
 		}
 	}
@@ -223,29 +242,28 @@ func parseAPIErrorWith(redact redactor, status int, body []byte) *APIError {
 	// A BARE error object, with no {"error": …} wrapper. This is the shape an
 	// error frame carries inside an SSE stream, and some endpoints use it for
 	// ordinary error responses too.
-	var bare struct {
-		Message string          `json:"message"`
-		Type    string          `json:"type"`
-		Param   *string         `json:"param"`
-		Code    json.RawMessage `json:"code"`
-	}
+	var bare errorObject
 	if err := json.Unmarshal(body, &bare); err == nil && (bare.Message != "" || len(bare.Code) > 0) {
-		e.Message = redact(bare.Message)
-		e.Type = bare.Type
-		if bare.Param != nil {
-			e.Param = *bare.Param
-		}
-		e.Code = decodeCode(bare.Code)
+		e.fill(clean, bare)
 		return e
 	}
 
-	// Unparseable: keep the text, redacted and then bounded, in that order: a
-	// cut that lands inside a credential leaves its head behind for a pass
-	// that only knows the whole value. A truncated body is far better than
-	// none — this is the only evidence of what an undocumented endpoint
-	// objected to.
-	e.Message = Truncate(redact(strings.TrimSpace(string(body))), maxErrorBody)
+	// Unparseable: keep the text. A truncated body is far better than none —
+	// this is the only evidence of what an undocumented endpoint objected to.
+	e.Message = clean(strings.TrimSpace(string(body)))
 	return e
+}
+
+// fill copies a decoded error object into e, every string through clean. The
+// code and param are cleaned too: they are upstream text like the message,
+// and an endpoint that echoes the request into `param` echoes its key.
+func (e *APIError) fill(clean func(string) string, o errorObject) {
+	e.Message = clean(o.Message)
+	e.Type = clean(o.Type)
+	if o.Param != nil {
+		e.Param = clean(*o.Param)
+	}
+	e.Code = clean(decodeCode(o.Code))
 }
 
 // unframeSSE strips an SSE "data:" wrapper from an error body.
@@ -294,6 +312,8 @@ func decodeCode(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &f); err == nil {
 		return strconv.FormatFloat(f, 'f', -1, 64)
 	}
+	// An object or array where a scalar belongs: kept as text so a caller
+	// still sees what was sent. fill bounds it with every other field.
 	return strings.Trim(string(raw), `"`)
 }
 
@@ -314,9 +334,11 @@ func renderDetail(raw json.RawMessage) string {
 	return string(raw)
 }
 
-// newRateLimitError attaches a parsed Retry-After to a 429.
-func newRateLimitError(e *APIError, h http.Header) *RateLimitError {
-	return &RateLimitError{APIError: e, RetryAfter: retryAfter(h, time.Now())}
+// newRateLimitError attaches a parsed Retry-After to a 429. now is the
+// client's clock, so an HTTP-date form measures against the same time source
+// every other figure in the package uses.
+func newRateLimitError(e *APIError, h http.Header, now time.Time) *RateLimitError {
+	return &RateLimitError{APIError: e, RetryAfter: retryAfter(h, now)}
 }
 
 // retryAfter parses the Retry-After header, which RFC 9110 allows in two forms:
@@ -330,9 +352,15 @@ func retryAfter(h http.Header, now time.Time) time.Duration {
 	if v == "" {
 		return 0
 	}
-	if secs, err := strconv.Atoi(v); err == nil {
+	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
 		if secs <= 0 {
 			return 0
+		}
+		// Clamped: a delay past what a Duration holds would wrap negative on
+		// the multiply, and a negative value here is documented never to
+		// happen. Nobody sleeps 292 years either way.
+		if secs > math.MaxInt64/int64(time.Second) {
+			return time.Duration(math.MaxInt64)
 		}
 		return time.Duration(secs) * time.Second
 	}

@@ -3,6 +3,7 @@ package llmwire
 import (
 	"context"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 )
@@ -103,7 +104,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err})
 		return nil, warnings, err
 	}
-	at := c.Now()
+	at := c.now()
 
 	// Two nested contexts, as RawStream uses: callCtx is the whole-call bound and
 	// reqCtx is what the stall guard cancels. Cancelling reqCtx leaves callCtx's
@@ -156,8 +157,12 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 		cancelReq:  cancelReq,
 		cancelCall: cancelCall,
 		guard:      guard,
-		warnings:   warnings,
-		done:       make(chan struct{}),
+		// The caller's slice and the stream's are separate allocations: the
+		// reader appends pricing warnings to s.warnings later, and a shared
+		// backing array would let that append write into a slice the caller
+		// may be appending to at the same moment.
+		warnings: slices.Clone(warnings),
+		done:     make(chan struct{}),
 	}
 	s.cond = sync.NewCond(&s.mu)
 
@@ -167,8 +172,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 
 // read consumes the stream on its own goroutine and publishes the result.
 func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, headers time.Duration) {
-	var counters streamCounters
-	res, inlineWarnings, err := readStream(resp.Body, s.guard, &counters,
+	res, inlineWarnings, err := readStream(resp.Body, s.guard,
 		streamBounds{idle: s.client.idle, toolIdle: pl.req.ToolCallIdleTimeout}, s.push, s.client.redact,
 		pl.profile.Tools.recoversInline(), s.client.now, start)
 	res.Timing.Headers = headers
@@ -185,7 +189,6 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 	// cut is exactly the one whose call id has to reach the log.
 	var gwWarnings []Warning
 	res.Gateway, gwWarnings = parseGatewayHeaders(resp.Header)
-	var priceWarnings []Warning
 	switch {
 	case stopped:
 		// A caller-initiated Close cancelled the request, and explain() would
@@ -195,12 +198,27 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 		err = nil
 	case err != nil:
 		err = s.client.explain(s.ctx, s.callCtx, s.guard, err)
-	default:
-		var cost Cost
-		cost, priceWarnings = priceCall(pl.profile, res.Usage, resp.Header, resp.StatusCode, at)
-		res.Usage.Cost = cost
-		priceWarnings = append(priceWarnings, gwWarnings...)
 	}
+	// Priced however the stream ended. A caller who Closes after EventFinish
+	// has, on an endpoint that sends usage in the finish chunk, already
+	// received the figures; and a stream cut after its usage frame was paid
+	// for. Where nothing arrived priceCall says Unpriced with a warning, which
+	// is the contract: a zero cost is never silent.
+	//
+	// The header lane is withheld unless the stream ended cleanly. A proxy
+	// writes x-litellm-response-cost before the body, and on a stream has
+	// shipped it as a literal 0; on a clean ending that hole is the documented
+	// one, but on a stream that stalled or was Closed the header cannot
+	// describe the call at all, and pricing it would record a confident zero
+	// for exactly the call that was cut. usage.cost in the body, when it
+	// arrived, still counts.
+	hdr := resp.Header
+	if stopped || err != nil {
+		hdr = nil
+	}
+	var priceWarnings []Warning
+	res.Usage.Cost, priceWarnings = priceCall(pl.profile, res.Usage, hdr, resp.StatusCode, at)
+	priceWarnings = append(priceWarnings, gwWarnings...)
 
 	// Reported from the locals: s.res and s.err are written under the mutex
 	// below, and the caller may already be reading them.
@@ -241,7 +259,7 @@ func (s *Stream) push(ev streamEvent) {
 		out.Index = ev.toolCall.Index
 		out.ID = ev.toolCall.ID
 		out.Name = ev.toolCall.Function.Name
-		out.ArgumentsDelta = ev.toolCall.Function.Arguments
+		out.ArgumentsDelta = ev.toolCall.argumentsDelta()
 	case evFinish:
 		out.Kind, out.FinishReason = EventFinish, ev.finishReason
 	}
@@ -329,7 +347,9 @@ func (s *Stream) Usage() Usage {
 func (s *Stream) Warnings() []Warning {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.warnings
+	// A copy: the reader appends to s.warnings under the lock, and handing
+	// out the backing array would let a caller's append race that write.
+	return slices.Clone(s.warnings)
 }
 
 // Close stops the stream and releases its goroutine and connection.

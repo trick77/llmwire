@@ -72,7 +72,7 @@ cannot, and you get an error before a socket is opened, naming what *is* accepte
 
 ```
 llmwire: model "glm-5.3-flash": thinking cannot be disabled on this model;
-         use ReasoningEffort with one of [low high max], or pass BestEffort()
+         accepted: low, high, max; or pass BestEffort to send the nearest supported request
 ```
 
 `Validate(req)` is exported and needs no network, so a service can check its
@@ -81,8 +81,8 @@ configuration at boot.
 **Three tiers, by how lossy the fix is.** A hard error when semantics would change
 and you asked explicitly. A silent coercion when it is lossless (`max_tokens` →
 `max_completion_tokens`). A coercion plus a returned `Warning` when the request can
-be honoured approximately (`json_schema` → `json_object`). `BestEffort()` demotes
-the first tier to the third for a single call.
+be honoured approximately (`json_schema` → `json_object`). Setting `BestEffort`
+on the request demotes the first tier to the third for a single call.
 
 **Reports what a call cost.** Usage is captured with its cache and reasoning lanes
 broken out, and priced per call with the model that actually ran, in integer
@@ -91,7 +91,8 @@ nano-USD. The rate is a function, not a constant: it varies by request size
 the provider's own timezone). Figures are always the vendor's published
 pay-as-you-go rate — a comparable equivalent, **not an invoice**, since a call
 routed over a subscription host is billed in plan credits nobody can compare
-across models. Behind a gateway the cost comes from the proxy's own header or not
+across models. Behind a gateway the cost is what the proxy reports, on
+`usage.cost` in the body first and in its response header second, or nothing
 at all. A rate we have not verified reports `Unpriced` and warns, because zero
 means unknown, not free. What else the proxy said rides on `ChatResponse.Gateway`
 / `StreamResult.Gateway`: the call id it logged under, the deployment that
@@ -224,6 +225,11 @@ LLMWIRE_LITELLM_API_KEY=<the gateway's key>
 LLMWIRE_LITELLM_MODELS=gpt-5.4-mini=ai-gateway-gpt-5.4-mini,text-embedding-3-small
 ```
 
+The URL passes the same checks a shipped host does: `https`, a bare root
+with no query string or credentials, no route suffix. Plain `http://` is
+accepted for `localhost`, `127.0.0.1` and `::1` only, where the key never
+crosses a wire; a gateway on any other host needs TLS in front of it.
+
 `LLMWIRE_LITELLM_MODELS` lists which profiles the gateway serves, as
 `<profile id>[=<name on the gateway>]`; a bare id means the gateway takes the
 public name. An application keeps asking for `gpt-5.4-mini`; a listed model is
@@ -232,13 +238,13 @@ vendor as before. The left-hand side must be a profile id, because that is the
 model the route inherits from: every capability, every parameter rule.
 
 A route carries no `cost` block and inherits none: the proxy reports real
-per-call spend in a response header, and it knows which deployment ran and at what
-discount, where this table does not. No header, no price — never a list rate
-standing in for one.
+per-call spend (on `usage.cost`, or in a response header for a non-streamed
+call), and it knows which deployment ran and at what discount, where this table
+does not. Nothing reported, no price — never a list rate standing in for one.
 
 Because the route names its model, validation still works behind a proxy whose
-wire id is opaque: `Temperature(0.3)` is rejected locally, since gpt-5.4-mini
-rejects it. The same shape can be written into a profile document by hand
+wire id is opaque: a `Temperature` of 0.3 is rejected locally, since
+gpt-5.4-mini rejects it. The same shape can be written into a profile document by hand
 (`base` + `gateway` + `provider` + `wire_model_id`); the variable builds it in
 memory.
 

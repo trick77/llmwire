@@ -22,6 +22,16 @@ import (
 //   - completion_tokens INCLUDES reasoning_tokens. Reasoning is never a separate
 //     billing lane; pricing it again double-counts every call a reasoning model
 //     makes, which is all of them on the models this library targets.
+//
+// ASSUMED, not measured: cache_write_tokens is billed as its own lane on top
+// of the full-rate input lane, so it is never subtracted. No endpoint in the
+// registry reports it and every shipped cache_write rate is 0, so the
+// assumption has no effect today; the first vendor to report the field gets a
+// containment probe before its rate is anything but 0.
+//
+// A NEGATIVE count is treated as not reported. Nothing on the wire means it,
+// and carrying it into pricing would credit the caller: Unpriced with a
+// warning is the honest reading of a corrupt figure.
 
 // Timing is where one call's wall-clock went, measured with the client's clock
 // (Config.Now) from the instant the request was handed to the transport. It is
@@ -190,18 +200,25 @@ func parseUsage(raw json.RawMessage) Usage {
 		return Usage{Raw: raw}
 	}
 
-	u := Usage{Raw: raw, reported: w.reported()}
-	u.Input.Total = w.PromptTokens
-	u.Output.Total = w.CompletionTokens
+	u := Usage{Raw: raw}
+	u.Input.Total = nonNegative(w.PromptTokens)
+	u.Output.Total = nonNegative(w.CompletionTokens)
 
 	if d := w.PromptTokensDetails; d != nil {
-		u.Input.CacheRead = d.CachedTokens
-		u.Input.CacheWrite = d.CacheWriteTokens
+		u.Input.CacheRead = nonNegative(d.CachedTokens)
+		u.Input.CacheWrite = nonNegative(d.CacheWriteTokens)
 	}
 	if d := w.CompletionTokensDetails; d != nil {
-		u.Output.Reasoning = d.ReasoningTokens
-		u.Output.Text = d.TextTokens
+		u.Output.Reasoning = nonNegative(d.ReasoningTokens)
+		u.Output.Text = nonNegative(d.TextTokens)
 	}
+
+	// Reported is judged on what SURVIVED, not on the wire struct: a usage
+	// object whose every figure was negative has nothing countable in it, and
+	// must read as unreported so the call is flagged, not merely unpriced.
+	u.reported = u.Input.Total != nil || u.Output.Total != nil || w.TotalTokens != nil ||
+		u.Input.CacheRead != nil || u.Input.CacheWrite != nil ||
+		u.Output.Reasoning != nil || u.Output.Text != nil
 
 	// Derive the lanes nobody reports. Clamped rather than trusted: both
 	// operands arrive from the wire, and a cached count exceeding the prompt
@@ -212,6 +229,14 @@ func parseUsage(raw json.RawMessage) Usage {
 		u.Output.Text = subClamped(u.Output.Total, u.Output.Reasoning)
 	}
 	return u
+}
+
+// nonNegative maps a negative count to nil: see the head comment.
+func nonNegative(n *int64) *int64 {
+	if n != nil && *n < 0 {
+		return nil
+	}
+	return n
 }
 
 // subClamped returns total-part, floored at zero. It returns nil when total is

@@ -288,7 +288,7 @@ func TestCostBlock_LoadRefusals(t *testing.T) {
       cache_write: 0
       output: 0.50
 ` + goodProvenance,
-			want: "priced from its response header",
+			want: "never from the table",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

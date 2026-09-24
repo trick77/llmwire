@@ -26,20 +26,27 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	if err != nil {
 		return nil, nil, err
 	}
+	// Everything past the plan ends in one line and one stats update, on
+	// success and on every failure alike, the render included: a body that
+	// will not marshal is a failed call, not a call that never happened. The
+	// warnings ride on every line, so a failure log still shows what the plan
+	// coerced before the wire refused it.
+	sum := callSummary{kind: "chat", model: req.Model, plan: pl}
+	defer func() {
+		sum.warnings = warnings
+		c.finish(sum)
+	}()
 	body, err := renderChatBody(pl)
 	if err != nil {
+		sum.err = err
 		return nil, warnings, err
 	}
-	// Everything past the plan ends in one line and one stats update, on
-	// success and on every failure alike.
-	sum := callSummary{kind: "chat", model: req.Model, plan: pl}
-	defer func() { c.finish(sum) }()
 
 	// Captured BEFORE the request, and carried into pricing: which instant bills
 	// is unspecified by both vendors, so llmwire uses request start and records
 	// what it used. Taking it afterwards would attribute a call that straddles an
 	// off-peak boundary to the wrong window.
-	at := c.Now()
+	at := c.now()
 
 	raw, hdr, timing, err := c.rawPost(ctx, routeChat, body)
 	sum.timing = timing
@@ -83,7 +90,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	resp.Gateway = gateway
 	warnings = append(warnings, gwWarnings...)
 	sum.content, sum.reasoning, sum.toolCalls = len(resp.Content), len(resp.Reasoning), len(resp.ToolCalls)
-	sum.finishReason, sum.usage, sum.warnings = resp.FinishReason, resp.Usage, warnings
+	sum.finishReason, sum.usage = resp.FinishReason, resp.Usage
 	return resp, warnings, nil
 }
 
@@ -102,8 +109,12 @@ type wireChatResponse struct {
 				ID       string `json:"id"`
 				Type     string `json:"type"`
 				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
+					Name string `json:"name"`
+					// Raw, because a compat server can send the arguments
+					// as an object where the reference sends a string, and
+					// failing a paid-for completion over that shape is the
+					// worst available trade. argumentsText reads both.
+					Arguments json.RawMessage `json:"arguments"`
 				} `json:"function"`
 			} `json:"tool_calls"`
 			// Two spellings, same field. Mirrors the stream parser, which reads
@@ -126,7 +137,7 @@ func parseChatResponseWith(redact redactor, raw json.RawMessage) (*ChatResponse,
 		// answering with an HTML error page would otherwise produce a bare
 		// "invalid character '<'" and nothing to identify what answered.
 		return nil, fmt.Errorf("llmwire: %w: decoding response: %w (body: %s)",
-			ErrMalformedResponse, err, Truncate(redact(string(raw)), maxErrorBody))
+			ErrMalformedResponse, err, bodySnippet(redact, raw))
 	}
 
 	// A 200 carrying an error object. Surfaced rather than read as an empty
@@ -140,7 +151,7 @@ func parseChatResponseWith(redact redactor, raw json.RawMessage) (*ChatResponse,
 	// panic instead of saying so.
 	if len(w.Choices) == 0 {
 		return nil, fmt.Errorf("llmwire: %w: response carried no choices and no error (body: %s)",
-			ErrResponseShape, Truncate(redact(string(raw)), maxErrorBody))
+			ErrResponseShape, bodySnippet(redact, raw))
 	}
 
 	ch := w.Choices[0]
@@ -154,17 +165,28 @@ func parseChatResponseWith(redact redactor, raw json.RawMessage) (*ChatResponse,
 		Usage:        parseUsage(w.Usage),
 		Raw:          raw,
 	}
-	resp.Reasoning = ch.Message.ReasoningContent
-	if resp.Reasoning == "" {
-		resp.Reasoning = ch.Message.Reasoning
-	}
+	resp.Reasoning = reasoningSpelling(ch.Message.ReasoningContent, ch.Message.Reasoning)
 	for _, tc := range ch.Message.ToolCalls {
 		resp.ToolCalls = append(resp.ToolCalls, ToolCall{
 			ID:        tc.ID,
 			Type:      tc.Type,
 			Name:      tc.Function.Name,
-			Arguments: tc.Function.Arguments,
+			Arguments: argumentsText(tc.Function.Arguments),
 		})
 	}
 	return resp, nil
+}
+
+// argumentsText is the tool-call arguments as the string every consumer
+// expects: a JSON string's value, or, for a server that sent an object or
+// array instead, that document's own text. Absent or null is "".
+func argumentsText(raw json.RawMessage) string {
+	if len(raw) == 0 || isJSONNull(raw) {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return string(raw)
 }

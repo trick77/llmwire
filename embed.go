@@ -60,8 +60,13 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 			sum.err = err
 			return nil, warnings, err
 		}
-		at := c.Now()
+		at := c.now()
 		raw, hdr, timing, err := c.rawPost(ctx, routeEmbeddings, body)
+		// Summed before the error check, so the log line for a failed corpus
+		// includes the batch that failed: that is the one whose wait explains
+		// the failure.
+		out.Timing.Headers += timing.Headers
+		out.Timing.Total += timing.Total
 		if err != nil {
 			// No partial result. A half-filled [][]float32 is worse than none,
 			// because the caller cannot tell which rows are real, and a row of
@@ -69,8 +74,6 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 			sum.err = err
 			return nil, warnings, err
 		}
-		out.Timing.Headers += timing.Headers
-		out.Timing.Total += timing.Total
 		batchResp, err := parseEmbedResponseWith(c.redact, raw, len(batch))
 		if err != nil {
 			sum.err = err
@@ -214,7 +217,7 @@ func parseEmbedResponseWith(redact redactor, raw json.RawMessage, want int) (*em
 	var w wireEmbedResponse
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return nil, fmt.Errorf("llmwire: %w: decoding embeddings response: %w (body: %s)",
-			ErrMalformedResponse, err, Truncate(redact(string(raw)), maxErrorBody))
+			ErrMalformedResponse, err, bodySnippet(redact, raw))
 	}
 	if len(w.Error) > 0 && !isJSONNull(w.Error) {
 		return nil, parseAPIErrorWith(redact, 0, raw)

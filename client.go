@@ -313,6 +313,13 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 		if p.BaseURL != "" {
 			return nil, &StaleEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()}
 		}
+		// The same checks a shipped host passes at load, so a key in a query
+		// string or a route suffix fails here by name rather than as a 404 or
+		// an echoed credential. Plain http is admitted for a host on this
+		// machine only, which is where a self-hosted gateway usually is.
+		if err := validateBaseURL(v, true); err != nil {
+			return nil, fmt.Errorf("llmwire: %s: %w", p.BaseURLEnv(), err)
+		}
 		cfg.BaseURL = v
 	}
 	if cfg.BaseURL == "" {
@@ -430,20 +437,23 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	reqCtx, cancelReq := context.WithCancel(callCtx)
 	defer cancelReq()
 
-	req, err := c.newRequest(reqCtx, http.MethodPost, "/chat/completions", body)
+	req, err := c.newRequest(reqCtx, http.MethodPost, routeChat, body)
 	if err != nil {
 		return StreamResult{}, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
-	var counters streamCounters
 	guard := newStallGuard(cancelReq, c.header, stallHeaders)
 	defer guard.stop()
 
 	start := c.now()
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return StreamResult{}, c.explain(ctx, callCtx, guard, c.dialError("/chat/completions", err))
+		// Timing on the error path too: how long the dial waited is the
+		// figure that says whether the header bound or the host was at fault.
+		waited := c.now().Sub(start)
+		return StreamResult{Timing: Timing{Headers: waited, Total: waited}},
+			c.explain(ctx, callCtx, guard, c.dialError(routeChat, err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	headers := c.now().Sub(start)
@@ -471,7 +481,7 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	}
 
 	// Below profile resolution, so no inline recovery: the caller owns the body.
-	res, _, err := readStream(resp.Body, guard, &counters, streamBounds{idle: c.idle}, sink, c.redact, false, c.now, start)
+	res, _, err := readStream(resp.Body, guard, streamBounds{idle: c.idle}, sink, c.redact, false, c.now, start)
 	res.Timing.Headers = headers
 	if err != nil {
 		return res, c.explain(ctx, callCtx, guard, err)
@@ -535,7 +545,10 @@ func (c *Client) rawCall(ctx context.Context, method, route string, body []byte)
 	if err != nil {
 		// Redaction first, then classification: the URL can carry a key in its
 		// query string, and explain returns the error as given when no bound
-		// fired.
+		// fired. Timing is measured here too: a dial that gave up after 45s
+		// against a 60s bound is the figure that settles which side was slow.
+		t.Headers = c.now().Sub(start)
+		t.Total = t.Headers
 		return nil, nil, t, c.explain(ctx, callCtx, guard, c.dialError(route, err))
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -545,7 +558,11 @@ func (c *Client) rawCall(ctx context.Context, method, route string, body []byte)
 		t.Total = t.Headers
 		return nil, resp.Header, t, c.httpError(resp)
 	}
-	// Headers are in, so the bound that matters from here is silence on the body.
+	// Headers are in. The idle bound is armed ONCE here and never re-armed:
+	// nothing on this path parses frames, so it is a single cap on the whole
+	// body read rather than a silence bound, and a body slower than c.idle in
+	// total is reported as a stream stall. Both direct endpoints answer a
+	// non-streaming call in one write, so the two readings coincide.
 	guard.arm(c.idle, stallIdle)
 
 	raw, err := io.ReadAll(resp.Body)
@@ -620,12 +637,12 @@ func (c *Client) newRequest(ctx context.Context, method, route string, body []by
 func (c *Client) httpError(resp *http.Response) error {
 	// Read past the cap by the key's length: a key straddling the cut would
 	// leave its head in the message, and the value pass needs it whole. The
-	// parser truncates to the cap afterwards, so the extra bytes never reach a
-	// log.
+	// parser bounds every field it keeps to the cap afterwards, so the extra
+	// bytes never reach a log.
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, int64(maxErrorBody+len(c.apiKey))))
 	apiErr := parseAPIErrorWith(c.redact, resp.StatusCode, raw)
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return newRateLimitError(apiErr, resp.Header)
+		return newRateLimitError(apiErr, resp.Header, c.now())
 	}
 	return apiErr
 }

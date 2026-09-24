@@ -3,7 +3,7 @@ package llmwire
 import (
 	"fmt"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -113,14 +113,7 @@ type Reasoning struct {
 }
 
 // Accepts reports whether effort is in the model's accepted set.
-func (r Reasoning) Accepts(effort string) bool {
-	for _, v := range r.EffortValues {
-		if v == effort {
-			return true
-		}
-	}
-	return false
-}
+func (r Reasoning) Accepts(effort string) bool { return slices.Contains(r.EffortValues, effort) }
 
 // Sampling describes temperature and top_p handling, which is subtler than a
 // bool on every model in the registry.
@@ -313,8 +306,8 @@ const (
 var derivedAllowedKeys = map[string]bool{
 	"id": true, "base": true, "gateway": true,
 	"wire_model_id": true, "provider": true, "no_api_key": true,
-	"endpoint": true, "max_tokens_param": true,
-	"verified": true, "notes": true,
+	"max_tokens_param": true,
+	"verified":         true, "notes": true,
 	// These two are allowed only for the specific sub-keys in
 	// derivedAllowedNestedKeys. Admitting the whole mapping here and relying on
 	// resolve to copy just the fields it knows about would silently DISCARD
@@ -370,9 +363,6 @@ func (p Profile) resolve(base Profile) Profile {
 	} else if p.NoAPIKey {
 		out.NoAPIKey = true
 	}
-	if p.Endpoint != "" {
-		out.Endpoint = p.Endpoint
-	}
 	if p.MaxTokensParam != "" {
 		out.MaxTokensParam = p.MaxTokensParam
 	}
@@ -400,8 +390,8 @@ func (p Profile) resolve(base Profile) Profile {
 	// spend, and it knows things this table cannot: which deployment actually
 	// ran, and what it is charged at. Inheriting the base's list rate would
 	// produce a confident figure for a call nobody priced — so the block is
-	// dropped rather than carried, and a gateway entry stating one of its own is
-	// refused by CostBlock.validate.
+	// dropped rather than carried. A derived entry restating one is refused by
+	// checkDerivedKeys, an unbased gateway entry by CostBlock.validate.
 	if out.Gateway != "" {
 		out.Cost = nil
 	}
@@ -439,43 +429,90 @@ func (p Profile) validate() error {
 		return bad("verified must be %q or %q, got %q", VerifiedMeasured, VerifiedSource, p.Verified)
 	}
 
+	var err error
 	if p.Endpoint == EndpointEmbeddings {
-		// An embeddings profile carrying chat capabilities is a copy-paste
-		// error, and one that would otherwise surface as a confusing 400 from
-		// the wrong route. Every sampling and generation knob is checked, not a
-		// sample of them: a guard that covers most of the set reads as complete
-		// while leaving a hole.
-		switch {
-		case p.Reasoning.Supported:
-			return bad("an embeddings profile must not declare reasoning")
-		case p.Tools.Supported:
-			return bad("an embeddings profile must not declare tools")
-		case p.Temperature.Supported:
-			return bad("an embeddings profile must not declare temperature")
-		case p.TopP.Supported:
-			return bad("an embeddings profile must not declare top_p")
-		case p.Vision:
-			return bad("an embeddings profile must not declare vision")
-		case p.Output.JSONObject || p.Output.JSONSchema || p.Output.StrictSchema:
-			return bad("an embeddings profile must not declare structured output")
-		}
-		// Required, not optional. A caller sizes a vector column and an index to
-		// this number before it ever makes a call, so leaving it absent would push
-		// the figure back into every application that uses the model — which is
-		// the duplication this field exists to end.
-		if p.Embedding.DefaultDimensions <= 0 {
-			return bad("an embeddings profile needs a positive default_dimensions; " +
-				"a caller sizes its vector storage to it before the first call")
-		}
-		if p.Cost != nil {
-			if err := p.Cost.validate(p); err != nil {
-				return err
-			}
-		}
-		// The limits check below applies to both endpoints, so fall through to
-		// it rather than returning early.
-		return p.validateLimits()
+		err = p.validateEmbeddings(bad)
+	} else {
+		err = p.validateChat(bad)
 	}
+	if err != nil {
+		return err
+	}
+	if p.Cost != nil {
+		if err := p.Cost.validate(p); err != nil {
+			return err
+		}
+	}
+	return p.validateLimits()
+}
+
+// validateEmbeddings refuses chat capabilities on an embeddings profile.
+//
+// Such a profile is a copy-paste error, and one that would otherwise surface
+// as a confusing 400 from the wrong route. Every sampling and generation knob
+// is checked, not a sample of them, and not only the `supported` bits: a
+// guard that covers most of the set reads as complete while leaving a hole.
+func (p Profile) validateEmbeddings(bad func(string, ...any) error) error {
+	r := p.Reasoning
+	reasoningDeclared := r.Supported || r.EnabledByDefault || r.CanBeDisabled || r.Control != "" ||
+		len(r.EffortValues) > 0 || r.DefaultEffort != "" || r.StreamField != "" || r.BudgetParam != "" || r.LeaksCloseTag
+	t := p.Tools
+	toolsDeclared := t.Supported || t.Format != "" || len(t.ToolChoiceValues) > 0 ||
+		t.SupportsForcedChoice || t.SupportsParallel || t.RecoverInlineMarkup
+	switch {
+	case reasoningDeclared:
+		return bad("an embeddings profile must not declare reasoning")
+	case toolsDeclared:
+		return bad("an embeddings profile must not declare tools")
+	case p.Temperature.declared():
+		return bad("an embeddings profile must not declare temperature")
+	case p.TopP.declared():
+		return bad("an embeddings profile must not declare top_p")
+	case p.Vision:
+		return bad("an embeddings profile must not declare vision")
+	case p.Output.JSONObject || p.Output.JSONSchema || p.Output.StrictSchema:
+		return bad("an embeddings profile must not declare structured output")
+	case p.Streaming.Supported || p.Streaming.NeedsIncludeUsage || p.Streaming.AcceptsStreamOptions:
+		return bad("an embeddings profile must not declare streaming")
+	case p.MaxTokensParam != "":
+		return bad("an embeddings profile must not declare max_tokens_param; the route takes no output cap")
+	}
+	// Required, not optional. A caller sizes a vector column and an index to
+	// this number before it ever makes a call, so leaving it absent would push
+	// the figure back into every application that uses the model — which is
+	// the duplication this field exists to end.
+	if p.Embedding.DefaultDimensions <= 0 {
+		return bad("an embeddings profile needs a positive default_dimensions; " +
+			"a caller sizes its vector storage to it before the first call")
+	}
+	return nil
+}
+
+// declared reports whether any sampling field is set, `supported` included.
+func (s Sampling) declared() bool {
+	return s.Supported || s.ForcedValue != nil || s.RecommendedValue != nil || s.InertWhileReasoning
+}
+
+// validateSampling checks one sampling parameter's own consistency.
+func validateSampling(bad func(string, ...any) error, name string, s Sampling) error {
+	if !s.Supported && (s.ForcedValue != nil || s.RecommendedValue != nil || s.InertWhileReasoning) {
+		// The value would be read by nothing: checkSampling drops the
+		// parameter before it looks at either, so the profile would describe a
+		// knob the request path never sends.
+		return bad("%s is unsupported but forced_value, recommended_value or inert_while_reasoning is set", name)
+	}
+	if s.ForcedValue != nil && s.RecommendedValue != nil && *s.ForcedValue != *s.RecommendedValue {
+		// The recommended value is what goes out when the caller says
+		// nothing, and a forced value is the only one the endpoint takes:
+		// disagreeing, the silent default would be a 400.
+		return bad("%s recommended_value %g differs from forced_value %g, which is the only value the endpoint accepts",
+			name, *s.RecommendedValue, *s.ForcedValue)
+	}
+	return nil
+}
+
+// validateChat checks the capability block of a chat profile.
+func (p Profile) validateChat(bad func(string, ...any) error) error {
 	if p.Embedding.Dimensions || p.Embedding.DefaultDimensions != 0 {
 		return bad("a chat profile must not declare embedding settings")
 	}
@@ -498,6 +535,9 @@ func (p Profile) validate() error {
 	} else if r.BudgetParam != "" {
 		return bad("budget_param is set but reasoning control is %q, which takes no budget", r.Control)
 	}
+	if dup := firstDuplicate(r.EffortValues); dup != "" {
+		return bad("effort_values lists %q twice", dup)
+	}
 	if !r.Supported {
 		if r.Control != "" && r.Control != ControlNone {
 			return bad("reasoning is unsupported but control is %q", r.Control)
@@ -508,15 +548,15 @@ func (p Profile) validate() error {
 		if r.EnabledByDefault || r.CanBeDisabled {
 			return bad("reasoning is unsupported but enabled_by_default/can_be_disabled is set")
 		}
+		if r.DefaultEffort != "" || r.StreamField != "" || r.LeaksCloseTag {
+			return bad("reasoning is unsupported but default_effort, stream_field or leaks_close_tag is set")
+		}
 	} else {
 		switch r.Control {
 		case ControlEffort:
 			if len(r.EffortValues) == 0 {
 				return bad("reasoning control is %q but effort_values is empty; "+
 					"the accepted set must be stated, never inferred", ControlEffort)
-			}
-			if r.DefaultEffort != "" && !r.Accepts(r.DefaultEffort) {
-				return bad("default_effort %q is not in effort_values %v", r.DefaultEffort, r.EffortValues)
 			}
 		case ControlToggleObject:
 			// Levels beside a toggle only make sense on a model that is
@@ -525,15 +565,21 @@ func (p Profile) validate() error {
 			if len(r.EffortValues) > 0 && !r.EnabledByDefault {
 				return bad("effort_values is set on a %s model that is not enabled_by_default; a level cannot switch thinking on", ControlToggleObject)
 			}
-			if r.DefaultEffort != "" && !r.Accepts(r.DefaultEffort) {
-				return bad("default_effort %q is not in effort_values %v", r.DefaultEffort, r.EffortValues)
-			}
 		case ControlBudget:
 			if len(r.EffortValues) > 0 {
 				return bad("reasoning control is %q but effort_values is set; a budget model takes no levels", ControlBudget)
 			}
+			if r.DefaultEffort != "" {
+				return bad("default_effort is set but reasoning control is %q, which takes no levels", ControlBudget)
+			}
 		default:
 			return bad("reasoning is supported but control is %q", r.Control)
+		}
+		// A default that is not in the accepted set describes a model
+		// contradicting itself; checked once here for both level-taking
+		// controls rather than per case.
+		if r.DefaultEffort != "" && !r.Accepts(r.DefaultEffort) {
+			return bad("default_effort %q is not in effort_values %v", r.DefaultEffort, r.EffortValues)
 		}
 		// The inference this schema exists to prevent, checked in both
 		// directions: a model that cannot be disabled must not advertise a
@@ -550,19 +596,41 @@ func (p Profile) validate() error {
 		}
 	}
 
-	if p.Tools.Supported {
-		if p.Tools.Format != FormatNative && p.Tools.Format != FormatXML {
-			return bad("tools.format must be %q or %q, got %q", FormatNative, FormatXML, p.Tools.Format)
+	if err := validateSampling(bad, "temperature", p.Temperature); err != nil {
+		return err
+	}
+	if err := validateSampling(bad, "top_p", p.TopP); err != nil {
+		return err
+	}
+
+	t := p.Tools
+	if t.Supported {
+		if t.Format != FormatNative && t.Format != FormatXML {
+			return bad("tools.format must be %q or %q, got %q", FormatNative, FormatXML, t.Format)
 		}
-		if p.Tools.Format == FormatXML && p.Tools.SupportsForcedChoice {
+		if t.Format == FormatXML && t.SupportsForcedChoice {
 			return bad("tools.format is %q, which has no tool_calls field to force, "+
 				"but supports_forced_choice is true", FormatXML)
 		}
-		if len(p.Tools.ToolChoiceValues) == 0 {
+		if len(t.ToolChoiceValues) == 0 {
 			return bad("tools are supported but tool_choice_values is empty; " +
 				"several endpoints accept only \"auto\" and silently drop the rest")
 		}
-	} else if len(p.Tools.ToolChoiceValues) > 0 || p.Tools.SupportsForcedChoice {
+		// The list holds the STRING modes only. A forced function is an
+		// object on the wire and has its own bit, so "function" in the list
+		// would be a spelling the request path never matches, and a typo
+		// (a misspelt "required") would silently make that mode a relaxation.
+		for _, v := range t.ToolChoiceValues {
+			if !slices.Contains(toolChoiceStringModes, v) {
+				return bad("tool_choice_values entry %q is not one of %v; a forced function is supports_forced_choice",
+					v, toolChoiceStringModes)
+			}
+		}
+		if dup := firstDuplicate(t.ToolChoiceValues); dup != "" {
+			return bad("tool_choice_values lists %q twice", dup)
+		}
+	} else if len(t.ToolChoiceValues) > 0 || t.SupportsForcedChoice || t.SupportsParallel ||
+		t.Format != "" || t.RecoverInlineMarkup {
 		return bad("tools are unsupported but tool settings are declared")
 	}
 
@@ -573,16 +641,32 @@ func (p Profile) validate() error {
 		return bad("needs_include_usage is true but accepts_stream_options is false; " +
 			"the parameter would have to be sent to an endpoint that rejects it")
 	}
-	if p.Cost != nil {
-		if err := p.Cost.validate(p); err != nil {
-			return err
+	return nil
+}
+
+// toolChoiceStringModes are the tool_choice values that go on the wire as a
+// bare string. The forced-function form is an object and is described by
+// Tools.SupportsForcedChoice instead.
+var toolChoiceStringModes = []string{string(ToolChoiceAuto), string(ToolChoiceNone), string(ToolChoiceRequired)}
+
+// firstDuplicate returns the first value that appears twice, or "".
+func firstDuplicate(values []string) string {
+	seen := make(map[string]bool, len(values))
+	for _, v := range values {
+		if seen[v] {
+			return v
 		}
+		seen[v] = true
 	}
-	return p.validateLimits()
+	return ""
 }
 
 // validateLimits is shared by both endpoint kinds.
 func (p Profile) validateLimits() error {
+	if p.Limits.Context < 0 || p.Limits.MaxOutput < 0 {
+		return fmt.Errorf("profile %q: limits must not be negative (context %d, max_output %d)",
+			p.ID, p.Limits.Context, p.Limits.MaxOutput)
+	}
 	if p.Limits.MaxOutput > 0 && p.Limits.Context > 0 && p.Limits.MaxOutput > p.Limits.Context {
 		return fmt.Errorf("profile %q: max_output (%d) exceeds context (%d)",
 			p.ID, p.Limits.MaxOutput, p.Limits.Context)
@@ -604,16 +688,6 @@ func (p Profile) String() string {
 	return b.String()
 }
 
-// sortedIDs is a stable list for error messages and for Models().
-func sortedIDs(m map[string]*Profile) []string {
-	out := make([]string, 0, len(m))
-	for id := range m {
-		out = append(out, id)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // clone returns a deep-enough copy that a caller mutating the result cannot
 // affect the registry.
 //
@@ -627,15 +701,17 @@ func (p *Profile) clone() *Profile {
 	out.Reasoning.EffortValues = append([]string(nil), p.Reasoning.EffortValues...)
 	out.Tools.ToolChoiceValues = append([]string(nil), p.Tools.ToolChoiceValues...)
 	out.FinishReasonsExtra = append([]string(nil), p.FinishReasonsExtra...)
-	out.Temperature.ForcedValue = copyFloat(p.Temperature.ForcedValue)
-	out.Temperature.RecommendedValue = copyFloat(p.Temperature.RecommendedValue)
-	out.TopP.ForcedValue = copyFloat(p.TopP.ForcedValue)
-	out.TopP.RecommendedValue = copyFloat(p.TopP.RecommendedValue)
+	out.Temperature.ForcedValue = copyPtr(p.Temperature.ForcedValue)
+	out.Temperature.RecommendedValue = copyPtr(p.Temperature.RecommendedValue)
+	out.TopP.ForcedValue = copyPtr(p.TopP.ForcedValue)
+	out.TopP.RecommendedValue = copyPtr(p.TopP.RecommendedValue)
 	out.Cost = p.Cost.clone()
 	return &out
 }
 
-func copyFloat(p *float64) *float64 {
+// copyPtr returns a pointer to a copy of *p, or nil for nil: the one-line
+// deep copy every clone in this package needs for its pointer fields.
+func copyPtr[T any](p *T) *T {
 	if p == nil {
 		return nil
 	}

@@ -2,6 +2,7 @@ package llmwire
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -120,6 +121,14 @@ func (c *Client) Validate(req ChatRequest) ([]Warning, error) {
 	return warnings, err
 }
 
+// ValidateStream is Validate for a request that will go to ChatStream. The
+// one difference is the streaming refusal, which a non-streaming plan never
+// reaches, so a boot check for a streamed call needs this form.
+func (c *Client) ValidateStream(req ChatRequest) ([]Warning, error) {
+	_, warnings, err := c.plan(req, true)
+	return warnings, err
+}
+
 // wirePlan is what plan produces and the renderer consumes: the request with
 // every capability decision ALREADY APPLIED, plus the two wire-level knobs that
 // are not request fields at all.
@@ -131,17 +140,19 @@ func (c *Client) Validate(req ChatRequest) ([]Warning, error) {
 // Here there is nothing else to read.
 //
 // The invariant, which a reviewer can check by grepping render.go for
-// ".Supported": the renderer reads WIRE-NAME profile fields only — WireModelID,
-// MaxTokensParam, Reasoning.Control, Reasoning.BudgetParam, Streaming — and never
-// a capability field. Capabilities were decided here.
+// ".Supported": the renderer reads WIRE-NAME profile fields only — WireModelID
+// and the reasoning knob's Control and BudgetParam off the profile, capParam
+// and includeUsage off this struct — and never a capability field.
+// Capabilities were decided here.
 type wirePlan struct {
 	profile *Profile
 	req     ChatRequest
 	stream  bool
 	// capParam is which output-cap parameter this endpoint honours. Copied so
-	// the renderer never reaches back into the profile for it: one endpoint
-	// accepts the wrong name and silently ignores it, returning thirty times the
-	// requested tokens, so this is the single most expensive field to get wrong.
+	// the field the renderer reads sits beside the decisions made here: one
+	// endpoint accepts the wrong name and silently ignores it, returning
+	// thirty times the requested tokens, so this is the single most expensive
+	// field to get wrong.
 	capParam string
 	// includeUsage says to send stream_options.include_usage.
 	includeUsage bool
@@ -195,6 +206,7 @@ func (c *Client) plan(req ChatRequest, stream bool) (*wirePlan, []Warning, error
 	v.checkTools(req)
 	v.checkResponseFormat(req)
 	v.checkMaxTokens(req)
+	v.checkExtraBody(req)
 
 	if v.err != nil {
 		return nil, nil, v.err
@@ -232,6 +244,9 @@ func reasoningActive(want ReasoningRequest, r Reasoning) bool {
 	case reasoningBudget:
 		return req.tokens > 0
 	default:
+		// Unreachable: the interface is sealed by its unexported method, so
+		// the three cases above are the whole set. Kept so a fourth kind
+		// fails a test here rather than compiling into a silent default.
 		return r.EnabledByDefault
 	}
 }
@@ -277,7 +292,10 @@ func (v *validation) reject(feature, reason string) {
 // wire carrying a second problem nobody looked for.
 func (v *validation) refuse(feature, reason string, accepted []string) bool {
 	if v.bestEffort {
-		v.warn(WarnUnsupported, feature, reason+"; dropped because BestEffort was set")
+		// "coerced", not "dropped": most callers drop the knob, but a forced
+		// sampling value is substituted, and the warning must not claim a
+		// parameter was removed when it went out at another value.
+		v.warn(WarnUnsupported, feature, reason+"; coerced because BestEffort was set")
 		return false
 	}
 	if v.err == nil {
@@ -308,6 +326,23 @@ func (v *validation) checkMessages(req ChatRequest) {
 			v.reject("messages",
 				fmt.Sprintf("message %d has role %q but no ToolCallID to tie it to a call", i, RoleTool))
 			return
+		}
+		for j, p := range m.Parts {
+			// Structural. The renderer spells a part by its Kind, and a Kind
+			// it does not know would go out as an empty text part: an image
+			// built without the constructor would be lost silently, and the
+			// vision check above would never see it.
+			switch p.Kind {
+			case PartText:
+			case PartImage:
+				if p.URL == "" {
+					v.reject("messages", fmt.Sprintf("message %d part %d is an image with no URL", i, j))
+					return
+				}
+			default:
+				v.reject("messages", fmt.Sprintf("message %d part %d has kind %q; use PartText or PartImage", i, j, p.Kind))
+				return
+			}
 		}
 		if m.HasImage() && !v.profile.Vision {
 			// Deliberately a refusal rather than a silent reroute to a
@@ -353,10 +388,6 @@ func (v *validation) checkReasoning(req ChatRequest) {
 	}
 	r := v.profile.Reasoning
 
-	// Every refusal below is followed by dropReasoning on the demoted path. A
-	// bare refuse() whose return is ignored would leave the coerced request
-	// carrying the very knob that was just refused, and the renderer would send
-	// it — turning a caught error into the 400 this package exists to prevent.
 	switch want := req.Reasoning.(type) {
 	case reasoningOff:
 		// A model that never reasons already satisfies "do not reason". Refusing
@@ -372,58 +403,55 @@ func (v *validation) checkReasoning(req ChatRequest) {
 			// registry refuses the disable toggle with an error code it also
 			// uses for unrelated failures, while its vendor's own reference
 			// documents the toggle as valid.
-			if !v.refuse("reasoning", "thinking cannot be disabled on this model", r.EffortValues) {
-				v.dropReasoning()
-			}
+			v.refuseOrDrop("reasoning", "thinking cannot be disabled on this model", r.EffortValues)
 			return
 		}
 		if r.Control == ControlEffort && !r.Accepts("none") {
-			if !v.refuse("reasoning",
+			v.refuseOrDrop("reasoning",
 				`this model disables thinking by a means other than reasoning_effort "none"`,
-				r.EffortValues) {
-				v.dropReasoning()
-			}
+				r.EffortValues)
 		}
 
 	case reasoningEffort:
 		if !r.Supported {
-			if !v.refuse("reasoning", "this model does not reason", nil) {
-				v.dropReasoning()
-			}
+			v.refuseOrDrop("reasoning", "this model does not reason", nil)
 			return
 		}
 		// A toggle model with effort_values takes the level beside its switch;
 		// one without has no such knob and the level is a mismatch.
 		if r.Control != ControlEffort && (r.Control != ControlToggleObject || len(r.EffortValues) <= 0) {
-			if !v.refuse("reasoning", reasoningControlMismatch(r.Control, "an effort level"),
-				reasoningControlHint(r.Control)) {
-				v.dropReasoning()
-			}
+			v.refuseOrDrop("reasoning", reasoningControlMismatch(r.Control, "an effort level"),
+				reasoningControlHint(r))
 			return
 		}
 		if !r.Accepts(want.level) {
 			// The accepted set is per-model and narrower than the vendor's
 			// global enum, so naming it is the difference between a fixable
 			// error and a guess.
-			if !v.refuse("reasoning_effort",
+			v.refuseOrDrop("reasoning_effort",
 				fmt.Sprintf("effort %q is not accepted by this model", want.level),
-				r.EffortValues) {
-				v.dropReasoning()
-			}
+				r.EffortValues)
 		}
 
 	case reasoningBudget:
+		if want.tokens < 0 {
+			// Structural: no endpoint reads a negative budget as anything.
+			v.reject("reasoning", fmt.Sprintf("a token budget of %d is negative", want.tokens))
+			return
+		}
 		if !r.Supported {
-			if !v.refuse("reasoning", "this model does not reason", nil) {
-				v.dropReasoning()
-			}
+			v.refuseOrDrop("reasoning", "this model does not reason", nil)
 			return
 		}
 		if r.Control != ControlBudget {
-			if !v.refuse("reasoning", reasoningControlMismatch(r.Control, "a token budget"),
-				reasoningControlHint(r.Control)) {
-				v.dropReasoning()
-			}
+			v.refuseOrDrop("reasoning", reasoningControlMismatch(r.Control, "a token budget"),
+				reasoningControlHint(r))
+			return
+		}
+		if want.tokens == 0 && !r.CanBeDisabled {
+			// A zero budget is the disable switch in another spelling, and
+			// the renderer writes it as one. Refused where ReasoningOff is.
+			v.refuseOrDrop("reasoning", "thinking cannot be disabled on this model, and a budget of 0 would disable it", nil)
 		}
 	}
 }
@@ -431,6 +459,17 @@ func (v *validation) checkReasoning(req ChatRequest) {
 // dropReasoning removes the reasoning knob from the coerced request, leaving the
 // model at its own default.
 func (v *validation) dropReasoning() { v.out.Reasoning = nil }
+
+// refuseOrDrop is refuse followed, on the demoted path, by dropReasoning.
+// Every reasoning refusal takes this shape: a bare refuse() whose return is
+// ignored would leave the coerced request carrying the very knob that was
+// just refused, and the renderer would send it — turning a caught error into
+// the 400 this package exists to prevent.
+func (v *validation) refuseOrDrop(feature, reason string, accepted []string) {
+	if !v.refuse(feature, reason, accepted) {
+		v.dropReasoning()
+	}
+}
 
 // reasoningControlMismatch phrases a control mismatch in terms of what a CALLER
 // would write, rather than leaking the profile's internal constant name.
@@ -453,10 +492,15 @@ func reasoningControlPhrase(c ReasoningControl) string {
 }
 
 // reasoningControlHint names the constructor that would work, so a refusal is
-// actionable rather than merely correct.
-func reasoningControlHint(c ReasoningControl) []string {
-	switch c {
+// actionable rather than merely correct. It names only what the model takes:
+// a toggle model that cannot be switched off would refuse ReasoningOff() too,
+// and a hint pointing at a second refusal is worse than none.
+func reasoningControlHint(r Reasoning) []string {
+	switch r.Control {
 	case ControlToggleObject:
+		if !r.CanBeDisabled {
+			return nil
+		}
 		return []string{"ReasoningOff()"}
 	case ControlEffort:
 		return []string{"ReasoningEffort(level)"}
@@ -480,7 +524,7 @@ func (v *validation) checkSampling(name string, want *float64, s Sampling, out *
 		// materially below the value the model was tuned for, so an omission
 		// would quietly run the model off its recommended point.
 		if s.Supported && s.RecommendedValue != nil {
-			*out = copyFloat(s.RecommendedValue)
+			*out = copyPtr(s.RecommendedValue)
 		}
 		return
 	}
@@ -497,7 +541,7 @@ func (v *validation) checkSampling(name string, want *float64, s Sampling, out *
 			// Demoted to the one value the endpoint takes, not dropped: the
 			// caller asked for a specific parameter, and the forced value is the
 			// nearest thing the model will accept.
-			*out = copyFloat(s.ForcedValue)
+			*out = copyPtr(s.ForcedValue)
 		}
 		return
 	}
@@ -518,8 +562,17 @@ func (v *validation) checkSampling(name string, want *float64, s Sampling, out *
 // cap is still sent verbatim — rewriting it would hide the profile's limit behind
 // a number the caller never chose.
 func (v *validation) checkMaxTokens(req ChatRequest) {
+	if req.MaxTokens == nil {
+		return
+	}
+	if *req.MaxTokens <= 0 {
+		// Structural: no endpoint shares a meaning for a cap of zero, and
+		// several answer a 400. A caller who wants no cap leaves it nil.
+		v.reject("max_tokens", fmt.Sprintf("a cap of %d is not positive; leave MaxTokens nil for no cap", *req.MaxTokens))
+		return
+	}
 	max := v.profile.Limits.MaxOutput
-	if req.MaxTokens == nil || max <= 0 || int64(*req.MaxTokens) <= max {
+	if max <= 0 || int64(*req.MaxTokens) <= max {
 		return
 	}
 	v.warn(WarnCompatibility, "max_tokens",
@@ -555,14 +608,22 @@ func (v *validation) checkTools(req ChatRequest) {
 		}
 	}
 
-	if req.ToolChoice.Mode == ToolChoiceUnset {
+	switch req.ToolChoice.Mode {
+	case ToolChoiceUnset:
+		return
+	case ToolChoiceAuto, ToolChoiceNone, ToolChoiceRequired, ToolChoiceFunction:
+	default:
+		// Structural: a mode this package does not know is a typo, and
+		// relaxing a typo to "auto" would run the call under a constraint the
+		// caller never chose.
+		v.reject("tool_choice", fmt.Sprintf("%q is not a tool choice mode; use one of the ToolChoice constants", req.ToolChoice.Mode))
 		return
 	}
 	if req.ToolChoice.Mode == ToolChoiceFunction && req.ToolChoice.Name == "" {
 		v.reject("tool_choice", "a function tool choice needs the function's name")
 		return
 	}
-	if toolChoiceAccepted(t.ToolChoiceValues, req.ToolChoice.Mode) {
+	if toolChoiceAccepted(t, req.ToolChoice.Mode) {
 		return
 	}
 
@@ -595,7 +656,7 @@ func (v *validation) checkTools(req ChatRequest) {
 	// profile in the registry does, but substituting one refused mode for another
 	// would send the 400 this tier policy exists to catch locally — so the
 	// substitute is checked against the same accepted set.
-	if !toolChoiceAccepted(t.ToolChoiceValues, ToolChoiceAuto) {
+	if !toolChoiceAccepted(t, ToolChoiceAuto) {
 		if !v.refuse("tool_choice",
 			fmt.Sprintf("this model accepts tool_choice %v, and %q is not among them, so there is "+
 				"nothing to relax %q to", t.ToolChoiceValues, ToolChoiceAuto, req.ToolChoice.Mode),
@@ -615,13 +676,45 @@ func (v *validation) checkTools(req ChatRequest) {
 	v.out.ToolChoice = ToolChoice{Mode: ToolChoiceAuto}
 }
 
-func toolChoiceAccepted(accepted []string, mode ToolChoiceMode) bool {
-	for _, a := range accepted {
-		if a == string(mode) {
-			return true
-		}
+// checkExtraBody refuses the keys ExtraBody may not override. It wins over
+// every other generated key by design, but these four would make the body
+// lie about itself: `stream` swaps the parser out from under the call the
+// caller chose, `stream_options` reaches past the profile's usage decision,
+// `model` bypasses the route, and the cap spelling this profile does NOT
+// take is the one an endpoint accepts and silently ignores.
+func (v *validation) checkExtraBody(req ChatRequest) {
+	if len(req.ExtraBody) == 0 {
+		return
 	}
-	return false
+	otherCap := ParamMaxTokens
+	if v.profile.MaxTokensParam == ParamMaxTokens {
+		otherCap = ParamMaxCompletionTokens
+	}
+	for _, key := range []string{"stream", "stream_options", "model", otherCap} {
+		if _, set := req.ExtraBody[key]; !set {
+			continue
+		}
+		why := "it is decided by the method called and the profile"
+		switch key {
+		case "model":
+			why = "the route decides what goes on the wire"
+		case otherCap:
+			why = fmt.Sprintf("this model takes %q; set MaxTokens instead", v.profile.MaxTokensParam)
+		}
+		v.reject("extra_body", fmt.Sprintf("ExtraBody must not set %q: %s", key, why))
+		return
+	}
+}
+
+// toolChoiceAccepted says whether the profile takes a mode as sent. The
+// string modes are looked up in tool_choice_values; a forced function is an
+// OBJECT on the wire, {"type":"function",…}, and has its own bit, because a
+// list of strings cannot say whether the object form is honoured.
+func toolChoiceAccepted(t Tools, mode ToolChoiceMode) bool {
+	if mode == ToolChoiceFunction {
+		return t.SupportsForcedChoice
+	}
+	return slices.Contains(t.ToolChoiceValues, string(mode))
 }
 
 func (v *validation) checkResponseFormat(req ChatRequest) {
