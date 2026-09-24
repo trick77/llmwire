@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +31,8 @@ import (
 // at all leaves a budget cap with nothing to check.
 //
 // TWO sources, no third: this table, embedded in profiles.yaml, and a gateway's
-// own per-call figure from a response header. There is no runtime catalogue
+// own per-call figure, read from usage.cost in the body first and from its
+// response header second (priceFromGateway says why). There is no runtime catalogue
 // fetch and no caller-supplied rate map — that would buy a network call, a
 // cache, a staleness window and a fallback table, and this table IS the fallback
 // table. A stale rate is fixed by a library release, deliberately.
@@ -138,6 +140,10 @@ func (r *rate) UnmarshalYAML(node *yaml.Node) error {
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "-"), "+")
 
 	intPart, fracPart, _ := strings.Cut(s, ".")
+	if intPart == "" && fracPart == "" {
+		// "." or "-." on their own: a stray character, not a free lane.
+		return fmt.Errorf("rate %q is not a decimal number", node.Value)
+	}
 	if intPart == "" {
 		intPart = "0"
 	}
@@ -312,7 +318,7 @@ func (b *CostBlock) validate(p Profile) error {
 	// and this table does not. Checked here for an unbased gateway entry;
 	// resolve drops an INHERITED block for the same reason.
 	if p.Gateway != "" {
-		return bad("a gateway route is priced from its response header, never from the table")
+		return bad("a gateway route is priced from what the proxy reports (usage.cost, then its response header), never from the table")
 	}
 
 	if b.SourceURL == "" {
@@ -498,11 +504,7 @@ func (b *CostBlock) validateWindows(bad func(string, ...any) error) error {
 // returned warnings belong on the call's own []Warning.
 func priceCall(p *Profile, u Usage, hdr http.Header, status int, at time.Time) (Cost, []Warning) {
 	unpriced := func(format string, args ...any) (Cost, []Warning) {
-		return Cost{AppliedAt: at}, []Warning{{
-			Kind:    WarnOther,
-			Feature: "cost",
-			Details: fmt.Sprintf(format, args...),
-		}}
+		return unpricedCost(at, format, args...)
 	}
 
 	// Defensive, and load-bearing: a gateway sends the cost header even on some
@@ -579,9 +581,11 @@ func addLane(sum *big.Int, tokens *int64, r *rate) {
 	sum.Add(sum, term)
 }
 
-// ceilDivBig divides, rounding away from zero, and refuses a result that does not
-// fit rather than wrapping — a wrapped total could come out negative, which would
-// credit the caller for tokens they spent.
+// ceilDivBig divides, taking the ceiling (DivMod is Euclidean, so the
+// remainder is never negative and the adjustment is always upward), and
+// refuses a result that does not fit rather than wrapping — a wrapped total
+// could come out negative, which would credit the caller for tokens they
+// spent.
 func ceilDivBig(n, d *big.Int) (int64, error) {
 	q, m := new(big.Int), new(big.Int)
 	q.DivMod(n, d, m)
@@ -668,7 +672,7 @@ func costFromUsageBody(u Usage) (nano int64, ok bool, err error) {
 	// precisely the figure this whole lane exists to refuse. Present in any shape
 	// means present; parseReportedCost decides whether it is usable.
 	raw := strings.TrimSpace(string(body.Cost))
-	if raw == "" || raw == "null" {
+	if raw == "" || isJSONNull([]byte(raw)) {
 		return 0, false, nil
 	}
 	// A JSON string carries the same decimal a bare number would, so the quotes
@@ -697,11 +701,7 @@ func costFromUsageBody(u Usage) (nano int64, ok bool, err error) {
 // number anyway.
 func priceFromGateway(p *Profile, u Usage, hdr http.Header, at time.Time) (Cost, []Warning) {
 	warn := func(format string, args ...any) (Cost, []Warning) {
-		return Cost{AppliedAt: at}, []Warning{{
-			Kind:    WarnOther,
-			Feature: "cost",
-			Details: fmt.Sprintf(format, args...),
-		}}
+		return unpricedCost(at, format, args...)
 	}
 	if nano, ok, err := costFromUsageBody(u); ok {
 		if err != nil {
@@ -722,6 +722,23 @@ func priceFromGateway(p *Profile, u Usage, hdr http.Header, at time.Time) (Cost,
 	return Cost{NanoUSD: nano, Provenance: Reported, AppliedAt: at}, nil
 }
 
+// unpricedCost is the Unpriced result with its warning: the zero value of
+// Cost, which reads as unknown, and one line saying why. Every path that
+// gives up on a price goes through here, so none can give up silently.
+func unpricedCost(at time.Time, format string, args ...any) (Cost, []Warning) {
+	return Cost{AppliedAt: at}, []Warning{{
+		Kind:    WarnOther,
+		Feature: "cost",
+		Details: fmt.Sprintf(format, args...),
+	}}
+}
+
+// finiteDecimal is the grammar a reported number must fit before big.Rat sees
+// it. SetString also accepts fractions ("1/3"), hex floats and an exponent of
+// any size, and a gateway or a listing is not trusted to pick the size of an
+// allocation; four exponent digits cover every real figure.
+var finiteDecimal = regexp.MustCompile(`^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d{1,4})?$`)
+
 // parseReportedCost converts a gateway's decimal cost into nano-USD.
 //
 // big.Rat rather than strconv.ParseFloat, for two reasons. ParseFloat ACCEPTS
@@ -731,10 +748,13 @@ func priceFromGateway(p *Profile, u Usage, hdr http.Header, at time.Time) (Cost,
 // integer does not depend on float rounding of the value under test.
 func parseReportedCost(s string) (int64, error) {
 	s = strings.TrimSpace(s)
+	if !finiteDecimal.MatchString(s) {
+		// This is the branch NaN and Inf land in, which is the whole reason for
+		// the type choice, and where a fraction or an absurd exponent lands too.
+		return 0, fmt.Errorf("not a finite decimal number")
+	}
 	r, ok := new(big.Rat).SetString(s)
 	if !ok {
-		// This is the branch NaN and Inf land in, which is the whole reason for
-		// the type choice.
 		return 0, fmt.Errorf("not a finite decimal number")
 	}
 	if r.Sign() < 0 {
@@ -766,19 +786,11 @@ func (b *CostBlock) clone() *CostBlock {
 		return nil
 	}
 	out := *b
-	out.Input = copyRate(b.Input)
-	out.CacheRead = copyRate(b.CacheRead)
-	out.CacheWrite = copyRate(b.CacheWrite)
-	out.Output = copyRate(b.Output)
+	out.Input = copyPtr(b.Input)
+	out.CacheRead = copyPtr(b.CacheRead)
+	out.CacheWrite = copyPtr(b.CacheWrite)
+	out.Output = copyPtr(b.Output)
 	out.Tiers = append([]CostTier(nil), b.Tiers...)
 	out.Windows = append([]CostWindow(nil), b.Windows...)
 	return &out
-}
-
-func copyRate(r *rate) *rate {
-	if r == nil {
-		return nil
-	}
-	v := *r
-	return &v
 }

@@ -212,9 +212,8 @@ func readInline(t *testing.T, body string) (StreamResult, []streamEvent, []Warni
 	defer cancel()
 	guard := newStallGuard(cancel, time.Hour, stallHeaders)
 	defer guard.stop()
-	var counters streamCounters
 	var events []streamEvent
-	res, warnings, err := readStream(strings.NewReader(body), guard, &counters, streamBounds{idle: time.Hour}, func(ev streamEvent) {
+	res, warnings, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, func(ev streamEvent) {
 		events = append(events, ev)
 	}, Redact, true, time.Now, time.Now())
 	if err != nil {
@@ -282,10 +281,10 @@ func TestReadStream_RecoversInlineCallFromContent(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("tool-call events = %#v, want name first then arguments", calls)
 	}
-	if calls[0].ID != "inline_call_1" || calls[0].Function.Name != "tavily__tavily_search" || calls[0].Function.Arguments != "" {
+	if calls[0].ID != "inline_call_1" || calls[0].Function.Name != "tavily__tavily_search" || calls[0].argumentsDelta() != "" {
 		t.Fatalf("early event = %#v", calls[0])
 	}
-	if calls[1].ID != "inline_call_1" || calls[1].Function.Name != "" || calls[1].Function.Arguments != `{"q":"colossus"}` {
+	if calls[1].ID != "inline_call_1" || calls[1].Function.Name != "" || calls[1].argumentsDelta() != `{"q":"colossus"}` {
 		t.Fatalf("final event = %#v", calls[1])
 	}
 	if len(warnings) != 1 || warnings[0].Feature != "tool_calls" || !strings.Contains(warnings[0].Details, "content channel") {
@@ -331,11 +330,11 @@ func TestReadStream_SecondInlineCallCarriesItsName(t *testing.T) {
 	}
 	var final []toolCallDelta
 	for _, ev := range events {
-		if ev.kind == evToolCall && ev.toolCall.Function.Arguments != "" {
+		if ev.kind == evToolCall && ev.toolCall.argumentsDelta() != "" {
 			final = append(final, ev.toolCall)
 		}
 	}
-	if len(final) != 2 || final[1].Index != 1 || final[1].Function.Name != "b" || final[1].Function.Arguments != `{"y":"2"}` {
+	if len(final) != 2 || final[1].Index != 1 || final[1].Function.Name != "b" || final[1].argumentsDelta() != `{"y":"2"}` {
 		t.Fatalf("final fragments = %#v", final)
 	}
 }
@@ -401,8 +400,7 @@ func TestReadStream_NoRecoveryLeavesMarkupAlone(t *testing.T) {
 	defer cancel()
 	guard := newStallGuard(cancel, time.Hour, stallHeaders)
 	defer guard.stop()
-	var counters streamCounters
-	res, warnings, err := readStream(strings.NewReader(body), guard, &counters, streamBounds{idle: time.Hour}, nil, Redact, false, time.Now, time.Now())
+	res, warnings, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, nil, Redact, false, time.Now, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +533,7 @@ func TestReadStream_EarlyNameFromOtherChannelIsRenamed(t *testing.T) {
 	}
 	var final []toolCallDelta
 	for _, ev := range events {
-		if ev.kind == evToolCall && ev.toolCall.Function.Arguments != "" {
+		if ev.kind == evToolCall && ev.toolCall.argumentsDelta() != "" {
 			final = append(final, ev.toolCall)
 		}
 	}

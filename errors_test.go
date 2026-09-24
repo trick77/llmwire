@@ -2,6 +2,7 @@ package llmwire
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -149,6 +150,9 @@ func TestRetryAfter(t *testing.T) {
 		{"http date in the past", now.Add(-time.Hour).Format(http.TimeFormat), 0},
 		{"zero seconds", "0", 0},
 		{"negative seconds", "-5", 0},
+		// Past what a Duration holds: clamped, never wrapped negative.
+		{"absurd seconds", "99999999999999", time.Duration(math.MaxInt64)},
+		{"overflowing int", "99999999999999999999", 0},
 		{"garbage", "soon", 0},
 		{"absent", "", 0},
 	} {
@@ -313,7 +317,7 @@ func TestParseAPIError_NonJSONDataPrefixIsNotUnframed(t *testing.T) {
 func TestRateLimitError_UnwrapsToAPIError(t *testing.T) {
 	hdr := http.Header{}
 	hdr.Set("Retry-After", "17")
-	err := error(newRateLimitError(parseAPIError(429, []byte(`{"error":{"message":"slow down","code":"1302"}}`)), hdr))
+	err := error(newRateLimitError(parseAPIError(429, []byte(`{"error":{"message":"slow down","code":"1302"}}`)), hdr, time.Now()))
 
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
@@ -367,5 +371,36 @@ func TestJSONObject(t *testing.T) {
 				t.Errorf("JSONObject(%q) = %q, %v; want %q, %v", c.in, got, ok, c.want, c.ok)
 			}
 		})
+	}
+}
+
+// Every field kept from an error body is upstream text: redacted by value and
+// by shape, and bounded, whichever branch decoded it. Only the unparseable
+// fallback did this before, so a one-megabyte message under {"error":…} or a
+// key echoed into `param` came through whole.
+func TestParseAPIError_FieldsAreRedactedAndBounded(t *testing.T) {
+	key := fakeKey("sk", "abcdefghijklmnopqrstuvwxyz0123456789")
+	huge := strings.Repeat("m", maxErrorBody*4)
+	redact := func(s string) string { return Redact(strings.ReplaceAll(s, key, "[REDACTED]")) }
+	for name, body := range map[string]string{
+		"envelope": `{"error":{"message":"` + huge + `","type":"` + key + `","param":"key=` + key + `","code":"c-` + key + `"}}`,
+		"bare":     `{"message":"` + huge + `","type":"` + key + `","param":"key=` + key + `","code":"c-` + key + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := parseAPIErrorWith(redact, 400, []byte(body))
+			if len(e.Message) > maxErrorBody+len("…(truncated)") {
+				t.Errorf("message length %d, want bounded to %d", len(e.Message), maxErrorBody)
+			}
+			for field, v := range map[string]string{"type": e.Type, "param": e.Param, "code": e.Code} {
+				if strings.Contains(v, key) {
+					t.Errorf("%s = %q carries the key", field, v)
+				}
+			}
+		})
+	}
+	// A code that is a whole document is bounded too.
+	e := parseAPIErrorWith(Redact, 400, []byte(`{"error":{"code":{"nested":"`+huge+`"}}}`))
+	if len(e.Code) > maxErrorCode+len("…(truncated)") {
+		t.Errorf("object code length %d, want bounded to %d", len(e.Code), maxErrorCode)
 	}
 }

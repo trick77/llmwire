@@ -2,7 +2,6 @@ package llmwire
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -50,6 +49,16 @@ func parseGatewayModels(v string) (map[string]string, error) {
 		}
 		out[id] = name
 	}
+	// Two profiles on one wire name would both claim the same deployment,
+	// and at least one of their capability sets is then wrong for it.
+	byName := make(map[string]string, len(out))
+	for _, id := range sortedKeys(out) {
+		if other, dup := byName[out[id]]; dup {
+			return nil, fmt.Errorf("llmwire: %s routes both %q and %q to the gateway name %q; one deployment is one model",
+				GatewayModelsEnv, other, id, out[id])
+		}
+		byName[out[id]] = id
+	}
 	return out, nil
 }
 
@@ -74,8 +83,8 @@ func (r *Registry) viaGateway(routes map[string]string) (*Registry, error) {
 	// A document with no providers: section is allowed by the loader (every
 	// host from the environment), and a litellm route in it resolves to the
 	// empty provider the same way a YAML one does.
-	pv := r.providers[gatewayProvider]
-	if _, ok := r.providers[gatewayProvider]; !ok && len(r.providers) > 0 {
+	pv, ok := r.providers[gatewayProvider]
+	if !ok && len(r.providers) > 0 {
 		return nil, fmt.Errorf("llmwire: this registry has no %q provider, so %s cannot route through it",
 			gatewayProvider, GatewayModelsEnv)
 	}
@@ -86,13 +95,24 @@ func (r *Registry) viaGateway(routes map[string]string) (*Registry, error) {
 	for _, id := range sortedKeys(routes) {
 		base, ok := r.byID[id]
 		if !ok {
-			return nil, fmt.Errorf("llmwire: %s: %w", GatewayModelsEnv, &UnknownModelError{ID: id, Known: sortedIDs(r.byID)})
+			return nil, fmt.Errorf("llmwire: %s: %w", GatewayModelsEnv, &UnknownModelError{ID: id, Known: sortedKeys(r.byID)})
 		}
 		if base.Base != "" {
 			return nil, fmt.Errorf("llmwire: %s names %q, which is already a route (base %q); list the model, not a route",
 				GatewayModelsEnv, id, base.Base)
 		}
+		if base.Gateway != "" {
+			return nil, fmt.Errorf("llmwire: %s names %q, which is already reached through gateway %q; list the model, not a route",
+				GatewayModelsEnv, id, base.Gateway)
+		}
 		route := Profile{ID: id, Base: id, Gateway: gatewayProvider, Provider: gatewayProvider, WireModelID: routes[id]}
+		// The one tighten-only bit a proxy route needs: LiteLLM forwards the
+		// usage chunk only to a client that asked for it, so a stream through
+		// it would otherwise carry no usage and every call would be Unpriced.
+		// Set only where the base takes the parameter at all; validate
+		// refuses the pair otherwise, and a base that rejects stream_options
+		// cannot be helped from here.
+		route.Streaming.NeedsIncludeUsage = base.Streaming.AcceptsStreamOptions
 		// The stored base already carries its defaults, BaseURL and
 		// EmulateOpenCode; resolve replaces provider and clears cost, and the
 		// host fields are re-read from the gateway's provider below.
@@ -106,14 +126,4 @@ func (r *Registry) viaGateway(routes map[string]string) (*Registry, error) {
 		out.byID[id] = &p
 	}
 	return out, nil
-}
-
-// sortedKeys orders the list so an error names the same entry on every run.
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }

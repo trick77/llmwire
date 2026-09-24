@@ -36,7 +36,7 @@ func TestOpenCodeUserAgentShape(t *testing.T) {
 func TestNewSessionID_hasTheUpstreamShapeAndIsUnique(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 1000; i++ {
-		id := newSessionID()
+		id := newSessionID(time.Now())
 		if !sessionIDShape.MatchString(id) {
 			t.Fatalf("id %q does not match %s", id, sessionIDShape)
 		}

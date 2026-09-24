@@ -154,3 +154,68 @@ func TestStats_sumPerModel(t *testing.T) {
 	slog.New(slog.NewTextHandler(&buf, nil)).Info("summary", "llmwire", c.Stats())
 	wantAll(t, buf.String(), "llmwire.glm-5.3-flash.calls=3", "llmwire.glm-5.3-flash.cost_usd=0.000131")
 }
+
+// A body that will not marshal is a failed call, not a call that never
+// happened: it gets its log line and its place in the stats, with the
+// validation warnings on the line.
+func TestChat_renderFailureIsLoggedAndCounted(t *testing.T) {
+	srv, _ := jsonServer(t, 200, goodCompletion)
+	c, buf := capture(t, srv, time.Second)
+	req := hiRequest()
+	req.ToolChoice = ToolChoice{Mode: ToolChoiceAuto} // a validation warning
+	req.ExtraBody = map[string]any{"x": make(chan int)}
+	if _, _, err := c.Chat(context.Background(), req); err == nil {
+		t.Fatal("a channel in ExtraBody marshalled")
+	}
+	wantAll(t, buf.String(), "llmwire call failed", `model=glm-5.3-flash`, "warnings=")
+	if st := c.Stats().Models["glm-5.3-flash"]; st.Calls != 1 || st.Errors != 1 {
+		t.Errorf("stats = %+v, want one call, one error", st)
+	}
+}
+
+// Timing is measured on the dial failure too: the wait before the transport
+// gave up is the figure that says whether the bound or the host was slow.
+func TestChat_dialFailureCarriesTiming(t *testing.T) {
+	var buf bytes.Buffer
+	now, _ := stepClock()
+	c := New(Config{
+		BaseURL:  "http://127.0.0.1:1",
+		Registry: Default(),
+		Now:      now,
+		Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+	if _, _, err := c.Chat(context.Background(), hiRequest()); err == nil {
+		t.Fatal("a dial to port 1 succeeded")
+	}
+	// stepClock advances one second per reading: start, then the reading
+	// after Do failed, so the failed dial reports a one-second wait.
+	wantAll(t, buf.String(), "llmwire call failed", "headers_ms=1000", "total_ms=1000")
+}
+
+func TestRawStream_dialFailureCarriesTiming(t *testing.T) {
+	now, _ := stepClock()
+	c := New(Config{BaseURL: "http://127.0.0.1:1", Now: now})
+	res, err := c.RawStream(context.Background(), []byte(`{}`), nil)
+	if err == nil {
+		t.Fatal("a dial to port 1 succeeded")
+	}
+	if res.Timing.Headers != time.Second || res.Timing.Total != time.Second {
+		t.Errorf("timing = %+v, want the measured wait on the dial failure", res.Timing)
+	}
+}
+
+func TestEmbed_dialFailureCarriesTiming(t *testing.T) {
+	var buf bytes.Buffer
+	now, _ := stepClock()
+	c := New(Config{
+		BaseURL:  "http://127.0.0.1:1",
+		Registry: Default(),
+		Now:      now,
+		Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+	_, _, err := c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: []string{"a"}})
+	if err == nil {
+		t.Fatal("a dial to port 1 succeeded")
+	}
+	wantAll(t, buf.String(), "llmwire call failed", "headers_ms=1000", "total_ms=1000")
+}

@@ -74,7 +74,9 @@ func renderChatBody(pl *wirePlan) ([]byte, error) {
 	// parameter this package does not model, so a caller key that collides with a
 	// generated one wins — deliberately, and documented on the field. Top-level
 	// only: a deep merge would leave a half-generated nested object that neither
-	// side asked for.
+	// side asked for. The four keys that may not be overridden (stream,
+	// stream_options, model, the other cap spelling) were refused in plan, so
+	// nothing here has to check.
 	for k, v := range req.ExtraBody {
 		body[k] = v
 	}
@@ -133,6 +135,8 @@ func renderParts(parts []Part) []any {
 				"image_url": map[string]any{"url": p.URL},
 			})
 		default:
+			// PartText. Any other kind was refused in plan, so this arm is
+			// text only.
 			out = append(out, map[string]any{"type": string(PartText), "text": p.Text})
 		}
 	}
@@ -215,10 +219,10 @@ func renderResponseFormat(f ResponseFormat) any {
 
 // renderReasoning writes the thinking knob in the spelling this model takes.
 //
-// A nil request writes NOTHING. Every reasoning model in the registry is on by
-// default, so restating that default would add a key for no effect — and on the
-// model that cannot be switched off, sending the knob at all is how you learn its
-// error code is overloaded.
+// A nil request writes NOTHING: the caller said nothing, so the model runs at
+// its own default, on or off. Restating a default would add a key for no
+// effect — and on the model that cannot be switched off, sending the knob at
+// all is how you learn its error code is overloaded.
 func renderReasoning(body map[string]any, want ReasoningRequest, r Reasoning) error {
 	if want == nil {
 		return nil

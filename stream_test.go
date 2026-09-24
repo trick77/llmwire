@@ -17,8 +17,7 @@ func readFixture(t *testing.T, body string) (StreamResult, error) {
 	defer cancel()
 	guard := newStallGuard(cancel, time.Hour, stallHeaders)
 	defer guard.stop()
-	var counters streamCounters
-	res, _, err := readStream(strings.NewReader(body), guard, &counters, streamBounds{idle: time.Hour}, nil, Redact, false, time.Now, time.Now())
+	res, _, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, nil, Redact, false, time.Now, time.Now())
 	return res, err
 }
 
@@ -327,9 +326,8 @@ data: {"choices":[{"delta":{"content":"two"},"finish_reason":"stop"}]}
 	defer cancel()
 	guard := newStallGuard(cancel, time.Hour, stallHeaders)
 	defer guard.stop()
-	var counters streamCounters
 	var got []string
-	res, _, err := readStream(strings.NewReader(body), guard, &counters, streamBounds{idle: time.Hour}, func(ev streamEvent) {
+	res, _, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, func(ev streamEvent) {
 		if ev.kind == evContent {
 			got = append(got, ev.text)
 		}
@@ -478,5 +476,20 @@ func TestStallGuard_FiringAfterTheDeadlineCancelsOnce(t *testing.T) {
 	}
 	if got, _ := g.firedReason(); got != stallIdle {
 		t.Errorf("reason = %q, want %q", got, stallIdle)
+	}
+}
+
+// A line past the scanner cap is a stream cut short, and cut-short streams
+// carry ErrMalformedResponse so a caller can errors.Is on one sentinel
+// whether the cut came from the endpoint or from the cap.
+func TestReadStream_OverlongLineIsMalformedResponse(t *testing.T) {
+	body := "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"" + strings.Repeat("x", maxStreamLine+1) + "\"}}]}\n\n"
+	res, err := readFixture(t, body)
+	if !errors.Is(err, ErrMalformedResponse) {
+		t.Fatalf("err = %v, want ErrMalformedResponse", err)
+	}
+	if res.Content != "ok" {
+		t.Errorf("content = %q, want what arrived before the cut", res.Content)
 	}
 }

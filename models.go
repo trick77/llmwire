@@ -60,16 +60,17 @@ type wireModelEntry struct {
 // check passes a context with one.
 func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error) {
 	raw, _, timing, err := c.rawCall(ctx, http.MethodGet, routeModels, nil)
-	if err != nil {
+	failed := func(err error) ([]ModelEntry, []Warning, error) {
 		c.log.Warn("llmwire models listing failed", "error", Truncate(c.redact(err.Error()), maxLoggedError),
 			"headers_ms", timing.Headers.Milliseconds(), "total_ms", timing.Total.Milliseconds())
 		return nil, nil, err
 	}
+	if err != nil {
+		return failed(err)
+	}
 	entries, warnings, err := parseModelsResponseWith(c.redact, raw)
 	if err != nil {
-		c.log.Warn("llmwire models listing failed", "error", Truncate(c.redact(err.Error()), maxLoggedError),
-			"headers_ms", timing.Headers.Milliseconds(), "total_ms", timing.Total.Milliseconds())
-		return nil, nil, err
+		return failed(err)
 	}
 	// Not a model call: it goes through no plan, carries no usage and would
 	// only pollute the per-model stats, so it reports on its own line rather
@@ -86,7 +87,7 @@ func parseModelsResponseWith(redact redactor, raw json.RawMessage) ([]ModelEntry
 	}
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return nil, nil, fmt.Errorf("llmwire: %w: decoding models listing: %w (body: %s)",
-			ErrMalformedResponse, err, Truncate(redact(string(raw)), maxErrorBody))
+			ErrMalformedResponse, err, bodySnippet(redact, raw))
 	}
 	if len(w.Error) > 0 && !isJSONNull(w.Error) {
 		return nil, nil, parseAPIErrorWith(redact, 0, raw)
@@ -94,11 +95,11 @@ func parseModelsResponseWith(redact redactor, raw json.RawMessage) ([]ModelEntry
 	var rows []json.RawMessage
 	if len(w.Data) == 0 || isJSONNull(w.Data) {
 		return nil, nil, fmt.Errorf("llmwire: %w: models listing carries no data list (body: %s)",
-			ErrResponseShape, Truncate(redact(string(raw)), maxErrorBody))
+			ErrResponseShape, bodySnippet(redact, raw))
 	}
 	if err := json.Unmarshal(w.Data, &rows); err != nil {
 		return nil, nil, fmt.Errorf("llmwire: %w: models listing data is not a list (body: %s)",
-			ErrResponseShape, Truncate(redact(string(raw)), maxErrorBody))
+			ErrResponseShape, bodySnippet(redact, raw))
 	}
 
 	var warnings []Warning
@@ -152,7 +153,12 @@ func limitField(model, name string, raw json.RawMessage, warnings *[]Warning) *i
 		return unusable("not a number")
 	}
 	// big.Rat rather than ParseFloat: it says exactly whether the value is an
-	// integer, where a float comparison would pass 2^53+1 as one.
+	// integer, where a float comparison would pass 2^53+1 as one. The
+	// grammar check first bounds the exponent: 1e9999999 is a legal JSON
+	// number and an allocation the listing would otherwise get to size.
+	if !finiteDecimal.MatchString(num.String()) {
+		return unusable("not a finite number")
+	}
 	r, ok := new(big.Rat).SetString(num.String())
 	if !ok || !r.IsInt() {
 		return unusable("not an integer")

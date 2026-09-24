@@ -37,7 +37,9 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
 - A demoted (`BestEffort`) refusal must DROP the knob on the coerced request.
 - `Validate` is exported and read-only → the coerced copy is deep.
 - Streaming is a `plan` parameter, never a request field.
-- `ExtraBody` merges last and **wins**; top level only.
+- `ExtraBody` merges last and **wins**; top level only. Four keys are refused
+  in `plan`: `stream`, `stream_options`, `model`, and the cap spelling the
+  profile does not take.
 
 ## Transport
 
@@ -53,7 +55,8 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
   failed/truncated/empty/unaccounted) + `Stats()`. Flat keys, `_ms` ints, never
   prompt/answer/key text. Every new call path ends in `finish`, every error path.
   `ListModels` is the one exception: no plan, no usage, no model, so it logs its
-  own line instead of polluting per-model stats.
+  own line instead of polluting per-model stats. `RawStream`/`RawPost` sit
+  below plan and log nothing: they are the probe suite's entry points.
 - `rawCall(method)` is the only non-streaming exchange; a GET (models listing)
   sends no `Content-Type`. Gateway limits in the listing decode via `limitField`:
   integral float ok, anything else present → nil + `Warning`, never a cast.
@@ -109,7 +112,9 @@ with a named reason. **Hosts live in `profiles.yaml` `providers:`**, never in an
 app's config: an app supplies `LLMWIRE_<PROVIDER>_API_KEY` and nothing else.
 `LLMWIRE_<PROVIDER>_BASE_URL` exists only for a provider that ships no host
 (litellm); beside a shipped host it is **refused** (`StaleEnvError`): no
-override, a different host is a different provider entry. **A gateway is
+override, a different host is a different provider entry. It passes the same
+checks a shipped host does (`validateBaseURL`), with `http://` admitted for
+loopback hosts only. **A gateway is
 env, not profiles**: `LLMWIRE_LITELLM_MODELS=<id>[=<alias>],...` routes listed
 profiles through litellm (`gateway.go` `viaGateway`, same resolve/validate as a
 YAML route); aliases are the operator's, never shipped. Read by `FromEnv` and the evals. `.env` gitignored, loaded under

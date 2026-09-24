@@ -12,7 +12,7 @@ import (
 //
 //	FOUND: A.java:67 draft...),</think>FOUND: svc/A.java:67 the answer
 //
-// With reasoning.leaks_close_tag the text up to the last </think> moves to
+// With reasoning.leaks_close_tag the text up to the FIRST </think> moves to
 // Reasoning and Content keeps the answer.
 func TestChat_StrayCloseTagIsCutWhereTheProfileSaysItLeaks(t *testing.T) {
 	body := `{"model":"mimo-v2.6-flash","choices":[{"finish_reason":"stop",

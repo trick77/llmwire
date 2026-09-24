@@ -8,7 +8,6 @@ import (
 	"io"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -83,10 +82,18 @@ type streamDelta struct {
 
 // reasoningText returns whichever reasoning spelling this endpoint used.
 func (d streamDelta) reasoningText() string {
-	if d.ReasoningContent != "" {
-		return d.ReasoningContent
+	return reasoningSpelling(d.ReasoningContent, d.Reasoning)
+}
+
+// reasoningSpelling picks the reasoning text from the two field names
+// servers use for the same channel: reasoning_content wins if an endpoint
+// somehow sends both. Shared by the stream and the non-streaming decoder so
+// the two cannot disagree.
+func reasoningSpelling(reasoningContent, reasoning string) string {
+	if reasoningContent != "" {
+		return reasoningContent
 	}
-	return d.Reasoning
+	return reasoning
 }
 
 // toolCallDelta is a fragment of a native tool call. Arguments stream as a
@@ -97,10 +104,16 @@ type toolCallDelta struct {
 	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
+		Name string `json:"name"`
+		// Raw for the same reason as the non-streaming shape: a compat
+		// server may send an object fragment where the reference streams
+		// string pieces. argumentsText reads both.
+		Arguments json.RawMessage `json:"arguments"`
 	} `json:"function"`
 }
+
+// argumentsDelta is the fragment's argument text, whichever shape it took.
+func (d toolCallDelta) argumentsDelta() string { return argumentsText(d.Function.Arguments) }
 
 // ToolCall is a completed tool call assembled from its fragments.
 type ToolCall struct {
@@ -142,11 +155,14 @@ type StreamResult struct {
 	Chars  int64
 	// Done records that the endpoint sent [DONE].
 	Done bool
-	// MaxCommentGap is the longest interval during which the endpoint sent
-	// only comment or blank lines and no `data:` frame. Recorded because the
-	// idle guard deliberately does NOT re-arm on those lines, so this is the
-	// margin between that policy and a false abort — the number the transport
-	// probe exists to measure.
+	// MaxCommentGap is the longest interval between two `data:` frames,
+	// measured from the moment the body opened, whatever the endpoint sent in
+	// between: comment lines, blank keepalives, or nothing. Recorded because
+	// the idle guard deliberately does NOT re-arm on non-data lines, so this
+	// is the margin between that policy and a false abort — the number the
+	// transport probe exists to measure. The silence after the last frame is
+	// not in it. It differs from MaxDataGap only in excluding the wait for the
+	// first frame.
 	MaxCommentGap time.Duration
 	// Timing is set on the error path too: a stream cut mid-answer still has
 	// a measured Total, and that figure beside the named bound in the error is
@@ -160,7 +176,8 @@ type StreamResult struct {
 	// Gateway is what the proxy said in its headers. A stream carries no cost
 	// there, but the call id and the deployment still arrive.
 	Gateway Gateway
-	// Bytes counts the SSE payload read, data lines and comments alike.
+	// Bytes counts the SSE lines read, data lines and comments alike, without
+	// their line terminators.
 	Bytes int64
 }
 
@@ -168,14 +185,6 @@ type StreamResult struct {
 // stream, toolIdle replacing it once a tool call is underway (zero: no change).
 type streamBounds struct {
 	idle, toolIdle time.Duration
-}
-
-// streamCounters are the live counts a heartbeat can read while the stream is
-// still being consumed. Atomic because the reader goroutine writes them while
-// another goroutine reads.
-type streamCounters struct {
-	events atomic.Int64
-	chars  atomic.Int64
 }
 
 // streamEvent is one increment the reader hands onward. Every channel the parser
@@ -223,7 +232,7 @@ const (
 // from the caller so every Timing figure shares one clock and one origin. Total
 // is written on every return, the error ones included, which is what the named
 // result and the deferred write are for.
-func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bounds streamBounds, sink func(streamEvent), redact redactor, recover bool, now func() time.Time, start time.Time) (res StreamResult, warnings []Warning, err error) {
+func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink func(streamEvent), redact redactor, recover bool, now func() time.Time, start time.Time) (res StreamResult, warnings []Warning, err error) {
 	defer func() { res.Timing.Total = now().Sub(start) }()
 	var (
 		content   strings.Builder
@@ -288,6 +297,10 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bou
 	// have gone out: a consumer that stops at EventFinish would otherwise never
 	// see them, since finish_reason arrives before the tail is parsed.
 	var heldFinish *streamEvent
+	// frameErr is an error the endpoint sent as a frame inside the 200. It
+	// ends the scan but not the assembly: what arrived before it is still
+	// returned beside it, since Collect promises the paid-for partial.
+	var frameErr error
 
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 64<<10), maxStreamLine)
@@ -301,7 +314,7 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bou
 	for sc.Scan() {
 		res.Bytes += int64(len(sc.Bytes()))
 		line := strings.TrimRight(sc.Text(), "\r")
-		if line == "" || !strings.HasPrefix(line, dataPrefix) {
+		if !strings.HasPrefix(line, dataPrefix) {
 			// Deliberately no guard.arm here. See the doc comment.
 			continue
 		}
@@ -325,7 +338,7 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bou
 		// Counted per event rather than per line: an event is "data:…" plus a
 		// blank separator, so counting lines reports double, and a log saying
 		// 824 for a 412-chunk stream is one nobody can reconcile.
-		res.Events = counters.events.Add(1)
+		res.Events++
 
 		payload := strings.TrimSpace(strings.TrimPrefix(line, dataPrefix))
 		if payload == doneMarker {
@@ -342,7 +355,8 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bou
 		// frame carries no choices, so ignoring it yields a clean empty stream
 		// and the caller reports success with no answer.
 		if len(chunk.Error) > 0 && !isJSONNull(chunk.Error) {
-			return res, nil, parseAPIErrorWith(redact, 0, chunk.Error)
+			frameErr = parseAPIErrorWith(redact, 0, chunk.Error)
+			break
 		}
 
 		for _, ch := range chunk.Choices {
@@ -351,7 +365,7 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bou
 				// Runes, not bytes: these endpoints return non-ASCII routinely,
 				// and a count inflated by UTF-8 encoding misreads as more
 				// output than the model produced.
-				res.Chars = counters.chars.Add(int64(utf8.RuneCountInString(ch.Delta.Content)))
+				res.Chars += int64(utf8.RuneCountInString(ch.Delta.Content))
 			}
 			if r := ch.Delta.reasoningText(); r != "" {
 				gated(reasoningGate, evReasoning, r, &reasoning)
@@ -377,7 +391,7 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bou
 				if tc.Function.Name != "" {
 					acc.Name = tc.Function.Name
 				}
-				acc.Arguments += tc.Function.Arguments
+				acc.Arguments += tc.argumentsDelta()
 			}
 			if ch.FinishReason != "" {
 				res.FinishReason = ch.FinishReason
@@ -405,8 +419,15 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bou
 		res.ToolCalls = append(res.ToolCalls, *tools[i])
 	}
 
+	if frameErr != nil {
+		return res, nil, frameErr
+	}
+	// A scanner failure is a stream cut short: a line past the cap, a body
+	// that ended mid-line. Wrapped in the sentinel a caller dispatches on for
+	// "the endpoint did not finish", the same one the missing-finish case
+	// below carries.
 	if err := sc.Err(); err != nil {
-		return res, nil, err
+		return res, nil, fmt.Errorf("llmwire: %w: reading stream: %w", ErrMalformedResponse, err)
 	}
 	if !res.Done && res.FinishReason == "" {
 		return res, nil, fmt.Errorf("llmwire: %w: stream ended after %d events (%d chars) without finish_reason or %s",
@@ -434,7 +455,9 @@ func readStream(body io.Reader, guard *stallGuard, counters *streamCounters, bou
 	for i, call := range rec.calls {
 		var tc toolCallDelta
 		tc.Index, tc.ID, tc.Type = i, call.ID, call.Type
-		tc.Function.Arguments = call.Arguments
+		// A recovered call is already text; encoded as the JSON string the
+		// wire would have carried so the delta reads like a native one.
+		tc.Function.Arguments, _ = json.Marshal(call.Arguments)
 		// The first call's name already went out under this id from the channel
 		// it was recovered from; a consumer that assigns names on first sight
 		// has it. From the other channel it is named again (see earlyName).

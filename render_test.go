@@ -380,23 +380,12 @@ func TestRender_ToolsAndFormats(t *testing.T) {
 	}
 }
 
-// A forced function choice is an object, not a string. Sent here through a
-// synthetic profile that accepts it, since no registry model does.
+// A forced function choice is an object, not a string, and is admitted by
+// supports_forced_choice rather than by a "function" entry in the string
+// list. Sent through a shipped profile that declares the bit.
 func TestRender_ForcedFunctionChoice(t *testing.T) {
-	reg := registryFrom(t, `profiles:
-  - id: forcer
-    wire_model_id: forcer
-    max_tokens_param: max_tokens
-    verified: source-derived
-    tools:
-      supported: true
-      format: native
-      tool_choice_values: [auto, required, function]
-      supports_forced_choice: true
-    streaming: {supported: true, accepts_stream_options: true}
-`)
-	body := renderFor(t, testClient(t, reg), ChatRequest{
-		Model:      "forcer",
+	body := renderFor(t, testClient(t, nil), ChatRequest{
+		Model:      "gpt-5.4",
 		Messages:   []Message{User("hi")},
 		Tools:      []Tool{{Name: "search"}},
 		ToolChoice: ToolChoice{Mode: ToolChoiceFunction, Name: "search"},

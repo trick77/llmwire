@@ -543,3 +543,128 @@ func TestChatStream_AGatewayStreamWithoutTheFieldStaysUnpriced(t *testing.T) {
 		t.Fatalf("cost = %+v, want unpriced", res.Usage.Cost)
 	}
 }
+
+// A caller who Closes after EventFinish has, on an endpoint that sends usage
+// in the finish chunk, already been handed the figures. The call was paid for,
+// so it is priced: skipping the pricing on a deliberate close left the cost at
+// the zero value Unpriced with no warning, against the rule that Unpriced
+// always warns.
+func TestChatStream_EarlyCloseStillPricesReportedUsage(t *testing.T) {
+	srv := flushingServer(t, []string{
+		`data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`,
+		`data: {"choices":[{"delta":{"content":"late"}}]}`,
+		`data: {"choices":[{"delta":{"content":"later"}}]}`,
+	}, 20*time.Millisecond)
+
+	s, _, err := streamClient(t, srv, 5*time.Second).ChatStream(context.Background(), hiRequest())
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	for s.Next() {
+		if s.Event().Kind == EventFinish {
+			break
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	res := s.Result()
+	if !res.Usage.Reported() {
+		t.Fatal("usage that arrived with the finish chunk was lost on Close")
+	}
+	if res.Usage.Cost.Provenance != FromTable || res.Usage.Cost.NanoUSD == 0 {
+		t.Errorf("cost = %+v, want a table price for usage the stream had already reported", res.Usage.Cost)
+	}
+}
+
+// A closed stream that carried no usage at all is still reported as Unpriced
+// WITH the warning, on Warnings(): the zero cost is never silent.
+func TestChatStream_EarlyCloseWithoutUsageWarnsUnpriced(t *testing.T) {
+	lines := make([]string, 0, 20)
+	for i := 0; i < 20; i++ {
+		lines = append(lines, `data: {"choices":[{"delta":{"content":"x"}}]}`)
+	}
+	srv := flushingServer(t, lines, 20*time.Millisecond)
+	s, _, err := streamClient(t, srv, 5*time.Second).ChatStream(context.Background(), hiRequest())
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if !s.Next() {
+		t.Fatalf("no first event: %v", s.Err())
+	}
+	_ = s.Close()
+	var found bool
+	for _, w := range s.Warnings() {
+		if w.Feature == "cost" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %v, want the Unpriced warning on a closed stream that reported no usage", s.Warnings())
+	}
+}
+
+// The error frame ends the scan, not the assembly: what arrived before it is
+// returned beside the error, as Collect promises for every other cut.
+func TestChatStream_ErrorFrameKeepsThePartialResult(t *testing.T) {
+	srv := flushingServer(t, []string{
+		`data: {"choices":[{"delta":{"content":"partial"}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"f","arguments":"{}"}}]}}]}`,
+		`data: {"error":{"message":"upstream exploded","code":"1210"}}`,
+	}, 0)
+	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	defer s.Close()
+	res, err := s.Collect(nil)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "1210" {
+		t.Fatalf("err = %v, want the frame's *APIError", err)
+	}
+	if res.Content != "partial" || len(res.ToolCalls) != 1 || res.ToolCalls[0].Name != "f" {
+		t.Errorf("result = %+v, want the content and the tool call that arrived before the error", res)
+	}
+}
+
+// The warnings ChatStream returns are the caller's own: appending to them
+// must not race the reader appending pricing warnings to the stream's copy.
+// Caught by -race when the two shared one backing array.
+func TestChatStream_ReturnedWarningsAreTheCallersOwn(t *testing.T) {
+	srv := flushingServer(t, []string{
+		`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+		"data: [DONE]",
+	}, 0)
+	// A request that produces a validation warning, so the slice has content
+	// and spare capacity.
+	req := hiRequest()
+	req.ToolChoice = ToolChoice{Mode: ToolChoiceAuto}
+	s, warnings, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	defer s.Close()
+	if len(warnings) == 0 {
+		t.Fatal("expected a validation warning to start from")
+	}
+	for i := 0; i < 8; i++ {
+		warnings = append(warnings, Warning{Kind: WarnOther, Feature: "caller"})
+	}
+	for s.Next() {
+	}
+	got := s.Warnings()
+	for _, w := range got {
+		if w.Feature == "caller" {
+			t.Fatal("the caller's append reached the stream's own warnings")
+		}
+	}
+	// And the other way: the caller's copy of Warnings() is theirs too. The
+	// append is to the returned slice's backing array, and the check is
+	// whether the stream saw it.
+	_ = append(got, Warning{Feature: "caller"})
+	for _, w := range s.Warnings() {
+		if w.Feature == "caller" {
+			t.Fatal("appending to Warnings() wrote into the stream")
+		}
+	}
+}
