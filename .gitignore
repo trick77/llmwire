@@ -1,3 +1,6 @@
 coverage/
 .env
 .claude/
+
+# Local git worktrees
+.agents/worktrees/
