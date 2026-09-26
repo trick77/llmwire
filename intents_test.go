@@ -472,6 +472,8 @@ func TestNewRegistry_IntentFieldRules(t *testing.T) {
 `, "turbo"},
 		{"balanced outside the set", head + `    reasoning: {supported: true, enabled_by_default: true, control: effort, effort_values: [low, high], balanced: medium}
 `, "balanced"},
+		{"overhead none is read as off", head + `    reasoning: {supported: true, enabled_by_default: true, can_be_disabled: true, control: effort, effort_values: [none, low], overhead: {none: 300}}
+`, `"off"`},
 		{"balanced none is off, not balanced", head + `    reasoning: {supported: true, enabled_by_default: true, can_be_disabled: true, control: effort, effort_values: [none, low], balanced: none}
 `, "balanced"},
 		{"overhead for a level the model does not take", head + `    reasoning: {supported: true, enabled_by_default: true, control: effort, effort_values: [low, high], overhead: {medium: 10}}
