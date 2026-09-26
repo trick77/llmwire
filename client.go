@@ -143,9 +143,17 @@ type Client struct {
 	now       func() time.Time
 	registry  *Registry
 	log       *slog.Logger
-	stats     stats
+	// stats is shared by a FromEnvModels client and its per-provider clients,
+	// so one Stats() covers every host.
+	stats *stats
 	// session is non-nil only under EmulateOpenCode.
 	session *session
+
+	// serving, when non-nil, is the only models this client takes; routes,
+	// when non-nil, sends each of them to its provider's client. Both are
+	// FromEnvModels'; a New or FromEnv client serves any model on its host.
+	serving map[string]bool
+	routes  map[string]*Client
 }
 
 // New builds a Client.
@@ -211,6 +219,7 @@ func New(cfg Config) *Client {
 		now:       cfg.Now,
 		registry:  cfg.Registry,
 		log:       cfg.Logger,
+		stats:     &stats{},
 	}
 	if cfg.EmulateOpenCode {
 		c.session = newSession(cfg.Now)
@@ -264,95 +273,140 @@ func FromEnv(model string, cfg Config) (*Client, error) {
 		c.logSettings(model, p, "")
 		return c, nil
 	}
-	lookup := cfg.Lookup
+	get := envGetter(cfg.Lookup)
+	reg, routed, err := routeGateway(reg, get)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Registry = reg
+	ep, err := envEndpoint(model, cfg, get, routed)
+	if err != nil {
+		return nil, err
+	}
+	if len(ep.missing) > 0 {
+		return nil, ep.missing[0]
+	}
+	c := New(ep.cfg)
+	c.logSettings(model, ep.profile, ep.keyVar)
+	return c, nil
+}
+
+// envGetter reads a variable through cfg.Lookup, or the process environment.
+// Trimmed: a whitespace-only value (a stray `export X= ` in a .env) would
+// otherwise build a client that fails later with an opaque dial or 401 instead
+// of the named error.
+func envGetter(lookup func(string) (string, bool)) func(string) string {
 	if lookup == nil {
 		lookup = os.LookupEnv
 	}
-	// Trimmed: a whitespace-only value (a stray `export X= ` in a .env) would
-	// otherwise build a client that fails later with an opaque dial or 401
-	// instead of the named error here.
-	get := func(name string) string {
+	return func(name string) string {
 		v, _ := lookup(name)
 		return strings.TrimSpace(v)
 	}
-	// The gateway list is read before the provider is: a listed model's
-	// provider IS the gateway, and everything below (host variable, key
-	// variable, identity) follows from that. The registry is copied, never
-	// mutated: Default() is shared by every caller in the process.
-	if v := get(GatewayModelsEnv); v != "" {
-		routes, err := parseGatewayModels(v)
-		if err != nil {
-			return nil, err
-		}
-		// The whole list is routed, not only the model being built: a typo in
-		// the list would otherwise route THIS model to its vendor, with the
-		// vendor's key if one happens to be set, and the gateway would be
-		// bypassed without a line of output saying so; and a client built for
-		// one listed model is reused for the others on the same host.
-		if reg, err = reg.viaGateway(routes); err != nil {
-			return nil, err
-		}
-		cfg.Registry = reg
-		if p, err = reg.Lookup(model); err != nil {
-			return nil, err
-		}
-		// A key the caller set is the vendor's: the application configured it
-		// for the host its profile shipped. Sending it to the gateway would
-		// hand a vendor secret to another host and be answered with a 401
-		// whose log line says only "config".
-		if p.Gateway != "" && cfg.APIKey != "" {
-			return nil, fmt.Errorf("llmwire: model %q is routed through the gateway by %s, but Config.APIKey is set; the gateway's key is %s",
-				model, GatewayModelsEnv, p.APIKeyEnv())
-		}
+}
+
+// routeGateway applies GatewayModelsEnv, if set, to a copy of reg. It runs
+// before any provider is read: a listed model's provider IS the gateway, and
+// everything after (host variable, key variable, identity) follows from that.
+// The registry is copied, never mutated: Default() is shared by every caller
+// in the process.
+//
+// The whole list is routed, not only the model being built: a typo in the list
+// would otherwise route THIS model to its vendor, with the vendor's key if one
+// happens to be set, and the gateway would be bypassed without a line of
+// output saying so; and a client built for one listed model is reused for the
+// others on the same host.
+func routeGateway(reg *Registry, get func(string) string) (*Registry, bool, error) {
+	v := get(GatewayModelsEnv)
+	if v == "" {
+		return reg, false, nil
 	}
+	routes, err := parseGatewayModels(v)
+	if err != nil {
+		return nil, false, err
+	}
+	if reg, err = reg.viaGateway(routes); err != nil {
+		return nil, false, err
+	}
+	return reg, true, nil
+}
+
+// envResolved is one model's endpoint as the environment describes it.
+type envResolved struct {
+	cfg     Config
+	profile *Profile
+	keyVar  string
+	// missing is every unset variable this model needs, host first, so
+	// FromEnv reports the one it always reported and FromEnvModels all of
+	// them.
+	missing []error
+}
+
+// envEndpoint resolves one model's host, key and identity from the
+// environment, on cfg.Registry (already gateway-routed). A variable that is set
+// wrong is the error; one that is unset lands in missing.
+func envEndpoint(model string, cfg Config, get func(string) string, routed bool) (envResolved, error) {
+	p, err := cfg.Registry.Lookup(model)
+	if err != nil {
+		return envResolved{}, err
+	}
+	// A key the caller set is the vendor's: the application configured it
+	// for the host its profile shipped. Sending it to the gateway would
+	// hand a vendor secret to another host and be answered with a 401
+	// whose log line says only "config".
+	if routed && p.Gateway != "" && cfg.APIKey != "" {
+		return envResolved{}, fmt.Errorf("llmwire: model %q is routed through the gateway by %s, but Config.APIKey is set; the gateway's key is %s",
+			model, GatewayModelsEnv, p.APIKeyEnv())
+	}
+	out := envResolved{profile: p}
 	if p.Provider == "" {
-		return nil, &MissingEnvError{Model: model}
+		out.missing = append(out.missing, &MissingEnvError{Model: model})
+		return out, nil
 	}
 	cfg.BaseURL = p.BaseURL
 	if v := get(p.BaseURLEnv()); v != "" {
 		if p.BaseURL != "" {
-			return nil, &StaleEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()}
+			return envResolved{}, &StaleEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()}
 		}
 		// The same checks a shipped host passes at load, so a key in a query
 		// string or a route suffix fails here by name rather than as a 404 or
 		// an echoed credential. Plain http is admitted for a host on this
 		// machine only, which is where a self-hosted gateway usually is.
 		if err := validateBaseURL(v, true); err != nil {
-			return nil, fmt.Errorf("llmwire: %s: %w", p.BaseURLEnv(), err)
+			return envResolved{}, fmt.Errorf("llmwire: %s: %w", p.BaseURLEnv(), err)
 		}
 		cfg.BaseURL = v
 	}
 	if cfg.BaseURL == "" {
-		return nil, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()}
-	}
-	// The identity follows the host: a provider sold as opencode's backend
-	// gets that client string without every application knowing to ask. An
-	// explicit cfg.BaseURL returned above and gets nothing: the caller is
-	// wiring the endpoint itself, identity included.
-	if p.EmulateOpenCode {
-		cfg.EmulateOpenCode = true
-	}
-	if v := get(EmulateOpenCodeEnv); v != "" {
-		on, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("llmwire: %s=%q is not a boolean", EmulateOpenCodeEnv, v)
-		}
-		if on {
+		out.missing = append(out.missing, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.BaseURLEnv()})
+	} else {
+		// The identity follows the host: a provider sold as opencode's backend
+		// gets that client string without every application knowing to ask. An
+		// explicit cfg.BaseURL never gets here and gets nothing: the caller is
+		// wiring the endpoint itself, identity included.
+		if p.EmulateOpenCode {
 			cfg.EmulateOpenCode = true
 		}
-	}
-	keyVar := ""
-	if cfg.APIKey == "" && !p.NoAPIKey {
-		v := get(p.APIKeyEnv())
-		if v == "" {
-			return nil, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.APIKeyEnv()}
+		if v := get(EmulateOpenCodeEnv); v != "" {
+			on, err := strconv.ParseBool(v)
+			if err != nil {
+				return envResolved{}, fmt.Errorf("llmwire: %s=%q is not a boolean", EmulateOpenCodeEnv, v)
+			}
+			if on {
+				cfg.EmulateOpenCode = true
+			}
 		}
-		cfg.APIKey = v
-		keyVar = p.APIKeyEnv()
 	}
-	c := New(cfg)
-	c.logSettings(model, p, keyVar)
-	return c, nil
+	if cfg.APIKey == "" && !p.NoAPIKey {
+		if v := get(p.APIKeyEnv()); v == "" {
+			out.missing = append(out.missing, &MissingEnvError{Model: model, Provider: p.Provider, Var: p.APIKeyEnv()})
+		} else {
+			cfg.APIKey = v
+			out.keyVar = p.APIKeyEnv()
+		}
+	}
+	out.cfg = cfg
+	return out, nil
 }
 
 // logSettings is the one line FromEnv writes: everything an operator asks
@@ -428,6 +482,9 @@ func (c *Client) Now() time.Time { return c.now() }
 // onDelta, when non-nil, is called for each content fragment as it arrives. It
 // runs on the reading goroutine, so it must not block.
 func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string)) (StreamResult, error) {
+	if c.routes != nil {
+		return StreamResult{}, c.errSeveralHosts("RawStream")
+	}
 	// Two nested contexts, because their failures mean different things and the
 	// error has to say which: callCtx is the overall cap, reqCtx is what the
 	// stallGuard cancels. Cancelling reqCtx leaves callCtx's deadline intact so
@@ -497,6 +554,9 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 // The headers are returned because a gateway reports per-call spend and the
 // real deployment name there and nowhere else.
 func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.RawMessage, http.Header, error) {
+	if c.routes != nil {
+		return nil, nil, c.errSeveralHosts("RawPost")
+	}
 	raw, hdr, _, err := c.rawPost(ctx, route, body)
 	return raw, hdr, err
 }

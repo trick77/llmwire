@@ -179,6 +179,9 @@ type StreamResult struct {
 	// Bytes counts the SSE lines read, data lines and comments alike, without
 	// their line terminators.
 	Bytes int64
+	// ReasoningSent is the reasoning knob the request put on the wire, as on
+	// ChatResponse. Empty from RawStream, which sits below the plan.
+	ReasoningSent string
 }
 
 // streamBounds are the idle bounds a stream runs under: idle for the whole

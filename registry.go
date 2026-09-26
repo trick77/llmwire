@@ -232,6 +232,11 @@ func applyDefaults(p *Profile) {
 	if p.WireModelID == "" {
 		p.WireModelID = p.ID
 	}
+	if p.DisplayName == "" {
+		// A document from before the field still loads; the shipped one sets
+		// every label (TestDefault_EveryProfileHasADisplayName).
+		p.DisplayName = p.ID
+	}
 	if p.Verified == "" {
 		p.Verified = VerifiedSource
 	}
