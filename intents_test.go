@@ -373,6 +373,47 @@ func TestMaxAnswerTokens_ClampNeverCutsIntoABudget(t *testing.T) {
 	}
 }
 
+// A budget dropped for leaving no room is dropped before anything reads
+// whether the request thinks: the sampling warning must describe the request
+// that is sent, not the one that was asked for.
+func TestMaxAnswerTokens_BudgetDropPrecedesTheThinkingChecks(t *testing.T) {
+	c := testClient(t, registryFrom(t, `profiles:
+  - id: b
+    display_name: B
+    wire_model_id: b
+    max_tokens_param: max_tokens
+    reasoning: {supported: true, enabled_by_default: false, can_be_disabled: true, control: budget_tokens, budget_param: thinking_budget}
+    temperature: {supported: true, inert_while_reasoning: true}
+    limits: {context: 200000, max_output: 16384}
+`))
+	pl, warnings, err := c.plan(ChatRequest{Model: "b", Messages: []Message{User("hi")},
+		Reasoning: ReasoningBudget(20000), MaxAnswerTokens: ptr(500), Temperature: f64(0.3), BestEffort: true}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pl.req.Reasoning != nil {
+		t.Errorf("reasoning = %#v, want the budget dropped", pl.req.Reasoning)
+	}
+	if pl.req.Temperature == nil || *pl.req.Temperature != 0.3 {
+		t.Errorf("temperature = %v, want 0.3 sent", pl.req.Temperature)
+	}
+	var dropped bool
+	for _, w := range warnings {
+		if w.Feature == "temperature" {
+			t.Errorf("warned %v, but the request sent does not think", w)
+		}
+		if w.Feature == "reasoning" && strings.Contains(w.Details, "no room") {
+			dropped = true
+		}
+	}
+	if !dropped {
+		t.Errorf("warnings = %v, want the budget drop named", warnings)
+	}
+	if *pl.req.MaxTokens != 500 {
+		t.Errorf("wire cap = %d, want 500: thinking is off by default once the budget is gone", *pl.req.MaxTokens)
+	}
+}
+
 // ReasoningSent names what went on the wire, so two requests that render the
 // same body read the same.
 func TestReasoningLabel_IsTheWireMeaning(t *testing.T) {

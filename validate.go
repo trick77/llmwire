@@ -200,11 +200,13 @@ func (c *Client) plan(req ChatRequest, stream bool) (*wirePlan, []Warning, error
 
 	v.checkMessages(req)
 	v.checkReasoning(req)
+	v.checkBudgetRoom(req)
 	// Whether this REQUEST will reason, not merely whether the model reasons by
 	// default. The two differ exactly when the caller said something, which is
 	// the case the inert-parameter warning is about. Computed from the COERCED
-	// request, after checkReasoning, because that check may just have dropped the
-	// caller's knob under BestEffort. A caller who asked a glm-5.3-flash to stop
+	// request, after checkReasoning and checkBudgetRoom, because either may just
+	// have dropped the caller's knob under BestEffort. Nothing after this line
+	// changes v.out.Reasoning. A caller who asked a glm-5.3-flash to stop
 	// thinking and was demoted still gets a thinking model, so their temperature
 	// really is inert — and reading the original request would say the opposite.
 	v.reasoningActive = reasoningActive(v.out.Reasoning, p.Reasoning)

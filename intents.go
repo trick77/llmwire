@@ -84,6 +84,27 @@ func overheadOr(r Reasoning, level string, def int) int {
 	return def
 }
 
+// checkBudgetRoom refuses a reasoning budget that leaves an answer budget no
+// room under max_output. A budget is a hard allotment, not an estimate, and a
+// budget endpoint refuses a completion cap at or below it, so no clamp can
+// save the request. Runs right after checkReasoning and before plan derives
+// reasoningActive: a BestEffort drop here changes whether the request thinks,
+// and every check that asks must see the request as it will be sent.
+//
+// Only for a well-formed answer budget; checkAnswerBudget rejects the rest.
+func (v *validation) checkBudgetRoom(req ChatRequest) {
+	if req.MaxAnswerTokens == nil || req.MaxTokens != nil || *req.MaxAnswerTokens <= 0 {
+		return
+	}
+	b, ok := v.out.Reasoning.(reasoningBudget)
+	max := v.profile.Limits.MaxOutput
+	if !ok || b.tokens <= 0 || max <= 0 || int64(b.tokens) < max {
+		return
+	}
+	v.refuseOrDrop("reasoning", fmt.Sprintf("a reasoning budget of %d leaves no room for an answer "+
+		"under this model's output limit of %d", b.tokens, max), nil)
+}
+
 // checkAnswerBudget turns MaxAnswerTokens into the wire cap. Runs after
 // checkReasoning, so the overhead is that of the knob actually going out,
 // BestEffort drops included.
@@ -102,21 +123,13 @@ func (v *validation) checkAnswerBudget(req ChatRequest) {
 		return
 	}
 	max := v.profile.Limits.MaxOutput
-	// A budget is a hard allotment, not an estimate: a budget endpoint refuses
-	// a completion cap at or below it, so the clamp below must never reach it.
-	if b, ok := v.out.Reasoning.(reasoningBudget); ok && b.tokens > 0 && max > 0 {
-		switch {
-		case int64(b.tokens) >= max:
-			if v.refuse("reasoning", fmt.Sprintf("a reasoning budget of %d leaves no room for an answer "+
-				"under this model's output limit of %d", b.tokens, max), nil) {
-				return
-			}
-			v.dropReasoning()
-		case int64(answer) <= max && int64(answer)+int64(b.tokens) > max:
-			v.warn(WarnCompatibility, "max_answer_tokens",
-				fmt.Sprintf("budget %d plus answer %d exceed the output limit of %d; the answer gets %d",
-					b.tokens, answer, max, max-int64(b.tokens)))
-		}
+	// A budget with no room at all was refused or dropped by checkBudgetRoom;
+	// one that squeezes the answer is said here.
+	if b, ok := v.out.Reasoning.(reasoningBudget); ok && b.tokens > 0 && max > 0 &&
+		int64(answer) <= max && int64(answer)+int64(b.tokens) > max {
+		v.warn(WarnCompatibility, "max_answer_tokens",
+			fmt.Sprintf("budget %d plus answer %d exceed the output limit of %d; the answer gets %d",
+				b.tokens, answer, max, max-int64(b.tokens)))
 	}
 	wire := int64(answer) + int64(reasoningOverhead(v.out.Reasoning, v.profile.Reasoning))
 	if max > 0 {
