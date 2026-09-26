@@ -359,7 +359,10 @@ func TestFromEnv_logsItsSettings(t *testing.T) {
 	}
 	for _, want := range []string{
 		"model=mimo-v2.5-pro", "provider=mimo", "base_url=https://token-plan-sgp.xiaomimimo.com/v1",
-		"api_key=LLMWIRE_MIMO_API_KEY", "emulate_opencode=true", "header_timeout=",
+		"api_key=LLMWIRE_MIMO_API_KEY", "emulate_opencode=true",
+		// Integer ms: a raw Duration prints "1m0s" here and nanoseconds under
+		// a JSON handler.
+		"header_timeout_ms=60000", "idle_timeout_ms=90000", "call_timeout_ms=900000",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %s", want, got)
