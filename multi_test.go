@@ -171,6 +171,12 @@ func TestFromEnvModels_RefusesAModelItWasNotGiven(t *testing.T) {
 	if _, _, err := c.ListModels(context.Background()); err == nil || !strings.Contains(err.Error(), "ForModel") {
 		t.Errorf("ListModels on the multi-model client: err = %v", err)
 	}
+	if _, err := c.RawStream(context.Background(), []byte(`{}`), nil); err == nil || !strings.Contains(err.Error(), "ForModel") {
+		t.Errorf("RawStream on the multi-model client: err = %v", err)
+	}
+	if _, _, err := c.RawPost(context.Background(), routeChat, []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "ForModel") {
+		t.Errorf("RawPost on the multi-model client: err = %v", err)
+	}
 }
 
 func TestFromEnvModels_NamesEveryMissingVariable(t *testing.T) {
