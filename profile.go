@@ -737,12 +737,15 @@ func checkEffortOrder(bad func(string, ...any) error, values []string) error {
 
 // checkOverhead refuses a figure nothing would read: a level the model does not
 // take, "off" on a model that cannot be switched off, "default" on one that does
-// not think unasked.
+// not think unasked, "none" anywhere: effort none is the off switch, and its
+// overhead is read from "off".
 func (r Reasoning) checkOverhead(bad func(string, ...any) error) error {
 	for _, level := range sortedKeys(r.Overhead) {
 		switch n := r.Overhead[level]; {
 		case n < 0:
 			return bad("overhead %q is %d; a reasoning allowance cannot be negative", level, n)
+		case level == "none":
+			return bad(`overhead names "none", which is the off switch and is read from "off"; key it "off"`)
 		case level == "off" && !r.CanBeDisabled,
 			level == "default" && !r.EnabledByDefault,
 			level != "off" && level != "default" && !r.Accepts(level):
