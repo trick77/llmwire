@@ -43,6 +43,8 @@ const (
 	// ChatModel reasons by effort level, can be switched off, and takes tools,
 	// images, both JSON formats and streaming.
 	ChatModel = "llmwiretest-chat"
+	// BudgetModel takes reasoning as a token budget and can be switched off.
+	BudgetModel = "llmwiretest-budget"
 	// EmbedModel returns EmbedDimensions-long vectors.
 	EmbedModel = "llmwiretest-embed"
 
@@ -69,7 +71,7 @@ var (
 	reg     *llmwire.Registry
 )
 
-// Registry returns the registry holding ChatModel and EmbedModel. Shared and
+// Registry returns the registry holding the synthetic models. Shared and
 // read-only, like llmwire.Default.
 func Registry() *llmwire.Registry {
 	regOnce.Do(func() {
@@ -110,8 +112,11 @@ func (r Request) MaxTokens() (int, bool) {
 	return 0, false
 }
 
-// Reasoning is the reasoning knob the call carried, in ReasoningSent's
-// vocabulary: "off", a level, "budget:<n>", or "" when none was sent.
+// Reasoning is the reasoning knob the call carried, in exactly ReasoningSent's
+// vocabulary, so srv.Last().Reasoning() == resp.ReasoningSent for every
+// variant: "off" (the toggle, effort "none", a zero budget), a level,
+// "budget:<n>", or "" when none was sent. The budget's wire key is read off the
+// model's profile in Registry(), since vendors disagree on its name.
 func (r Request) Reasoning() string {
 	if t, ok := r.Body["thinking"].(map[string]any); ok && t["type"] == "disabled" {
 		return "off"
@@ -121,6 +126,14 @@ func (r Request) Reasoning() string {
 			return "off"
 		}
 		return e
+	}
+	if p, err := Registry().Lookup(r.Model()); err == nil && p.Reasoning.BudgetParam != "" {
+		if n, ok := r.Body[p.Reasoning.BudgetParam].(float64); ok {
+			if n == 0 {
+				return "off"
+			}
+			return fmt.Sprintf("budget:%d", int(n))
+		}
 	}
 	return ""
 }

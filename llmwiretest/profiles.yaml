@@ -41,6 +41,20 @@ profiles:
       source_url: https://llmwiretest.invalid/pricing
       verified_on: 2026-01-01
 
+  - id: llmwiretest-budget
+    display_name: llmwiretest Budget
+    provider: llmwiretest
+    verified: source-derived
+    max_tokens_param: max_tokens
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: true
+      control: budget_tokens
+      budget_param: thinking_budget
+    streaming: {supported: true, accepts_stream_options: true}
+    limits: {context: 128000, max_output: 16384}
+
   - id: llmwiretest-embed
     display_name: llmwiretest Embed
     endpoint: embeddings

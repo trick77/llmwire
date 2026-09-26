@@ -11,6 +11,38 @@ import (
 // What a consuming module's test looks like: intents in, intents asserted, no
 // real model id, wire spelling or rate anywhere.
 
+// The recorded request reads back in ReasoningSent's vocabulary, every
+// variant, on both reasoning controls the synthetic models use.
+func TestRecordedReasoningMatchesReasoningSent(t *testing.T) {
+	srv := llmwiretest.NewServer(t)
+	c := srv.Client()
+	for _, tc := range []struct {
+		model string
+		r     llmwire.ReasoningRequest
+	}{
+		{llmwiretest.ChatModel, nil},
+		{llmwiretest.ChatModel, llmwire.ReasoningOff()},
+		{llmwiretest.ChatModel, llmwire.ReasoningEffort("none")},
+		{llmwiretest.ChatModel, llmwire.ReasoningEffort("high")},
+		{llmwiretest.ChatModel, llmwire.ReasoningMinimal()},
+		{llmwiretest.ChatModel, llmwire.ReasoningBalanced()},
+		{llmwiretest.BudgetModel, llmwire.ReasoningBudget(300)},
+		{llmwiretest.BudgetModel, llmwire.ReasoningBudget(0)},
+		{llmwiretest.BudgetModel, llmwire.ReasoningOff()},
+		{llmwiretest.BudgetModel, nil},
+	} {
+		resp, _, err := c.Chat(context.Background(), llmwire.ChatRequest{
+			Model: tc.model, Messages: []llmwire.Message{llmwire.User("hi")}, Reasoning: tc.r,
+		})
+		if err != nil {
+			t.Fatalf("%s %#v: %v", tc.model, tc.r, err)
+		}
+		if got := srv.Last().Reasoning(); got != resp.ReasoningSent {
+			t.Errorf("%s %#v: recorded %q, ReasoningSent %q", tc.model, tc.r, got, resp.ReasoningSent)
+		}
+	}
+}
+
 func TestIntentsAreObservable(t *testing.T) {
 	srv := llmwiretest.NewServer(t)
 	c := srv.Client()
