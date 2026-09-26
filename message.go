@@ -373,6 +373,7 @@ type ChatResponse struct {
 	Gateway Gateway
 	// ReasoningSent is the reasoning knob this call put on the wire, intents
 	// resolved: "off", an effort level, "budget:<tokens>", or "" when nothing
-	// was sent and the model ran at its own default.
+	// was sent and the model ran at its own default. Named by wire meaning:
+	// effort "none" and a zero budget are the off switch and read "off".
 	ReasoningSent string
 }

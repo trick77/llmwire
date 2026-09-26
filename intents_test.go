@@ -331,6 +331,68 @@ func TestMaxAnswerTokens_StructuralRejections(t *testing.T) {
 	}
 }
 
+// A budget endpoint refuses a completion cap at or below the budget, so the
+// clamp to max_output must never cut into it.
+func TestMaxAnswerTokens_ClampNeverCutsIntoABudget(t *testing.T) {
+	c := testClient(t, registryFrom(t, `profiles:
+  - id: b
+    display_name: B
+    wire_model_id: b
+    max_tokens_param: max_tokens
+    reasoning: {supported: true, enabled_by_default: true, can_be_disabled: true, control: budget_tokens, budget_param: thinking_budget}
+    limits: {context: 100000, max_output: 1000}
+`))
+	req := func(budget int, bestEffort bool) ChatRequest {
+		return ChatRequest{Model: "b", Messages: []Message{User("hi")}, Reasoning: ReasoningBudget(budget),
+			MaxAnswerTokens: ptr(500), BestEffort: bestEffort}
+	}
+
+	// Room left, but less than asked: clamped above the budget, and said so.
+	pl, warnings, err := c.plan(req(700, false), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *pl.req.MaxTokens != 1000 {
+		t.Errorf("wire cap = %d, want max_output 1000", *pl.req.MaxTokens)
+	}
+	if len(warnings) != 1 || warnings[0].Feature != "max_answer_tokens" || !strings.Contains(warnings[0].Details, "300") {
+		t.Errorf("warnings = %v, want one saying the answer gets 300", warnings)
+	}
+
+	// No room at all: any cap under max_output is at or below the budget.
+	if _, err := c.Validate(req(1000, false)); err == nil || !strings.Contains(err.Error(), "no room") {
+		t.Errorf("err = %v, want a refusal saying the budget leaves no room", err)
+	}
+	pl, warnings, err = c.plan(req(1000, true), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pl.req.Reasoning != nil || *pl.req.MaxTokens != 1000 || len(warnings) == 0 {
+		t.Errorf("BestEffort: reasoning %v cap %d warnings %v; want the budget dropped and the cap at max_output",
+			pl.req.Reasoning, *pl.req.MaxTokens, warnings)
+	}
+}
+
+// ReasoningSent names what went on the wire, so two requests that render the
+// same body read the same.
+func TestReasoningLabel_IsTheWireMeaning(t *testing.T) {
+	for _, tc := range []struct {
+		r    ReasoningRequest
+		want string
+	}{
+		{ReasoningOff(), "off"},
+		{ReasoningEffort("none"), "off"},
+		{ReasoningBudget(0), "off"},
+		{ReasoningEffort("low"), "low"},
+		{ReasoningBudget(256), "budget:256"},
+		{nil, ""},
+	} {
+		if got := reasoningLabel(tc.r); got != tc.want {
+			t.Errorf("%#v: %q, want %q", tc.r, got, tc.want)
+		}
+	}
+}
+
 // Validate is read-only: resolving an answer budget must not write a cap into
 // the caller's request.
 func TestMaxAnswerTokens_DoesNotTouchTheCallersRequest(t *testing.T) {

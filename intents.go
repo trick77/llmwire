@@ -101,14 +101,32 @@ func (v *validation) checkAnswerBudget(req ChatRequest) {
 		v.reject("max_answer_tokens", fmt.Sprintf("an answer budget of %d is not positive; leave MaxAnswerTokens nil for no cap", answer))
 		return
 	}
+	max := v.profile.Limits.MaxOutput
+	// A budget is a hard allotment, not an estimate: a budget endpoint refuses
+	// a completion cap at or below it, so the clamp below must never reach it.
+	if b, ok := v.out.Reasoning.(reasoningBudget); ok && b.tokens > 0 && max > 0 {
+		switch {
+		case int64(b.tokens) >= max:
+			if v.refuse("reasoning", fmt.Sprintf("a reasoning budget of %d leaves no room for an answer "+
+				"under this model's output limit of %d", b.tokens, max), nil) {
+				return
+			}
+			v.dropReasoning()
+		case int64(answer) <= max && int64(answer)+int64(b.tokens) > max:
+			v.warn(WarnCompatibility, "max_answer_tokens",
+				fmt.Sprintf("budget %d plus answer %d exceed the output limit of %d; the answer gets %d",
+					b.tokens, answer, max, max-int64(b.tokens)))
+		}
+	}
 	wire := int64(answer) + int64(reasoningOverhead(v.out.Reasoning, v.profile.Reasoning))
-	if max := v.profile.Limits.MaxOutput; max > 0 {
+	if max > 0 {
 		if int64(answer) > max {
 			v.warn(WarnCompatibility, "max_answer_tokens",
 				fmt.Sprintf("%d exceeds this model's output limit of %d; the cap sent is the limit", answer, max))
 		}
-		// Clamped silently otherwise: the endpoint would clamp anyway, and
-		// the answer still fits.
+		// Otherwise clamped silently: a level's overhead is an allowance, not
+		// an allotment, and the endpoint would clamp anyway. A budget always
+		// stays below the clamp (checked above).
 		wire = min(wire, max)
 	}
 	n := int(wire)
