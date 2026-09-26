@@ -200,6 +200,30 @@ func ReasoningEffort(level string) ReasoningRequest { return reasoningEffort{lev
 // ReasoningBudget asks for a token budget.
 func ReasoningBudget(tokens int) ReasoningRequest { return reasoningBudget{tokens: tokens} }
 
+// The two intents. A caller that names a level binds itself to one model's
+// vocabulary: "low" is the floor on glm-5.3-flash and a middle rung on gpt-5.x,
+// and "none" is refused outright by the first. An intent is resolved against the
+// profile per request, into one of the three concrete variants above, and from
+// there on is validated, rendered, logged and priced exactly as that variant.
+// What it became is on ChatResponse.ReasoningSent and StreamResult.ReasoningSent.
+type reasoningMinimal struct{}
+type reasoningBalanced struct{}
+
+func (reasoningMinimal) isReasoning()  {}
+func (reasoningBalanced) isReasoning() {}
+
+// ReasoningMinimal asks for the shallowest thinking the model has: off where the
+// profile says it can be disabled, else the first (shallowest) of its
+// effort_values, else, on a budget model, its reasoning.min_budget. On a model
+// that does not reason it sends nothing and warns nothing: the request is
+// already as shallow as it gets.
+func ReasoningMinimal() ReasoningRequest { return reasoningMinimal{} }
+
+// ReasoningBalanced asks for fast-but-not-shallow: the profile's
+// reasoning.balanced level where one is declared, else the model's own default
+// (nothing is sent).
+func ReasoningBalanced() ReasoningRequest { return reasoningBalanced{} }
+
 // ChatRequest is one completion request, before profile resolution.
 //
 // Pointers where "unset" and "zero" differ: a temperature of 0 is a real
@@ -216,6 +240,15 @@ type ChatRequest struct {
 	// which wire parameter carries it, because the two spellings are not
 	// interchangeable and one endpoint accepts the wrong one and ignores it.
 	MaxTokens *int
+	// MaxAnswerTokens caps the visible answer instead of the whole completion.
+	// The cap sent is this plus the reasoning overhead of the request as
+	// resolved (Reasoning.Overhead, DefaultReasoningOverhead where the profile
+	// has no figure for the level, 0 with thinking off), clamped to the model's
+	// max_output. Setting it beside MaxTokens is refused.
+	//
+	// Exists because the completion cap counts reasoning: a 1024-token cap at
+	// glm-5.3-flash's deepest level returned zero content characters.
+	MaxAnswerTokens *int
 
 	Tools      []Tool
 	ToolChoice ToolChoice
@@ -243,13 +276,13 @@ type ChatRequest struct {
 	// inline markup has been seen. Zero leaves the idle bound as it is.
 	//
 	// The only per-request bound, because it answers a per-request question.
-	// MiMo does not stream tool-call arguments incrementally: it emits the
-	// name, then goes silent while it serializes the whole argument server-side,
-	// then flushes it in one burst. A large document payload measured ~82s of
-	// silence, past any idle bound sized for prose. Which calls can carry such
-	// an argument depends on which tools the request offered, so the caller
-	// widens only those and keeps the narrow bound for every other turn. The
-	// whole-call cap stays the backstop.
+	// A model whose profile sets Streaming.BuffersToolArgs does not stream
+	// tool-call arguments incrementally: it emits the name, goes silent while
+	// it serializes the whole argument server-side, then flushes it in one
+	// burst, past any idle bound sized for prose (profiles.yaml has the
+	// measurement). Which calls can carry such an argument depends on which
+	// tools the request offered, so the caller widens only those and keeps the
+	// narrow bound for every other turn. The whole-call cap stays the backstop.
 	ToolCallIdleTimeout time.Duration
 
 	// BestEffort demotes what would be a hard error into a coercion plus a
@@ -285,6 +318,7 @@ func (r ChatRequest) clone() ChatRequest {
 	out.Temperature = copyPtr(r.Temperature)
 	out.TopP = copyPtr(r.TopP)
 	out.MaxTokens = copyPtr(r.MaxTokens)
+	out.MaxAnswerTokens = copyPtr(r.MaxAnswerTokens)
 	if r.ExtraBody != nil {
 		out.ExtraBody = make(map[string]any, len(r.ExtraBody))
 		for k, v := range r.ExtraBody {
@@ -337,4 +371,9 @@ type ChatResponse struct {
 	// Gateway is what the proxy said in its headers: call id, deployment, key
 	// spend, the cost text. Empty on a direct route.
 	Gateway Gateway
+	// ReasoningSent is the reasoning knob this call put on the wire, intents
+	// resolved: "off", an effort level, "budget:<tokens>", or "" when nothing
+	// was sent and the model ran at its own default. Named by wire meaning:
+	// effort "none" and a zero budget are the off switch and read "off".
+	ReasoningSent string
 }

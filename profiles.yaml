@@ -52,6 +52,7 @@ profiles:
   # restricted to that plan's own tools and refuses calls from elsewhere.
   # ---------------------------------------------------------------------------
   - id: glm-5.3-flash
+    display_name: GLM 5.3 Flash
     endpoint: chat
     wire_model_id: glm-5.3-flash
     provider: zai
@@ -88,6 +89,14 @@ profiles:
       # NOT measured: the vendor's documented default and their recommendation
       # for this model.
       default_effort: max
+      # NOT measured: a choice, not a probe result. One rung below the max
+      # default, the fast-but-not-shallow point. ReasoningMinimal needs no
+      # entry: this model cannot be disabled, so it resolves to low, the
+      # first of effort_values.
+      balanced: high
+      # overhead ABSENT, NOT measured: DefaultReasoningOverhead (1024) applies
+      # at every level, and the notes below show it is short at max, where a
+      # 1024 cap produced zero content. No per-level count has been probed.
       # MEASURED: reasoning arrived on this delta field on every probe.
       stream_field: reasoning_content
 
@@ -200,6 +209,7 @@ profiles:
   # and pricing something at Unpriced instead would silently zero the lane.
   # ---------------------------------------------------------------------------
   - id: mimo-v2.5-pro
+    display_name: MiMo V2.5 Pro
     endpoint: chat
     wire_model_id: mimo-v2.5-pro
     provider: mimo
@@ -228,6 +238,10 @@ profiles:
       # Pro think; sending a level does not switch thinking off. See mimo-v2.5
       # for the sibling that did move.
       effort_values: [low, medium, high]
+      # NOT measured as a depth: the middle of the enforced set, a choice.
+      # Same value on every MiMo entry; the V2.6 tables show why no level
+      # here is a promise. overhead ABSENT: DefaultReasoningOverhead applies.
+      balanced: medium
       # MEASURED: reasoning arrived on this delta field on every probe.
       stream_field: reasoning_content
 
@@ -280,6 +294,14 @@ profiles:
       supported: true
       needs_include_usage: false
       accepts_stream_options: true
+      # OBSERVED in production (loom), not probed: a tool call streams its
+      # name, then NOTHING while the whole argument is serialized server-side,
+      # then the argument in one burst. A ~10KB document argument measured
+      # ~82s of silence: past any idle bound sized for prose, and 8s short of
+      # the 90s default. Which MiMo id it was is not recorded, so it is set on every
+      # MiMo entry: the serving layer is shared. Callers widen
+      # ChatRequest.ToolCallIdleTimeout on turns offering such a tool.
+      buffers_tool_args: true
 
     # NOT measured, vendor documentation.
     limits:
@@ -328,6 +350,7 @@ profiles:
       the accepted set and what the probe measured.
 
   - id: mimo-v2.5
+    display_name: MiMo V2.5
     endpoint: chat
     wire_model_id: mimo-v2.5
     provider: mimo
@@ -355,6 +378,8 @@ profiles:
       # reported 0 throughout — the thinking is counted inside
       # completion_tokens on this endpoint.
       effort_values: [low, medium, high]
+      # NOT measured as a depth; see mimo-v2.5-pro. overhead ABSENT.
+      balanced: medium
       stream_field: reasoning_content
 
     # NOT measured, vendor documentation; same statement as for -pro.
@@ -387,6 +412,8 @@ profiles:
       supported: true
       needs_include_usage: false
       accepts_stream_options: true
+      # OBSERVED on MiMo, not probed; see mimo-v2.5-pro.
+      buffers_tool_args: true
 
     # NOT measured, vendor documentation.
     limits:
@@ -428,6 +455,7 @@ profiles:
   # mimo-v2.6-flash beside the V2.5 family and the ASR/TTS models.
   # ---------------------------------------------------------------------------
   - id: mimo-v2.6-pro
+    display_name: MiMo V2.6 Pro
     endpoint: chat
     wire_model_id: mimo-v2.6-pro
     provider: mimo
@@ -494,6 +522,12 @@ profiles:
       # reproduce: at n=5 the no-level range (104-656) overlaps every level.
       # Kept as the reason this file trusts ranges over points.
       effort_values: [low, medium, high]
+      # medium is the level whose range stayed tight (117-148, ten of ten)
+      # in the table above, the nearest thing to "fast but not shallow" this
+      # ladder offers. A reading of two five-sample runs, not a guarantee.
+      # overhead ABSENT, NOT measured as an allowance: those counts are one
+      # prompt's reasoning, so DefaultReasoningOverhead applies.
+      balanced: medium
       # NOT measured: reasoning arrived on every probe, but stream.go reads both
       # `reasoning_content` and `reasoning` and content wins, so which key the
       # delta carried cannot be read back out of a StreamResult. This is the
@@ -557,6 +591,8 @@ profiles:
       supported: true
       needs_include_usage: false
       accepts_stream_options: true
+      # OBSERVED on MiMo, not probed on this generation; see mimo-v2.5-pro.
+      buffers_tool_args: true
 
     # NOT measured, vendor model card: "Context Window 1M tokens" /
     # "Max Output 128K tokens". No probe sent a cap above the ceiling; every
@@ -632,6 +668,7 @@ profiles:
       the same request.
 
   - id: mimo-v2.6-flash
+    display_name: MiMo V2.6 Flash
     endpoint: chat
     wire_model_id: mimo-v2.6-flash
     provider: mimo
@@ -688,6 +725,12 @@ profiles:
       # Use the thinking toggle, which is honoured cleanly. A level is accepted
       # and does not buy a caller a different amount of thinking.
       effort_values: [low, medium, high]
+      # NOT measured as a depth: per the table above no level moves this
+      # model, so medium is the family's value and costs nothing to send.
+      # ReasoningMinimal resolves to OFF here, and off answers one-step
+      # arithmetic wrong (notes); a caller that needs the answer right uses
+      # Balanced. overhead ABSENT: DefaultReasoningOverhead applies.
+      balanced: medium
       # NOT measured, for the same reason as -pro: the delta key cannot be read
       # back out of a StreamResult. Load default.
       stream_field: reasoning_content
@@ -725,6 +768,8 @@ profiles:
       supported: true
       needs_include_usage: false
       accepts_stream_options: true
+      # OBSERVED on MiMo, not probed on this generation; see mimo-v2.5-pro.
+      buffers_tool_args: true
 
     # NOT measured, vendor model card: 1M context / 128K max output. Note the
     # version delta — mimo-v2.5 shipped max_output 32768, so the ceiling on the
@@ -778,6 +823,7 @@ profiles:
   # OpenAI embeddings.
   # ---------------------------------------------------------------------------
   - id: text-embedding-3-small
+    display_name: Text Embedding 3 Small
     endpoint: embeddings
     wire_model_id: text-embedding-3-small
     provider: openai
@@ -809,6 +855,7 @@ profiles:
       request and 300000 tokens summed across them.
 
   - id: text-embedding-3-large
+    display_name: Text Embedding 3 Large
     endpoint: embeddings
     wire_model_id: text-embedding-3-large
     provider: openai
@@ -830,6 +877,7 @@ profiles:
   # every bit is the model page and the API reference, dated below.
   # ---------------------------------------------------------------------------
   - id: gpt-5.4-mini
+    display_name: GPT-5.4 mini
     endpoint: chat
     wire_model_id: gpt-5.4-mini
     provider: openai
@@ -850,6 +898,10 @@ profiles:
       can_be_disabled: true
       control: effort
       effort_values: [none, low, medium, high, xhigh]
+      # NOT measured, a choice: the series' documented default, the middle of
+      # the set. Same on every gpt-5.x entry. overhead ABSENT:
+      # DefaultReasoningOverhead applies.
+      balanced: medium
 
     # NOT measured on this model; the gpt-5 series answers a non-default
     # temperature with a 400 ("Unsupported value ... Only the default (1) value
@@ -913,6 +965,7 @@ profiles:
   # differ in what the page states differently, nothing else.
   # ---------------------------------------------------------------------------
   - id: gpt-5.4
+    display_name: GPT-5.4
     endpoint: chat
     wire_model_id: gpt-5.4
     provider: openai
@@ -933,6 +986,9 @@ profiles:
       control: effort
       effort_values: [none, low, medium, high, xhigh]
       default_effort: none
+      # NOT measured, as gpt-5.4-mini. Deeper than this model's own default
+      # (none): Balanced asks for thinking, which omitting the field does not.
+      balanced: medium
 
     # NOT measured on this model; the series' 400 on a non-default
     # temperature, as gpt-5.4-mini.
@@ -994,6 +1050,7 @@ profiles:
   # default effort, so this one thinks when the field is omitted.
   # ---------------------------------------------------------------------------
   - id: gpt-5.5
+    display_name: GPT-5.5
     endpoint: chat
     wire_model_id: gpt-5.5
     provider: openai
@@ -1012,6 +1069,8 @@ profiles:
       control: effort
       effort_values: [none, low, medium, high, xhigh]
       default_effort: medium
+      # NOT measured, as gpt-5.4-mini: equal to the documented default.
+      balanced: medium
 
     # NOT measured on this model; the series' 400 on a non-default
     # temperature, as gpt-5.4.

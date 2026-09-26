@@ -25,6 +25,9 @@ const embedBatchSize = 64
 
 // Embed returns one vector per input, in the order of the inputs.
 func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, []Warning, error) {
+	if c.routes != nil {
+		return c.routedEmbed(ctx, req)
+	}
 	p, warnings, dimensions, err := c.planEmbed(req)
 	if err != nil {
 		return nil, nil, err
@@ -141,6 +144,9 @@ func mergeProvenance(acc, next CostProvenance, first bool) CostProvenance {
 // never truncated to fit: a silently shortened embedding is a wrong answer that
 // looks right.
 func (c *Client) planEmbed(req EmbedRequest) (*Profile, []Warning, *int, error) {
+	if err := c.checkServes(req.Model); err != nil {
+		return nil, nil, nil, err
+	}
 	p, err := c.registry.Lookup(req.Model)
 	if err != nil {
 		return nil, nil, nil, err

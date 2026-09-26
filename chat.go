@@ -22,6 +22,9 @@ const routeChat = "/chat/completions"
 // that succeeded is not an error, and a caller who ignores the middle value still
 // gets a working call — which is the point of the tier-3 policy.
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Warning, error) {
+	if c.routes != nil {
+		return c.routedChat(ctx, req)
+	}
 	pl, warnings, err := c.plan(req, false)
 	if err != nil {
 		return nil, nil, err
@@ -65,6 +68,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 		return nil, warnings, err
 	}
 	resp.Timing = timing
+	resp.ReasoningSent = reasoningLabel(pl.req.Reasoning)
 	// Before inline recovery: the draft is not the answer, so markup in it
 	// must neither become a call nor cut the answer away.
 	if pl.profile.Reasoning.LeaksCloseTag && leakCanApply(pl.req) {

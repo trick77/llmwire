@@ -1,0 +1,68 @@
+# Synthetic profiles for tests in modules that use llmwire. Nothing here
+# describes a real model: the ids, levels and rates are chosen so a test can
+# assert an intent without naming a vendor's id, wire spelling or price.
+#
+# The provider ships no host, so LLMWIRE_LLMWIRETEST_BASE_URL is required and
+# plain http is accepted for the loopback address httptest listens on.
+providers:
+  llmwiretest: {}
+
+profiles:
+  - id: llmwiretest-chat
+    display_name: llmwiretest Chat
+    provider: llmwiretest
+    verified: source-derived
+    max_tokens_param: max_tokens
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: true
+      control: effort
+      effort_values: [none, low, medium, high]
+      balanced: medium
+      overhead: {low: 128, medium: 256, high: 512}
+    temperature: {supported: true}
+    top_p: {supported: true}
+    tools:
+      supported: true
+      format: native
+      tool_choice_values: [auto, none, required]
+      supports_forced_choice: true
+      supports_parallel: true
+    output: {json_object: true, json_schema: true, strict_schema: true}
+    streaming: {supported: true, accepts_stream_options: true}
+    limits: {context: 128000, max_output: 16384}
+    vision: true
+    cost:
+      input: 1
+      cache_read: 0.1
+      cache_write: 0
+      output: 2
+      source_url: https://llmwiretest.invalid/pricing
+      verified_on: 2026-01-01
+
+  - id: llmwiretest-budget
+    display_name: llmwiretest Budget
+    provider: llmwiretest
+    verified: source-derived
+    max_tokens_param: max_tokens
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: true
+      control: budget_tokens
+      budget_param: thinking_budget
+    streaming: {supported: true, accepts_stream_options: true}
+    limits: {context: 128000, max_output: 16384}
+
+  - id: llmwiretest-embed
+    display_name: llmwiretest Embed
+    endpoint: embeddings
+    provider: llmwiretest
+    verified: source-derived
+    limits: {context: 8191}
+    embedding: {dimensions: true, default_dimensions: 8}
+    cost:
+      input: 0.01
+      source_url: https://llmwiretest.invalid/pricing
+      verified_on: 2026-01-01

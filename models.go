@@ -59,6 +59,9 @@ type wireModelEntry struct {
 // route. A listing is quick, so a caller wanting a tighter bound for a boot
 // check passes a context with one.
 func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error) {
+	if c.routes != nil {
+		return nil, nil, c.errSeveralHosts("ListModels")
+	}
 	raw, _, timing, err := c.rawCall(ctx, http.MethodGet, routeModels, nil)
 	failed := func(err error) ([]ModelEntry, []Warning, error) {
 		c.log.Warn("llmwire models listing failed", "error", Truncate(c.redact(err.Error()), maxLoggedError),

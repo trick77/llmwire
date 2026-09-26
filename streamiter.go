@@ -95,6 +95,9 @@ type Stream struct {
 // until usage arrives, so the complete set — validation plus pricing — comes from
 // Warnings() after Next() returns false.
 func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Warning, error) {
+	if c.routes != nil {
+		return c.routedChatStream(ctx, req)
+	}
 	pl, warnings, err := c.plan(req, true)
 	if err != nil {
 		return nil, nil, err
@@ -176,6 +179,7 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 		streamBounds{idle: s.client.idle, toolIdle: pl.req.ToolCallIdleTimeout}, s.push, s.client.redact,
 		pl.profile.Tools.recoversInline(), s.client.now, start)
 	res.Timing.Headers = headers
+	res.ReasoningSent = reasoningLabel(pl.req.Reasoning)
 
 	_ = resp.Body.Close()
 	s.guard.stop()

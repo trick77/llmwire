@@ -83,6 +83,9 @@ type Reasoning struct {
 	// global enum is wider than any single model takes: glm-5.3-flash accepts
 	// three of the seven values its provider documents.
 	//
+	// Listed shallowest first, in effortLadder order, and checked at load:
+	// ReasoningMinimal reads the first entry as the model's floor.
+	//
 	// Required for ControlEffort. Optional for ControlToggleObject, where a
 	// non-empty set says the model ALSO takes reasoning_effort beside its
 	// on/off switch: ReasoningEffort(level) then renders the field instead of
@@ -110,7 +113,36 @@ type Reasoning struct {
 	// Chat only: a stream has already sent the draft by the time the tag
 	// arrives.
 	LeaksCloseTag bool `yaml:"leaks_close_tag"`
+	// Balanced is the level ReasoningBalanced resolves to: fast but not
+	// shallow. Must be one of EffortValues, and never "none". Empty means the
+	// intent sends nothing and the model runs at its own default.
+	Balanced string `yaml:"balanced"`
+	// Overhead is the reasoning tokens to budget beside a MaxAnswerTokens
+	// answer, per resolved level: an effort level, "off", or "default" for a
+	// request that sends no knob (DefaultEffort's entry wins there when both
+	// exist). A level with no entry on a thinking request takes
+	// DefaultReasoningOverhead; thinking off takes 0. A budget request is its
+	// own overhead. Absent unless measured, like every other bit.
+	Overhead map[string]int `yaml:"overhead"`
+	// MinBudget is the budget ReasoningMinimal sends on a budget_tokens model
+	// that cannot be disabled. Forbidden on every other control. Absent there,
+	// that intent is refused: a guessed floor is either rejected by the
+	// endpoint or not a floor.
+	MinBudget int `yaml:"min_budget"`
 }
+
+// DefaultReasoningOverhead is the reasoning allowance MaxAnswerTokens adds for a
+// thinking request whose level has no reasoning.overhead entry. A budget, not a
+// measurement: the one measured point is that 1024 was NOT enough at
+// glm-5.3-flash's deepest level, which spent a 1024-token cap on reasoning and
+// returned no content. A profile with a measured figure overrides it per level.
+const DefaultReasoningOverhead = 1024
+
+// effortLadder orders every effort level a profile may list, shallowest first.
+// A level is placed here once, so "shallowest" is a property of the word and
+// effort_values can be checked against it rather than trusted. A vendor level
+// not listed fails the load until it is placed.
+var effortLadder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // Accepts reports whether effort is in the model's accepted set.
 func (r Reasoning) Accepts(effort string) bool { return slices.Contains(r.EffortValues, effort) }
@@ -178,6 +210,11 @@ type Streaming struct {
 	// AcceptsStreamOptions: whether the parameter may be sent. An endpoint that
 	// rejects it must never receive it, even when harmless elsewhere.
 	AcceptsStreamOptions bool `yaml:"accepts_stream_options"`
+	// BuffersToolArgs: the model emits a tool call's name, then goes silent
+	// while it serializes the whole argument server-side, then flushes it in
+	// one burst. A caller offering tools that carry large arguments widens
+	// ChatRequest.ToolCallIdleTimeout for those turns.
+	BuffersToolArgs bool `yaml:"buffers_tool_args"`
 }
 
 // Embedding describes embeddings-only behaviour. Separate from the chat
@@ -218,6 +255,11 @@ type Profile struct {
 	// family's quirks, and one published catalogue documents its own collision
 	// between a model and that model's "-pro" variant.
 	ID string `yaml:"id"`
+	// DisplayName is the human label ("GLM 5.3 Flash"), for a model picker or a
+	// log a person reads. Defaults to ID at load, so a document written before
+	// the field still loads; every shipped profile sets it. A route keeps its
+	// model's label unless it names its own.
+	DisplayName string `yaml:"display_name"`
 	// Base names another profile to inherit from. See resolve for the rules.
 	Base string `yaml:"base"`
 	// Gateway marks a profile as reached through a proxy rather than directly.
@@ -304,7 +346,7 @@ const (
 // meant. Refusing the field outright removes the guess. If a gateway genuinely
 // exposes a narrower model, that is a different model and gets its own profile.
 var derivedAllowedKeys = map[string]bool{
-	"id": true, "base": true, "gateway": true,
+	"id": true, "display_name": true, "base": true, "gateway": true,
 	"wire_model_id": true, "provider": true, "no_api_key": true,
 	"max_tokens_param": true,
 	"verified":         true, "notes": true,
@@ -347,6 +389,9 @@ func (p Profile) resolve(base Profile) Profile {
 
 	out.ID = p.ID
 	out.Base = p.Base
+	if p.DisplayName != "" {
+		out.DisplayName = p.DisplayName
+	}
 	if p.Gateway != "" {
 		out.Gateway = p.Gateway
 	}
@@ -455,7 +500,8 @@ func (p Profile) validate() error {
 func (p Profile) validateEmbeddings(bad func(string, ...any) error) error {
 	r := p.Reasoning
 	reasoningDeclared := r.Supported || r.EnabledByDefault || r.CanBeDisabled || r.Control != "" ||
-		len(r.EffortValues) > 0 || r.DefaultEffort != "" || r.StreamField != "" || r.BudgetParam != "" || r.LeaksCloseTag
+		len(r.EffortValues) > 0 || r.DefaultEffort != "" || r.StreamField != "" || r.BudgetParam != "" || r.LeaksCloseTag ||
+		r.Balanced != "" || len(r.Overhead) > 0 || r.MinBudget != 0
 	t := p.Tools
 	toolsDeclared := t.Supported || t.Format != "" || len(t.ToolChoiceValues) > 0 ||
 		t.SupportsForcedChoice || t.SupportsParallel || t.RecoverInlineMarkup
@@ -472,7 +518,7 @@ func (p Profile) validateEmbeddings(bad func(string, ...any) error) error {
 		return bad("an embeddings profile must not declare vision")
 	case p.Output.JSONObject || p.Output.JSONSchema || p.Output.StrictSchema:
 		return bad("an embeddings profile must not declare structured output")
-	case p.Streaming.Supported || p.Streaming.NeedsIncludeUsage || p.Streaming.AcceptsStreamOptions:
+	case p.Streaming.Supported || p.Streaming.NeedsIncludeUsage || p.Streaming.AcceptsStreamOptions || p.Streaming.BuffersToolArgs:
 		return bad("an embeddings profile must not declare streaming")
 	case p.MaxTokensParam != "":
 		return bad("an embeddings profile must not declare max_tokens_param; the route takes no output cap")
@@ -538,7 +584,23 @@ func (p Profile) validateChat(bad func(string, ...any) error) error {
 	if dup := firstDuplicate(r.EffortValues); dup != "" {
 		return bad("effort_values lists %q twice", dup)
 	}
+	if err := checkEffortOrder(bad, r.EffortValues); err != nil {
+		return err
+	}
+	// Meaningful for one control only, like budget_param: the floor
+	// ReasoningMinimal sends to a budget model it cannot switch off. Not
+	// required, so a document from before the field loads; without it that
+	// intent is refused on such a model rather than sent with a guessed floor.
+	switch {
+	case r.MinBudget < 0:
+		return bad("min_budget %d is negative", r.MinBudget)
+	case r.MinBudget != 0 && r.Control != ControlBudget:
+		return bad("min_budget is set but reasoning control is %q, which takes no budget", r.Control)
+	}
 	if !r.Supported {
+		if r.Balanced != "" || len(r.Overhead) > 0 {
+			return bad("reasoning is unsupported but balanced or overhead is set")
+		}
 		if r.Control != "" && r.Control != ControlNone {
 			return bad("reasoning is unsupported but control is %q", r.Control)
 		}
@@ -594,6 +656,13 @@ func (p Profile) validateChat(bad func(string, ...any) error) error {
 			return bad("reasoning is supported but is neither on by default nor switchable; " +
 				"that combination describes a model that never reasons")
 		}
+		if r.Balanced != "" && (r.Balanced == "none" || !r.Accepts(r.Balanced)) {
+			return bad("balanced %q must be one of effort_values %v other than none; "+
+				"none is off, not balanced", r.Balanced, r.EffortValues)
+		}
+		if err := r.checkOverhead(bad); err != nil {
+			return err
+		}
 	}
 
 	if err := validateSampling(bad, "temperature", p.Temperature); err != nil {
@@ -640,6 +709,47 @@ func (p Profile) validateChat(bad func(string, ...any) error) error {
 	if p.Streaming.NeedsIncludeUsage && !p.Streaming.AcceptsStreamOptions {
 		return bad("needs_include_usage is true but accepts_stream_options is false; " +
 			"the parameter would have to be sent to an endpoint that rejects it")
+	}
+	if p.Streaming.BuffersToolArgs && (!p.Streaming.Supported || !p.Tools.Supported) {
+		return bad("buffers_tool_args is set but the model does not stream tool calls; " +
+			"it describes a streamed tool-call argument")
+	}
+	return nil
+}
+
+// checkEffortOrder requires every level on the ladder and the list shallowest
+// first. ReasoningMinimal takes the first entry as the floor, so a list in
+// vendor-doc order would make "minimal" the deepest setting without a word.
+func checkEffortOrder(bad func(string, ...any) error, values []string) error {
+	prev := -1
+	for _, v := range values {
+		rank := slices.Index(effortLadder, v)
+		if rank < 0 {
+			return bad("effort_values entry %q is not on the depth ladder %v; place it in effortLadder first", v, effortLadder)
+		}
+		if rank < prev {
+			return bad("effort_values %v must be listed shallowest first (ladder %v)", values, effortLadder)
+		}
+		prev = rank
+	}
+	return nil
+}
+
+// checkOverhead refuses a figure nothing would read: a level the model does not
+// take, "off" on a model that cannot be switched off, "default" on one that does
+// not think unasked.
+func (r Reasoning) checkOverhead(bad func(string, ...any) error) error {
+	for _, level := range sortedKeys(r.Overhead) {
+		switch n := r.Overhead[level]; {
+		case n < 0:
+			return bad("overhead %q is %d; a reasoning allowance cannot be negative", level, n)
+		case level == "off" && !r.CanBeDisabled,
+			level == "default" && !r.EnabledByDefault,
+			level != "off" && level != "default" && !r.Accepts(level):
+			return bad("overhead names %q, which no request to this model resolves to "+
+				"(effort_values %v, off only if can_be_disabled, default only if enabled_by_default)",
+				level, r.EffortValues)
+		}
 	}
 	return nil
 }
@@ -699,6 +809,12 @@ func (p Profile) String() string {
 func (p *Profile) clone() *Profile {
 	out := *p
 	out.Reasoning.EffortValues = append([]string(nil), p.Reasoning.EffortValues...)
+	if p.Reasoning.Overhead != nil {
+		out.Reasoning.Overhead = make(map[string]int, len(p.Reasoning.Overhead))
+		for k, v := range p.Reasoning.Overhead {
+			out.Reasoning.Overhead[k] = v
+		}
+	}
 	out.Tools.ToolChoiceValues = append([]string(nil), p.Tools.ToolChoiceValues...)
 	out.FinishReasonsExtra = append([]string(nil), p.FinishReasonsExtra...)
 	out.Temperature.ForcedValue = copyPtr(p.Temperature.ForcedValue)

@@ -165,6 +165,9 @@ type wirePlan struct {
 // that could carry Stream: true and be handed to Chat would be a contradiction
 // with no correct resolution, and the method the caller chose is never ambiguous.
 func (c *Client) plan(req ChatRequest, stream bool) (*wirePlan, []Warning, error) {
+	if err := c.checkServes(req.Model); err != nil {
+		return nil, nil, err
+	}
 	p, err := c.registry.Lookup(req.Model)
 	if err != nil {
 		return nil, nil, err
@@ -189,15 +192,21 @@ func (c *Client) plan(req ChatRequest, stream bool) (*wirePlan, []Warning, error
 		}
 	}
 
+	// Intents first, on plan's own copy of the request: every check below then
+	// sees the concrete variant, and refuses or coerces it exactly as if the
+	// caller had written it.
+	req.Reasoning = resolveReasoning(req.Reasoning, p.Reasoning)
 	v := &validation{profile: p, bestEffort: req.BestEffort, out: req.clone()}
 
 	v.checkMessages(req)
 	v.checkReasoning(req)
+	v.checkBudgetRoom(req)
 	// Whether this REQUEST will reason, not merely whether the model reasons by
 	// default. The two differ exactly when the caller said something, which is
 	// the case the inert-parameter warning is about. Computed from the COERCED
-	// request, after checkReasoning, because that check may just have dropped the
-	// caller's knob under BestEffort. A caller who asked a glm-5.3-flash to stop
+	// request, after checkReasoning and checkBudgetRoom, because either may just
+	// have dropped the caller's knob under BestEffort. Nothing after this line
+	// changes v.out.Reasoning. A caller who asked a glm-5.3-flash to stop
 	// thinking and was demoted still gets a thinking model, so their temperature
 	// really is inert — and reading the original request would say the opposite.
 	v.reasoningActive = reasoningActive(v.out.Reasoning, p.Reasoning)
@@ -206,6 +215,7 @@ func (c *Client) plan(req ChatRequest, stream bool) (*wirePlan, []Warning, error
 	v.checkTools(req)
 	v.checkResponseFormat(req)
 	v.checkMaxTokens(req)
+	v.checkAnswerBudget(req)
 	v.checkExtraBody(req)
 
 	if v.err != nil {
@@ -244,9 +254,10 @@ func reasoningActive(want ReasoningRequest, r Reasoning) bool {
 	case reasoningBudget:
 		return req.tokens > 0
 	default:
-		// Unreachable: the interface is sealed by its unexported method, so
-		// the three cases above are the whole set. Kept so a fourth kind
-		// fails a test here rather than compiling into a silent default.
+		// Unreachable: the interface is sealed by its unexported method, and
+		// plan resolves the two intents before this runs, so the three cases
+		// above are the whole set. Kept so a new kind fails a test here rather
+		// than compiling into a silent default.
 		return r.EnabledByDefault
 	}
 }
@@ -389,6 +400,11 @@ func (v *validation) checkReasoning(req ChatRequest) {
 	r := v.profile.Reasoning
 
 	switch want := req.Reasoning.(type) {
+	case reasoningMinimal:
+		// The one intent resolveReasoning cannot resolve: a budget model that
+		// cannot be switched off and whose profile states no floor.
+		v.refuseOrDrop("reasoning", "this model's profile declares no reasoning.min_budget, "+
+			"so ReasoningMinimal has no floor to send", reasoningControlHint(r))
 	case reasoningOff:
 		// A model that never reasons already satisfies "do not reason". Refusing
 		// would force model-agnostic callers to branch per model to ask for the

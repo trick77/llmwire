@@ -58,6 +58,10 @@ func (c *Client) logCall(s callSummary) {
 		if req.MaxTokens != nil {
 			attrs = append(attrs, "max_tokens", *req.MaxTokens, "cap_param", pl.capParam)
 		}
+		if req.MaxAnswerTokens != nil {
+			// max_tokens above is the wire cap it became.
+			attrs = append(attrs, "max_answer_tokens", *req.MaxAnswerTokens)
+		}
 		if req.Temperature != nil {
 			attrs = append(attrs, "temperature", *req.Temperature)
 		}
@@ -163,13 +167,23 @@ func (c *Client) logCall(s callSummary) {
 	}
 }
 
+// reasoningLabel names a concrete request the way ReasoningSent reports it.
+// Intents never reach it: plan resolves them first. By wire meaning, not by
+// constructor: effort "none" and a zero budget are the off switch in other
+// spellings and render as it, so they read "off" too.
 func reasoningLabel(r ReasoningRequest) string {
 	switch v := r.(type) {
 	case reasoningOff:
 		return "off"
 	case reasoningEffort:
+		if v.level == "none" {
+			return "off"
+		}
 		return v.level
 	case reasoningBudget:
+		if v.tokens == 0 {
+			return "off"
+		}
 		return fmt.Sprintf("budget:%d", v.tokens)
 	}
 	return ""

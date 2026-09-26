@@ -137,6 +137,8 @@ own "measured on" line; the file header date is the date of the last full run.
    field absent**. An unknown key fails the load (`registry.go` `KnownFields`,
    `TestNewRegistry_UnknownKeyIsRejected`). The defaults applied at load are
    exactly these and no others: `endpoint: chat`, `wire_model_id: <id>`,
+   `display_name: <id>` (for old documents; a shipped entry always sets its
+   own, `TestDefault_EveryProfileHasADisplayName`),
    `verified: source-derived`, `reasoning.stream_field: reasoning_content`,
    `tools.format: native` (`registry.go` `applyDefaults`). Run
    `go test -run 'Default_|NewRegistry_' ./...` before the first probe; the
@@ -300,7 +302,18 @@ see in the profile comment, whether or not it matched.
   `supports_forced_choice`; tools supported with empty `tool_choice_values`;
   `strict_schema` without `json_schema`; `needs_include_usage` without
   `accepts_stream_options`; `max_output` > `context`; an embeddings profile
-  declaring any chat capability, or missing `default_dimensions`.
+  declaring any chat capability, or missing `default_dimensions`;
+  `effort_values` off the depth ladder or not shallowest first; `balanced`
+  outside `effort_values` or `none`; `overhead` for a level no request resolves
+  to, or negative; `min_budget` off `budget_tokens`; `buffers_tool_args`
+  without streamed tools.
+- Intent data, per chat profile: `balanced` (the fast-but-not-shallow level,
+  a choice, say so in the comment), `overhead` only from a measured reasoning
+  count per level (absent → `DefaultReasoningOverhead`), `min_budget` for a
+  budget model that cannot be disabled, `streaming.buffers_tool_args` when a
+  tool call's arguments arrive in one burst after silence. Check what
+  `ReasoningMinimal` resolves to (`TestReasoningIntents_ShippedProfiles`): off
+  on a switchable model, even where off costs correctness.
 - `cost`: all four chat lanes (`input`, `cache_read`, `cache_write`, `output`;
   explicit `0` for free, absent fails), `cache_read` <= `input`, `source_url`
   https, `verified_on` `YYYY-MM-DD`, decimal text (no exponent). Embeddings:
