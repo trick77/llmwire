@@ -429,9 +429,9 @@ func (c *Client) logSettings(model string, p *Profile, keyVar string) {
 		"api_key", key,
 		"emulate_opencode", c.session != nil,
 		"user_agent", c.userAgent,
-		"header_timeout", c.header,
-		"idle_timeout", c.idle,
-		"call_timeout", c.cap,
+		"header_timeout_ms", c.header.Milliseconds(),
+		"idle_timeout_ms", c.idle.Milliseconds(),
+		"call_timeout_ms", c.cap.Milliseconds(),
 	)
 }
 
