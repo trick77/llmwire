@@ -159,6 +159,50 @@ prose. `Registry.LookupEmbedding(id)` is `Lookup` that refuses a chat model, for
 an embeddings client built from a constant. `Redact` and `Truncate` are exported
 for the same reason.
 
+## Swapping a model is config
+
+A client says what it wants; the profile says what that is on the model at
+hand. Nothing below names a level, a cap spelling or a host:
+
+```go
+// One client, each model on its own provider's host and key. Every missing
+// LLMWIRE_<PROVIDER>_API_KEY is named in one error; an unlisted model is a
+// *ModelNotConfiguredError.
+client, err := llmwire.FromEnvModels(llmwire.Config{}, cfg.ChatModel, cfg.VisionModel, cfg.EmbedModel)
+
+// Boot check: the vision lane needs images and tools. The error names the gap
+// and the registered models that would do (Registry.ChatModels(needs)).
+_, err = client.Registry().Require(cfg.VisionModel, llmwire.Needs{Vision: true, Tools: true})
+
+n := 64
+resp, _, err := client.Chat(ctx, llmwire.ChatRequest{
+    Model:           cfg.ChatModel,
+    Messages:        msgs,
+    Reasoning:       llmwire.ReasoningMinimal(), // or ReasoningBalanced()
+    MaxAnswerTokens: &n,                         // answer; reasoning allowance added
+})
+log.Print(resp.ReasoningSent) // "off", "low", "medium", "budget:256", or "" (default)
+```
+
+- `ReasoningMinimal()`: off where the model can be disabled, else its shallowest
+  `effort_values` entry, else `reasoning.min_budget`; nothing on a model that
+  does not reason. `ReasoningBalanced()`: `reasoning.balanced`, else the model's
+  default. Both validate and render exactly as what they resolve to.
+- `MaxAnswerTokens`: the wire cap is the answer plus `reasoning.overhead` for the
+  resolved level (`DefaultReasoningOverhead` = 1024 where unmeasured, 0 with
+  thinking off, the budget itself on a budget), clamped to `max_output`.
+  Refused beside `MaxTokens`.
+- `Profile.DisplayName` is the human label; `Profile.Streaming.BuffersToolArgs`
+  says when to widen `ToolCallIdleTimeout`.
+- `ForModel(id)` is the one-host client for `ListModels` and the raw calls.
+
+Tests in a consuming module use `llmwiretest`: `Registry()` holds the synthetic
+`ChatModel` / `EmbedModel`, and `NewServer(t)` is a recording fake
+(`srv.Client()`, or `Config{Registry: llmwiretest.Registry(), Lookup: srv.Lookup}`
+for code that calls `FromEnvModels`). Assert `srv.Last().Reasoning()` against
+`llmwiretest.MinimalSent` and `srv.Last().MaxTokens()` against
+`n + llmwiretest.MinimalOverhead`: intent, not a vendor's spelling.
+
 ## Scope
 
 One wire protocol: `/chat/completions` and `/embeddings`. llmwire adapts models
@@ -206,7 +250,9 @@ call-site default, and this registry resolves everything at load.
 
 A toggle model may also list `effort_values`: MiMo takes `reasoning_effort`
 beside its `thinking` switch, so `ReasoningEffort("high")` renders the level and
-`ReasoningOff()` renders the toggle.
+`ReasoningOff()` renders the toggle. `effort_values` are listed shallowest first
+(checked against a fixed depth ladder at load), `balanced` names one of them,
+and `overhead` maps a level (or `off`, `default`) to measured reasoning tokens.
 
 `enabled_by_default` and `can_be_disabled` are deliberately separate flags. "Can
 this model turn reasoning off" is not answerable from whether `none` appears in a

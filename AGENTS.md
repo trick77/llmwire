@@ -2,7 +2,8 @@
 
 ## What this is
 
-Dependency-light Go **library**, one package at repo root. **One** wire protocol:
+Dependency-light Go **library**, one package at repo root plus `llmwiretest`
+(synthetic profiles + recording fake, for consumers' tests). **One** wire protocol:
 OpenAI-compatible `/chat/completions` + `/embeddings`. Anthropic, Gemini-native,
 Bedrock: permanently out of scope.
 
@@ -22,7 +23,15 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
 - `EnabledByDefault` and `CanBeDisabled` are **separate bools**. Never infer
   "cannot disable" from a missing `none` (models.dev has `glm-5.3-flash` wrong this way).
 - `budget_param` required for `control: budget_tokens`, forbidden elsewhere: a
-  guessed key is ignored silently.
+  guessed key is ignored silently. `min_budget` likewise budget-only.
+- `effort_values` **shallowest first** on `effortLadder` (`profile.go`):
+  `ReasoningMinimal` reads entry 0 as the floor. New vendor level → place it on
+  the ladder first.
+- `balanced` ∈ `effort_values`, never `none`. `overhead` absent unless measured;
+  `DefaultReasoningOverhead` (1024) fills in, and is known short at glm max.
+- Clients express **intents** (`ReasoningMinimal/Balanced`, `MaxAnswerTokens`,
+  `Needs`), never a model's level names or caps. A model fact a client needs
+  goes in the profile, not in the client.
 - **Composition**: gateway entry names a `base`, single level. Capabilities only
   **narrow**; `wire_model_id` **replaces**; `cost` never restated. Validate against
   base even where the gateway would drop the param: a silently dropped
@@ -34,6 +43,12 @@ CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...
 
 - Capability decisions in `plan` **only**. `grep render.go .Supported` must find
   nothing.
+- Intents resolve **first** in `plan`, then every check sees the concrete
+  variant; `MaxAnswerTokens` becomes `MaxTokens` after `checkReasoning` (the
+  overhead is the knob actually sent). What went out: `ReasoningSent`.
+- `FromEnvModels`: front client routes by model to one sub-client per provider
+  (shared `stats`, one session per provider). Unlisted model →
+  `ModelNotConfiguredError`, sub-clients included.
 - A demoted (`BestEffort`) refusal must DROP the knob on the coerced request.
 - `Validate` is exported and read-only → the coerced copy is deep.
 - Streaming is a `plan` parameter, never a request field.
