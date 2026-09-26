@@ -179,6 +179,40 @@ func TestFromEnvModels_RefusesAModelItWasNotGiven(t *testing.T) {
 	}
 }
 
+// no_api_key is per profile: one provider can carry a keyed and a keyless
+// model, and each must go out as its own profile says.
+func TestFromEnvModels_KeyedAndKeylessOnOneProvider(t *testing.T) {
+	srv, seen := recordingServer(t)
+	reg := registryFrom(t, `providers:
+  h: {}
+profiles:
+  - id: keyed
+    wire_model_id: keyed
+    provider: h
+    max_tokens_param: max_tokens
+  - id: keyless
+    wire_model_id: keyless
+    provider: h
+    no_api_key: true
+    max_tokens_param: max_tokens
+`)
+	c, err := FromEnvModels(Config{Registry: reg, Lookup: mapLookup(map[string]string{
+		"LLMWIRE_H_BASE_URL": srv.URL, "LLMWIRE_H_API_KEY": "kh",
+	})}, "keyless", "keyed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"keyed", "keyless"} {
+		if _, _, err := c.Chat(context.Background(), ChatRequest{Model: m, Messages: []Message{User("hi")}}); err != nil {
+			t.Fatalf("%s: %v", m, err)
+		}
+	}
+	got := seen()
+	if len(got) != 2 || got[0].auth != "Bearer kh" || got[1].auth != "" {
+		t.Errorf("calls = %+v; want the key on keyed only", got)
+	}
+}
+
 func TestFromEnvModels_NamesEveryMissingVariable(t *testing.T) {
 	reg := registryFrom(t, multiDoc)
 	_, err := FromEnvModels(Config{Registry: reg, Lookup: mapLookup(map[string]string{

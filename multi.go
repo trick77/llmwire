@@ -22,7 +22,8 @@ import (
 // LLMWIRE_<PROVIDER>_BASE_URL where the provider ships none, refused where it
 // does), key from LLMWIRE_<PROVIDER>_API_KEY, LLMWIRE_LITELLM_MODELS routing
 // and LLMWIRE_EMULATE_OPENCODE applied as there. Models sharing a provider
-// share one connection pool and one opencode session identity.
+// share one connection pool and one opencode session identity, except that its
+// no_api_key profiles, which send no key, get a client of their own.
 //
 // Every unset variable is named in one error (errors.Join of
 // *MissingEnvError, each variable once), so a deployment is fixed in one pass.
@@ -87,7 +88,7 @@ func FromEnvModels(cfg Config, models ...string) (*Client, error) {
 			return nil, err
 		}
 		cfg.Registry = reg
-		named := map[string]bool{}
+		named, providers := map[string]bool{}, map[string]bool{}
 		for _, m := range ids {
 			ep, err := envEndpoint(m, cfg, get, routed)
 			if err != nil {
@@ -104,11 +105,20 @@ func FromEnvModels(cfg Config, models ...string) (*Client, error) {
 					missing = append(missing, e)
 				}
 			}
-			add(ep.profile.Provider, ep.cfg, m, ep)
+			// no_api_key is per profile, so a keyless model on a keyed
+			// provider gets a client of its own: one shared client would
+			// either drop the key for the keyed models or send it to the
+			// keyless one.
+			key := ep.profile.Provider
+			if ep.profile.NoAPIKey {
+				key += "/no_api_key"
+			}
+			providers[ep.profile.Provider] = true
+			add(key, ep.cfg, m, ep)
 		}
-		if cfg.APIKey != "" && len(groups) > 1 {
+		if cfg.APIKey != "" && len(providers) > 1 {
 			return nil, fmt.Errorf("llmwire: Config.APIKey is set, but models %v span providers %v; "+
-				"leave it empty so each provider's LLMWIRE_<PROVIDER>_API_KEY is read", ids, order)
+				"leave it empty so each provider's LLMWIRE_<PROVIDER>_API_KEY is read", ids, sortedKeys(providers))
 		}
 	}
 	if len(missing) > 0 {
