@@ -183,7 +183,7 @@ func (s *Server) Lookup(name string) (string, bool) {
 
 // Client returns a client on this server and Registry(), logging nowhere.
 func (s *Server) Client() *llmwire.Client {
-	return llmwire.New(llmwire.Config{
+	return llmwire.New(llmwire.Config{ //nolint:gosec // G101: fake key, only ever sent to this fake
 		BaseURL:  s.URL,
 		APIKey:   "llmwiretest-key",
 		Registry: Registry(),

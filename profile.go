@@ -710,7 +710,7 @@ func (p Profile) validateChat(bad func(string, ...any) error) error {
 		return bad("needs_include_usage is true but accepts_stream_options is false; " +
 			"the parameter would have to be sent to an endpoint that rejects it")
 	}
-	if p.Streaming.BuffersToolArgs && !(p.Streaming.Supported && p.Tools.Supported) {
+	if p.Streaming.BuffersToolArgs && (!p.Streaming.Supported || !p.Tools.Supported) {
 		return bad("buffers_tool_args is set but the model does not stream tool calls; " +
 			"it describes a streamed tool-call argument")
 	}
