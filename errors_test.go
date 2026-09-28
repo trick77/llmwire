@@ -173,7 +173,7 @@ func TestRetryAfter(t *testing.T) {
 // fakeKey builds a credential-shaped string at runtime.
 //
 // It is assembled rather than written as a literal on purpose:
-// hack/secret-scan.sh refuses anything key-shaped entering the tree, and these
+// scripts/secret-scan.sh refuses anything key-shaped entering the tree, and these
 // tests would otherwise be the one place in the repo needing an exemption from
 // the very guard they exercise. Composing the fixture keeps the scanner
 // absolute — no allowlist, no marker comment, nothing that could be copied into

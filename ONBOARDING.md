@@ -52,7 +52,7 @@ truth, comment standard) and the head comment of `profiles.yaml`.
   `eval_harness_test.go`; it reads the shipped host and fails the run if the
   URL variable is set beside it. A missing key skips that provider's probes
   with a named reason; it never falls back.
-- **New key prefix?** `hack/secret-scan.sh` (`PATTERN='(sk|tp)-...'`) and
+- **New key prefix?** `scripts/secret-scan.sh` (`PATTERN='(sk|tp)-...'`) and
   `Redact` by shape (`errors.go`, the `sk-`/`tp-` run) only know those two.
   A key with another prefix is invisible to the scan and to redaction: extend
   both, with a test, before the first probe logs anything.
@@ -348,7 +348,7 @@ change ships no tag.
 
 ## 7. Ship
 
-CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`,
+CI order: `gofmt -l .`, `./scripts/secret-scan.sh`, `go vet ./...`,
 `go build ./...`, `go test -race ./...`. Patch coverage 75% on non-comment
 lines. Test fixtures assemble keys at runtime (`fakeKey`), never as literals.
 No key, no `.env`, no full URL in anything committed, the findings note

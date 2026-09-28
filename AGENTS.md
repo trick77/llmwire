@@ -9,7 +9,7 @@ Bedrock: permanently out of scope.
 
 ## Commands
 
-CI order: `gofmt -l .`, `./hack/secret-scan.sh`, `go vet ./...`, `go build ./...`,
+CI order: `gofmt -l .`, `./scripts/secret-scan.sh`, `go vet ./...`, `go build ./...`,
 `go test -race ./...`. Go 1.25. No Makefile, no golangci-lint.
 
 ## Quirks are data
@@ -133,7 +133,7 @@ loopback hosts only. **A gateway is
 env, not profiles**: `LLMWIRE_LITELLM_MODELS=<id>[=<alias>],...` routes listed
 profiles through litellm (`gateway.go` `viaGateway`, same resolve/validate as a
 YAML route); aliases are the operator's, never shipped. Read by `FromEnv` and the evals. `.env` gitignored, loaded under
-`LLMWIRE_EVAL=1` (real env wins). `hack/secret-scan.sh` runs pre-commit **and** CI.
+`LLMWIRE_EVAL=1` (real env wins). `scripts/secret-scan.sh` runs pre-commit **and** CI.
 CI holds no key.
 
 ## Evals
