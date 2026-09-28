@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hack/secret-scan.sh [--staged]
+# scripts/secret-scan.sh [--staged]
 #
 # Refuses API keys and .env files entering the repository.
 #
@@ -40,7 +40,7 @@ else
     if git ls-files | grep -qx '.env'; then
         die ".env is tracked — it must never be"
     fi
-    if hits=$(git grep -nE "$PATTERN" -- . ':!hack/secret-scan.sh' || true); [ -n "$hits" ]; then
+    if hits=$(git grep -nE "$PATTERN" -- . ':!scripts/secret-scan.sh' || true); [ -n "$hits" ]; then
         printf '%s\n' "$hits" >&2
         die "tracked file contains something shaped like an API key"
     fi

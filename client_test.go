@@ -452,7 +452,7 @@ func TestErrors_TheConfiguredKeyNeverAppearsWhateverItsShape(t *testing.T) {
 // parsed on another path than a status error.
 func TestErrors_TheKeyIsStrippedBeforeTheShapePassAndAcrossTheCut(t *testing.T) {
 	// Assembled at runtime: a literal of this shape is exactly what
-	// hack/secret-scan.sh refuses to let into the tree.
+	// scripts/secret-scan.sh refuses to let into the tree.
 	key := "gw-" + "sk" + "-" + strings.Repeat("a", 24) + "-tail"
 	filler := strings.Repeat("x", maxErrorBody-10)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

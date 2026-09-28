@@ -314,14 +314,14 @@ a failed eval is a finding, not a flake.
 
 ```
 gofmt -l .          # must print nothing
-./hack/secret-scan.sh
+./scripts/secret-scan.sh
 go vet ./...
 go build ./...
 go test -race ./...
 ```
 
 Keys are read from the environment only. `.env` is gitignored, and
-`hack/secret-scan.sh` refuses keys and `.env` files entering the tree — from the
+`scripts/secret-scan.sh` refuses keys and `.env` files entering the tree — from the
 pre-commit hook and from CI, since a hook only protects one machine.
 
 ## Licence
