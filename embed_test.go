@@ -280,16 +280,27 @@ func TestEmbed_CarriesTheGatewayBlock(t *testing.T) {
 	srv, _ := embedServer(t, false)
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(litellmCallIDHeader, "call-7")
+		w.Header().Set(litellmKeySpendHeader, "lots")
 		srv.Config.Handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(proxy.Close)
 
-	resp, _, err := embedClient(t, proxy).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(3)})
+	resp, warnings, err := embedClient(t, proxy).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.Gateway.CallID != "call-7" {
 		t.Errorf("gateway = %+v, want call id call-7", resp.Gateway)
+	}
+	// The unusable key spend arrives on every batch and is named once.
+	var spend int
+	for _, w := range warnings {
+		if w.Feature == "key_spend" {
+			spend++
+		}
+	}
+	if spend != 1 {
+		t.Errorf("warnings = %v, want one key_spend warning", warnings)
 	}
 }
 
@@ -343,6 +354,41 @@ func TestEmbed_CallTimeoutBoundsTheWholeCall(t *testing.T) {
 	}
 	if m := c.Stats().Models["text-embedding-3-small"]; m.Errors != 1 {
 		t.Errorf("errors = %d, want the call logged as failed", m.Errors)
+	}
+}
+
+// A batch that answered 2xx but did not decode was likely billed with nothing to
+// read, so the sum of the batches before it is no longer a total: unknown, not
+// understated.
+func TestEmbed_UndecodableBatchMakesTheTotalUnknown(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 3 {
+			_, _ = w.Write([]byte(`not json`))
+			return
+		}
+		raw, _ := readAllBody(r)
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		rows := make([]map[string]any, 0, len(req.Input))
+		for i := range req.Input {
+			rows = append(rows, map[string]any{"index": i, "embedding": []float32{1}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "m", "data": rows,
+			"usage": map[string]any{"prompt_tokens": len(req.Input)}})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := embedClient(t, srv)
+	if _, _, err := c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)}); err == nil {
+		t.Fatal("expected the undecodable batch to fail the call")
+	}
+	m := c.Stats().Models["text-embedding-3-small"]
+	if m.UnreportedCalls != 1 || m.UnpricedCalls != 1 || m.InputTokens != 0 {
+		t.Errorf("stats = %+v, want the call unreported and unpriced", m)
 	}
 }
 
