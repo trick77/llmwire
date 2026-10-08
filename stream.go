@@ -68,6 +68,11 @@ const (
 	// nobody made deliberately.
 	maxStreamLine = 1 << 20
 	maxErrorBody  = 4 << 10
+	// maxErrorRead bounds what httpError reads before decoding. Larger than
+	// the field cap: LiteLLM writes code after a message that embeds the
+	// upstream text, so a body cut at the field cap loses the code to the
+	// decode. Every kept field is capped at maxErrorBody afterwards.
+	maxErrorRead = 64 << 10
 )
 
 // streamDelta is one chunk's incremental payload.

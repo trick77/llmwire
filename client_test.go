@@ -145,6 +145,27 @@ func TestRawStream_ErrorStatusIsDecoded(t *testing.T) {
 	}
 }
 
+// LiteLLM puts code after a message that embeds the upstream text, so a long
+// message pushes the code past the field cap. Cutting the body there before
+// decoding loses the one field callers dispatch on.
+func TestRawPost_CodeAfterALongMessageSurvives(t *testing.T) {
+	long := strings.Repeat("m", 3*maxErrorBody)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"` + long + `","code":"1210"}}`))
+	}))
+	defer srv.Close()
+
+	_, _, err := New(Config{BaseURL: srv.URL}).RawPost(context.Background(), "/chat/completions", []byte(`{}`))
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "1210" {
+		t.Fatalf("err = %v, want an *APIError with code 1210", err)
+	}
+	if len(apiErr.Message) > maxErrorBody+len("…(truncated)") {
+		t.Errorf("message length %d, want bounded to %d", len(apiErr.Message), maxErrorBody)
+	}
+}
+
 // A 429 carries Retry-After when the endpoint sends one. The library parses it
 // and stops there: it never retries on its own, because a library-level retry
 // turns a transient outage into a permanent failure for a whole job queue.
@@ -447,14 +468,14 @@ func TestErrors_TheConfiguredKeyNeverAppearsWhateverItsShape(t *testing.T) {
 
 // Two ways the value pass could miss, both from the review of this change:
 // the shape pass eating the middle of a key that contains an sk- run, so the
-// value is no longer in the text; and the 4 KiB cut landing inside the key,
+// value is no longer in the text; and the read cut landing inside the key,
 // so only its head is in the buffer. And the streaming error frame, which is
 // parsed on another path than a status error.
 func TestErrors_TheKeyIsStrippedBeforeTheShapePassAndAcrossTheCut(t *testing.T) {
 	// Assembled at runtime: a literal of this shape is exactly what
 	// scripts/secret-scan.sh refuses to let into the tree.
 	key := "gw-" + "sk" + "-" + strings.Repeat("a", 24) + "-tail"
-	filler := strings.Repeat("x", maxErrorBody-10)
+	filler := strings.Repeat("x", maxErrorRead-10)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		switch {

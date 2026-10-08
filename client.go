@@ -699,7 +699,7 @@ func (c *Client) httpError(resp *http.Response) error {
 	// leave its head in the message, and the value pass needs it whole. The
 	// parser bounds every field it keeps to the cap afterwards, so the extra
 	// bytes never reach a log.
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, int64(maxErrorBody+len(c.apiKey))))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, int64(maxErrorRead+len(c.apiKey))))
 	apiErr := parseAPIErrorWith(c.redact, resp.StatusCode, raw)
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return newRateLimitError(apiErr, resp.Header, c.now())
