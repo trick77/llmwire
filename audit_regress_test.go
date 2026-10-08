@@ -363,11 +363,17 @@ func TestFromEnv_baseURLFromTheEnvironmentIsValidated(t *testing.T) {
 		{"http://gw.example/v1", "must be https"},
 		{"https://gw.example/v1?key=x", "bare root"},
 		{"https://user:pw@gw.example/v1", "bare root"},
+		{"https://gw.example/v1?auth=hunter2", "bare root"},
+		{"https://user:hunter2@gw.example/v1", "bare root"},
+		{"https://user:hunter2@gw example/v1", "LLMWIRE_GW_BASE_URL"},
 		{"https://gw.example/v1/chat/completions", "ends in a route"},
 	} {
 		t.Run(tc.url, func(t *testing.T) {
 			env := map[string]string{"LLMWIRE_GW_BASE_URL": tc.url, "LLMWIRE_GW_API_KEY": "k"}
 			_, err := FromEnv("m", Config{Registry: reg, Lookup: func(k string) (string, bool) { v, ok := env[k]; return v, ok }})
+			if err != nil && strings.Contains(err.Error(), "hunter2") {
+				t.Fatalf("refusal prints the credential: %v", err)
+			}
 			switch {
 			case tc.want == "" && err != nil:
 				t.Fatalf("refused: %v", err)

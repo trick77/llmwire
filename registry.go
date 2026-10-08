@@ -290,8 +290,11 @@ func (pv Provider) validate() error {
 func validateBaseURL(raw string, allowLoopbackHTTP bool) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("base_url %q: %w", raw, err)
+		// The *url.Error quotes the input, userinfo and all; only its cause prints.
+		return fmt.Errorf("base_url does not parse: %w", err.(*url.Error).Err)
 	}
+	// The refusals below name the URL without the query and userinfo they reject.
+	raw = RedactURL(raw)
 	switch {
 	case u.Scheme == "http" && allowLoopbackHTTP && isLoopbackHost(u.Hostname()):
 	case u.Scheme != "https":
