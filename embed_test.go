@@ -274,6 +274,34 @@ func TestEmbed_FailedCallStillAccountsThePaidBatches(t *testing.T) {
 	}
 }
 
+// CallTimeout bounds the whole Embed call, not each batch: three batches that
+// each fit the cap but together outrun it end in ErrCallCap.
+func TestEmbed_CallTimeoutBoundsTheWholeCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		raw, _ := readAllBody(r)
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		rows := make([]map[string]any, 0, len(req.Input))
+		for i := range req.Input {
+			rows = append(rows, map[string]any{"index": i, "embedding": []float32{1}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "m", "data": rows})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{BaseURL: srv.URL, CallTimeout: 450 * time.Millisecond})
+	_, _, err := c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)})
+	if !errors.Is(err, ErrCallCap) {
+		t.Fatalf("err = %v, want ErrCallCap", err)
+	}
+	if m := c.Stats().Models["text-embedding-3-small"]; m.Errors != 1 {
+		t.Errorf("errors = %d, want the call logged as failed", m.Errors)
+	}
+}
+
 // Usage is summed only while every batch reported it: a partial sum understates and
 // is indistinguishable from a real total.
 func TestEmbed_PartialUsageIsNotSummed(t *testing.T) {

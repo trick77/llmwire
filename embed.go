@@ -24,7 +24,7 @@ const routeEmbeddings = "/embeddings"
 const embedBatchSize = 64
 
 // Embed returns one vector per input, in the order of the inputs.
-func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, []Warning, error) {
+func (c *Client) Embed(ctx context.Context, req EmbedRequest) (_ *EmbedResponse, warnings []Warning, err error) {
 	if c.routes != nil {
 		return c.routedEmbed(ctx, req)
 	}
@@ -33,12 +33,21 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 		return nil, nil, err
 	}
 
+	// CallTimeout bounds the whole call, every batch together; each exchange
+	// also caps itself, which is the same bound for a single batch.
+	callCtx, cancelCall := context.WithTimeout(ctx, c.cap)
+	defer cancelCall()
+
 	out := &EmbedResponse{Vectors: make([][]float32, len(req.Inputs))}
 	sum := callSummary{kind: "embed", model: req.Model, inputs: len(req.Inputs)}
 	defer func() {
+		// rawCall reads an outer deadline as the caller's own; this one is not.
+		if err != nil && callCtx.Err() != nil && ctx.Err() == nil {
+			err = fmt.Errorf("llmwire: %w", &callCapError{cap: c.cap})
+		}
 		// Usage on failure too: the batches before the failing one were paid
 		// for, and a failed call returns no response to carry them.
-		sum.timing, sum.warnings, sum.usage = out.Timing, warnings, out.Usage
+		sum.timing, sum.warnings, sum.usage, sum.err = out.Timing, warnings, out.Usage, err
 		c.finish(sum)
 	}()
 	// Summed only while every batch has reported: a partial sum understates and is
@@ -50,8 +59,7 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 	for start := 0; start < len(req.Inputs); start += embedBatchSize {
 		// Checked between batches so a cancelled context stops the loop rather
 		// than finishing a long corpus nobody is waiting for.
-		if err := ctx.Err(); err != nil {
-			sum.err = err
+		if err := callCtx.Err(); err != nil {
 			return nil, warnings, err
 		}
 		end := min(start+embedBatchSize, len(req.Inputs))
@@ -59,11 +67,10 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 
 		body, err := renderEmbedBody(p, batch, dimensions)
 		if err != nil {
-			sum.err = err
 			return nil, warnings, err
 		}
 		at := c.now()
-		raw, hdr, timing, err := c.rawPost(ctx, routeEmbeddings, body)
+		raw, hdr, timing, err := c.rawPost(callCtx, routeEmbeddings, body)
 		// Summed before the error check, so the log line for a failed corpus
 		// includes the batch that failed: that is the one whose wait explains
 		// the failure.
@@ -73,12 +80,10 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 			// No partial result. A half-filled [][]float32 is worse than none,
 			// because the caller cannot tell which rows are real, and a row of
 			// zeros is a valid-looking vector that means nothing.
-			sum.err = err
 			return nil, warnings, err
 		}
 		batchResp, err := parseEmbedResponseWith(c.redact, raw, len(batch))
 		if err != nil {
-			sum.err = err
 			return nil, warnings, err
 		}
 		copy(out.Vectors[start:end], batchResp.vectors)
