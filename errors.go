@@ -191,13 +191,6 @@ type errorEnvelope struct {
 	Detail json.RawMessage `json:"detail"`
 }
 
-// parseAPIError decodes an error response body. It never returns nil: a body it
-// cannot parse still yields an APIError carrying the (redacted, truncated) text,
-// because a caller that gets nil here would report a failure as a success.
-func parseAPIError(status int, body []byte) *APIError {
-	return parseAPIErrorWith(Redact, status, body)
-}
-
 // cleanText is THE rule for upstream text an error keeps: redacted, then
 // bounded, in that order. A cut that lands inside a credential leaves its
 // head behind for a pass that only knows the whole value.
@@ -218,6 +211,10 @@ func bodySnippet(redact redactor, raw []byte) string {
 // nothing to strip.
 type redactor func(string) string
 
+// parseAPIErrorWith decodes an error response body. It never returns nil: a
+// body it cannot parse still yields an APIError carrying the (redacted,
+// truncated) text, because a caller that gets nil here would report a failure
+// as a success.
 func parseAPIErrorWith(redact redactor, status int, body []byte) *APIError {
 	e := &APIError{StatusCode: status, Class: classify(status)}
 	body = unframeSSE(body)

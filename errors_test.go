@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+// parseAPIError is parseAPIErrorWith under the shape-only redactor.
+func parseAPIError(status int, body []byte) *APIError {
+	return parseAPIErrorWith(Redact, status, body)
+}
+
 // The provider's error code arrives as a JSON string on MiMo and LiteLLM, and
 // Z.ai's schema declares it an integer while its live bodies send a string.
 // Both must reach a call site as the same comparable value, or dispatching on
