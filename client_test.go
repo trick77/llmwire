@@ -374,6 +374,41 @@ func TestRawStream_ParentCancellationIsNotReportedAsAStall(t *testing.T) {
 	}
 }
 
+// Nor is a cancel after the headers an endpoint that did not finish: the body
+// read fails because the caller stopped it, so ErrMalformedResponse is wrong.
+func TestChatStream_ParentCancellationMidStreamIsNotMalformed(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"hi"}}]}` + "\n\n"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := New(Config{BaseURL: srv.URL, IdleTimeout: 10 * time.Second, CallTimeout: 10 * time.Second})
+	stream, _, err := c.ChatStream(ctx, ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if !stream.Next() {
+		t.Fatalf("no first event: %v", stream.Err())
+	}
+	cancel()
+	for stream.Next() {
+	}
+	err = stream.Err()
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrMalformedResponse) {
+		t.Errorf("err = %v, want context.Canceled and not ErrMalformedResponse", err)
+	}
+}
+
 // --- RawPost -----------------------------------------------------------------
 
 func TestRawPost_ReturnsBodyAndHeaders(t *testing.T) {

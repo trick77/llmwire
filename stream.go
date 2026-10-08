@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -437,6 +438,10 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 	switch {
 	case frameErr != nil:
 		endErr = frameErr
+	case errors.Is(sc.Err(), context.Canceled), errors.Is(sc.Err(), context.DeadlineExceeded):
+		// The read was stopped from this side: the caller, a guard or the
+		// call cap. explain names which; the endpoint did nothing wrong.
+		endErr = fmt.Errorf("llmwire: reading stream: %w", sc.Err())
 	case sc.Err() != nil:
 		// A scanner failure is a stream cut short: a line past the cap, a
 		// body that ended mid-line. Wrapped in the sentinel a caller
