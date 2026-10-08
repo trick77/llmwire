@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 // Embeddings.
@@ -98,7 +99,12 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (_ *EmbedResponse,
 		// Priced per batch, with the model that ran it: a total is a sum of
 		// per-call prices, never re-derived from summed tokens.
 		cost, priceWarnings := priceCall(p, batchResp.usage, hdr, 200, at)
-		warnings = append(warnings, priceWarnings...)
+		// Once per call: an unpriced model says the same thing for every batch.
+		for _, w := range priceWarnings {
+			if !slices.Contains(warnings, w) {
+				warnings = append(warnings, w)
+			}
+		}
 		out.Usage.Cost.NanoUSD += cost.NanoUSD
 		out.Usage.Cost.Provenance = mergeProvenance(out.Usage.Cost.Provenance, cost.Provenance, start == 0)
 		out.Usage.Cost.AppliedAt = cost.AppliedAt

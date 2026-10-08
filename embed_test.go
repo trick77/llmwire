@@ -293,6 +293,31 @@ func TestEmbed_CarriesTheGatewayBlock(t *testing.T) {
 	}
 }
 
+// A model that cannot be priced says so once per call, not once per batch.
+func TestEmbed_PricingWarningOncePerCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := readAllBody(r)
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		rows := make([]map[string]any, 0, len(req.Input))
+		for i := range req.Input {
+			rows = append(rows, map[string]any{"index": i, "embedding": []float32{1}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "m", "data": rows})
+	}))
+	t.Cleanup(srv.Close)
+
+	_, warnings, err := embedClient(t, srv).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 {
+		t.Errorf("warnings = %v, want the unpriced batches named once", warnings)
+	}
+}
+
 // CallTimeout bounds the whole Embed call, not each batch: three batches that
 // each fit the cap but together outrun it end in ErrCallCap.
 func TestEmbed_CallTimeoutBoundsTheWholeCall(t *testing.T) {
