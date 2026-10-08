@@ -4,7 +4,9 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -263,12 +265,7 @@ func (r *Registry) Provider(name string) (Provider, error) {
 // sortedKeys orders a map's keys, so every listing and every error names
 // things in the same order on every run.
 func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(m))
 }
 
 // validate checks a provider's host. A trailing slash is trimmed at use, so
