@@ -138,7 +138,7 @@ func (s *Stream) read(pl *wirePlan, at time.Time) {
 	resp := s.resp
 	res, inlineWarnings, err := readStream(resp.Body, s.guard,
 		streamBounds{idle: s.client.idle, toolIdle: pl.req.ToolCallIdleTimeout}, s.push, s.client.redact,
-		pl.profile.Tools.recoversInline() && pl.req.ResponseFormat.text(), s.client.now, s.start)
+		pl.recoversInline(), s.client.now, s.start)
 	res.Timing.Headers = s.headers
 	res.ReasoningSent = reasoningLabel(pl.req.Reasoning)
 

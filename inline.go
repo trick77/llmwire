@@ -29,7 +29,7 @@ import (
 // deltas, recovers the calls once the answer is complete and cuts the markup from
 // the accumulated text, so no caller ever sees it. Recovery runs whether or not
 // the request offered tools: the case that leaked was a tool-free call answered
-// with a tool call. It never runs on a JSON reply (ResponseFormat.text).
+// with a tool call. On a native model it never runs on a JSON reply.
 
 const (
 	inlineToolCallMarker   = "<tool_call>"
@@ -56,10 +56,14 @@ var (
 	inlineInvocationArgs = regexp.MustCompile(`arguments\s*=\s*`)
 )
 
-// recoversInline reports whether this profile's answers are parsed for inline
-// tool-call markup.
-func (t Tools) recoversInline() bool {
-	return t.RecoverInlineMarkup || t.Format == FormatXML
+// recoversInline reports whether this call's answer is parsed for inline
+// tool-call markup. A FormatXML model sends calls no other way, so it always is.
+// A native model opted in is not on a JSON reply (ResponseFormat.text): a string
+// value may quote the markup, and the cut would leave a fragment that no longer
+// parses.
+func (pl *wirePlan) recoversInline() bool {
+	t := pl.profile.Tools
+	return t.Format == FormatXML || t.RecoverInlineMarkup && pl.req.ResponseFormat.text()
 }
 
 // inlineToolCallID is the synthetic id of the index-th (0-based) recovered call.

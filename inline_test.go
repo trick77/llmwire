@@ -494,6 +494,29 @@ func TestChat_JSONReplyKeepsQuotedMarkup(t *testing.T) {
 	}
 }
 
+// A FormatXML model has no other way to send a call, so its markup is recovered
+// whatever the response format; only an opted-in native model skips JSON.
+func TestWirePlan_RecoversInline(t *testing.T) {
+	jsonReq := ChatRequest{ResponseFormat: ResponseFormat{Kind: FormatJSONObject}}
+	for _, tc := range []struct {
+		name  string
+		tools Tools
+		req   ChatRequest
+		want  bool
+	}{
+		{"xml, text", Tools{Format: FormatXML}, ChatRequest{}, true},
+		{"xml, json", Tools{Format: FormatXML}, jsonReq, true},
+		{"native opted in, text", Tools{Format: FormatNative, RecoverInlineMarkup: true}, ChatRequest{}, true},
+		{"native opted in, json", Tools{Format: FormatNative, RecoverInlineMarkup: true}, jsonReq, false},
+		{"native", Tools{Format: FormatNative}, ChatRequest{}, false},
+	} {
+		pl := &wirePlan{profile: &Profile{Tools: tc.tools}, req: tc.req}
+		if got := pl.recoversInline(); got != tc.want {
+			t.Errorf("%s: recoversInline = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestChat_ProfileWithoutRecoveryKeepsMarkup(t *testing.T) {
 	srv, _ := jsonServer(t, 200, `{"model":"glm-5.3-flash","choices":[{"finish_reason":"stop","message":{"content":"<tool_call><function=a></function></tool_call>"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	c := New(Config{BaseURL: srv.URL})
