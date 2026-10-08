@@ -236,6 +236,44 @@ func TestEmbed_NoPartialResults(t *testing.T) {
 	}
 }
 
+// The batches that succeeded before one failed were paid for. No vectors come
+// back, but their tokens and cost still reach Stats, as a cut stream's do.
+func TestEmbed_FailedCallStillAccountsThePaidBatches(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"boom","code":"500"}}`))
+			return
+		}
+		raw, _ := readAllBody(r)
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		rows := make([]map[string]any, 0, len(req.Input))
+		for i := range req.Input {
+			rows = append(rows, map[string]any{"index": i, "embedding": []float32{1}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "m", "data": rows,
+			"usage": map[string]any{"prompt_tokens": 1000 * len(req.Input)}})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := embedClient(t, srv)
+	if _, _, err := c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)}); err == nil {
+		t.Fatal("expected the failing batch to fail the call")
+	}
+	m := c.Stats().Models["text-embedding-3-small"]
+	if m.Errors != 1 || m.InputTokens != 128000 {
+		t.Errorf("errors = %d, input tokens = %d; want 1 and the two paid batches' 128000", m.Errors, m.InputTokens)
+	}
+	if m.UnpricedCalls != 0 || m.CostNanoUSD == 0 {
+		t.Errorf("unpriced = %d, cost = %d; want the paid batches priced", m.UnpricedCalls, m.CostNanoUSD)
+	}
+}
+
 // Usage is summed only while every batch reported it: a partial sum understates and
 // is indistinguishable from a real total.
 func TestEmbed_PartialUsageIsNotSummed(t *testing.T) {

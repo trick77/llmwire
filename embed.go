@@ -36,10 +36,9 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 	out := &EmbedResponse{Vectors: make([][]float32, len(req.Inputs))}
 	sum := callSummary{kind: "embed", model: req.Model, inputs: len(req.Inputs)}
 	defer func() {
-		sum.timing, sum.warnings = out.Timing, warnings
-		if sum.err == nil {
-			sum.usage = out.Usage
-		}
+		// Usage on failure too: the batches before the failing one were paid
+		// for, and a failed call returns no response to carry them.
+		sum.timing, sum.warnings, sum.usage = out.Timing, warnings, out.Usage
 		c.finish(sum)
 	}()
 	// Summed only while every batch has reported: a partial sum understates and is
@@ -100,20 +99,19 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 			out.Usage.Cost.NanoUSD = 0
 		}
 
-		if t := batchResp.usage.Input.Total; t != nil {
+		// Kept current per batch, so a later failure still accounts what was
+		// paid. Built by hand rather than through parseUsage, so the flag it
+		// would have set is set here: a sum of reported batches is reported.
+		if t := batchResp.usage.Input.Total; t != nil && allReported {
 			inputTotal += *t
+			noCache := inputTotal
+			out.Usage.Input.Total, out.Usage.Input.NoCache = &inputTotal, &noCache
+			out.Usage.reported = true
 		} else {
 			allReported = false
+			out.Usage.Input.Total, out.Usage.Input.NoCache = nil, nil
+			out.Usage.reported = false
 		}
-	}
-
-	if allReported && len(req.Inputs) > 0 {
-		out.Usage.Input.Total = &inputTotal
-		noCache := inputTotal
-		out.Usage.Input.NoCache = &noCache
-		// Built by hand rather than through parseUsage, so the flag it would
-		// have set is set here: a sum of reported batches is reported.
-		out.Usage.reported = true
 	}
 	return out, warnings, nil
 }
