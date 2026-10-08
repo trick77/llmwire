@@ -182,8 +182,9 @@ type Tools struct {
 	SupportsForcedChoice bool `yaml:"supports_forced_choice"`
 	SupportsParallel     bool `yaml:"supports_parallel"`
 	// RecoverInlineMarkup runs the inline-XML recovery even when Format is
-	// native. Off for every profile measured; kept because loom observed markup
-	// leaking from a deployment that otherwise returns native calls.
+	// native. On for the MiMo profiles although no probe reproduces the leak:
+	// loom observed markup leaking from a deployment that otherwise returns
+	// native calls (see profiles.yaml).
 	RecoverInlineMarkup bool `yaml:"recover_inline_markup"`
 }
 

@@ -76,8 +76,7 @@ func (c *Client) logCall(s callSummary) {
 	}
 	if s.kind == "embed" {
 		attrs = append(attrs, "inputs", s.inputs)
-	}
-	if s.kind != "embed" {
+	} else {
 		attrs = append(attrs, "finish_reason", s.finishReason,
 			"content_chars", s.content, "reasoning_chars", s.reasoning, "tool_calls", s.toolCalls)
 	}
