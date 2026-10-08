@@ -72,8 +72,9 @@ CI order: `gofmt -l .`, `./scripts/secret-scan.sh`, `go vet ./...`, `go build ./
   `ListModels` is the one exception: no plan, no usage, no model, so it logs its
   own line instead of polluting per-model stats. `RawStream`/`RawPost` sit
   below plan and log nothing: they are the probe suite's entry points.
-- `rawCall(method)` is the only non-streaming exchange; a GET (models listing)
-  sends no `Content-Type`. Gateway limits in the listing decode via `limitField`:
+- `rawCall(method)` is the only non-streaming exchange, `openStream` the only
+  streaming one (RawStream + ChatStream); a GET (models listing) sends no
+  `Content-Type`. Gateway limits in the listing decode via `limitField`:
   integral float ok, anything else present → nil + `Warning`, never a cast.
 - Wire mechanics live at their enforcement site. Read `stream.go`'s head comment
   before touching the parser.

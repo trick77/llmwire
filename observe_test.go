@@ -204,6 +204,23 @@ func TestRawStream_dialFailureCarriesTiming(t *testing.T) {
 	}
 }
 
+// ChatStream shares RawStream's exchange, so its failed dial logs the same
+// figures rather than a Total that also counts the classification.
+func TestChatStream_dialFailureCarriesTiming(t *testing.T) {
+	var buf bytes.Buffer
+	now, _ := stepClock()
+	c := New(Config{
+		BaseURL:  "http://127.0.0.1:1",
+		Registry: Default(),
+		Now:      now,
+		Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+	if _, _, err := c.ChatStream(context.Background(), hiRequest()); err == nil {
+		t.Fatal("a dial to port 1 succeeded")
+	}
+	wantAll(t, buf.String(), "llmwire call failed", "headers_ms=1000", "total_ms=1000")
+}
+
 func TestEmbed_dialFailureCarriesTiming(t *testing.T) {
 	var buf bytes.Buffer
 	now, _ := stepClock()
