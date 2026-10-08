@@ -169,6 +169,13 @@ type ResponseFormat struct {
 	Strict bool
 }
 
+// text reports whether the reply is free text, the only kind a response-side
+// cut may touch. A JSON reply is never cut: a string value may quote the tag or
+// markup being cut, and the cut would leave a fragment that no longer parses.
+func (f ResponseFormat) text() bool {
+	return f.Kind == FormatUnset || f.Kind == FormatText
+}
+
 // ReasoningRequest is how much thinking to ask for.
 //
 // A sum type rather than a string, so validation is "does this variant match one
@@ -351,6 +358,9 @@ type EmbedResponse struct {
 	// Timing is summed over the batches the inputs were split into, so it is
 	// the wall-clock the whole call spent on the wire, not one request's.
 	Timing Timing
+	// Gateway is the last batch's proxy headers, as on ChatResponse: its call
+	// id, and the key spend as of the end of the call. Empty on a direct route.
+	Gateway Gateway
 }
 
 // ChatResponse is a completed non-streaming turn.

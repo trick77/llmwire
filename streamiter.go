@@ -2,7 +2,6 @@ package llmwire
 
 import (
 	"context"
-	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -56,12 +55,8 @@ type Stream struct {
 	client *Client
 	// ctx is the caller's, kept so a genuine parent cancellation stays
 	// distinguishable from this package's own bounds.
-	ctx     context.Context
-	callCtx context.Context
-	// cancelReq cancels the request; cancelCall releases the whole-call bound.
-	cancelReq  context.CancelFunc
-	cancelCall context.CancelFunc
-	guard      *stallGuard
+	ctx context.Context
+	*streamExchange
 
 	// queue is UNBOUNDED, and that is the load-bearing decision in this file.
 	//
@@ -102,64 +97,29 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	if err != nil {
 		return nil, nil, err
 	}
+	sum := callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings}
 	body, err := renderChatBody(pl)
 	if err != nil {
-		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err})
+		sum.err = err
+		c.finish(sum)
 		return nil, warnings, err
 	}
 	at := c.now()
 
-	// Two nested contexts, as RawStream uses: callCtx is the whole-call bound and
-	// reqCtx is what the stall guard cancels. Cancelling reqCtx leaves callCtx's
-	// deadline intact, so afterwards the two failures are still distinguishable.
-	callCtx, cancelCall := context.WithTimeout(ctx, c.cap)
-	reqCtx, cancelReq := context.WithCancel(callCtx)
-
-	httpReq, err := c.newRequest(reqCtx, http.MethodPost, routeChat, body)
+	x, timing, hdr, err := c.openStream(ctx, body)
 	if err != nil {
-		cancelReq()
-		cancelCall()
-		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err})
-		return nil, warnings, err
-	}
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	guard := newStallGuard(cancelReq, c.header, stallHeaders)
-	start := c.now()
-	resp, err := c.http.Do(httpReq)
-	headers := c.now().Sub(start)
-	if err != nil {
-		err = c.explain(ctx, callCtx, guard, c.dialError(routeChat, err))
-		guard.stop()
-		cancelReq()
-		cancelCall()
-		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err,
-			timing: Timing{Headers: headers, Total: c.now().Sub(start)}})
-		return nil, warnings, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err = c.httpError(resp)
-		_ = resp.Body.Close()
-		guard.stop()
-		cancelReq()
-		cancelCall()
 		// The proxy's call id is worth most on a rejection: it is what
 		// matches this failure to the gateway's own log.
-		gw, _ := parseGatewayHeaders(resp.Header)
-		c.finish(callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings, err: err,
-			gateway: gw, timing: Timing{Headers: headers, Total: c.now().Sub(start)}})
+		sum.gateway, _ = parseGatewayHeaders(hdr)
+		sum.err, sum.timing = err, timing
+		c.finish(sum)
 		return nil, warnings, err
 	}
-	// Headers are in, so the bound that matters from here is silence.
-	guard.arm(c.idle, stallIdle)
 
 	s := &Stream{
-		client:     c,
-		ctx:        ctx,
-		callCtx:    callCtx,
-		cancelReq:  cancelReq,
-		cancelCall: cancelCall,
-		guard:      guard,
+		client:         c,
+		ctx:            ctx,
+		streamExchange: x,
 		// The caller's slice and the stream's are separate allocations: the
 		// reader appends pricing warnings to s.warnings later, and a shared
 		// backing array would let that append write into a slice the caller
@@ -169,16 +129,17 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	}
 	s.cond = sync.NewCond(&s.mu)
 
-	go s.read(resp, pl, at, start, headers)
+	go s.read(pl, at)
 	return s, warnings, nil
 }
 
 // read consumes the stream on its own goroutine and publishes the result.
-func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, headers time.Duration) {
+func (s *Stream) read(pl *wirePlan, at time.Time) {
+	resp := s.resp
 	res, inlineWarnings, err := readStream(resp.Body, s.guard,
 		streamBounds{idle: s.client.idle, toolIdle: pl.req.ToolCallIdleTimeout}, s.push, s.client.redact,
-		pl.profile.Tools.recoversInline(), s.client.now, start)
-	res.Timing.Headers = headers
+		pl.recoversInline(), s.client.now, s.start)
+	res.Timing.Headers = s.headers
 	res.ReasoningSent = reasoningLabel(pl.req.Reasoning)
 
 	_ = resp.Body.Close()
@@ -203,6 +164,10 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 	case err != nil:
 		err = s.client.explain(s.ctx, s.callCtx, s.guard, err)
 	}
+	// Released once explain has read them, so a caller who drains the stream
+	// without Close does not keep the call-cap timer alive. Close stays a no-op
+	// on them.
+	s.release()
 	// Priced however the stream ended. A caller who Closes after EventFinish
 	// has, on an endpoint that sends usage in the finish chunk, already
 	// received the figures; and a stream cut after its usage frame was paid
@@ -370,7 +335,7 @@ func (s *Stream) Close() error {
 		// Cancelling reqCtx unblocks the body read the goroutine is sitting in.
 		s.cancelReq()
 		<-s.done
-		s.cancelCall()
+		s.release()
 	})
 	return s.Err()
 }

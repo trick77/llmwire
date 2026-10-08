@@ -145,6 +145,27 @@ func TestRawStream_ErrorStatusIsDecoded(t *testing.T) {
 	}
 }
 
+// LiteLLM puts code after a message that embeds the upstream text, so a long
+// message pushes the code past the field cap. Cutting the body there before
+// decoding loses the one field callers dispatch on.
+func TestRawPost_CodeAfterALongMessageSurvives(t *testing.T) {
+	long := strings.Repeat("m", 3*maxErrorBody)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"` + long + `","code":"1210"}}`))
+	}))
+	defer srv.Close()
+
+	_, _, err := New(Config{BaseURL: srv.URL}).RawPost(context.Background(), "/chat/completions", []byte(`{}`))
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "1210" {
+		t.Fatalf("err = %v, want an *APIError with code 1210", err)
+	}
+	if len(apiErr.Message) > maxErrorBody+len("…(truncated)") {
+		t.Errorf("message length %d, want bounded to %d", len(apiErr.Message), maxErrorBody)
+	}
+}
+
 // A 429 carries Retry-After when the endpoint sends one. The library parses it
 // and stops there: it never retries on its own, because a library-level retry
 // turns a transient outage into a permanent failure for a whole job queue.
@@ -353,6 +374,41 @@ func TestRawStream_ParentCancellationIsNotReportedAsAStall(t *testing.T) {
 	}
 }
 
+// Nor is a cancel after the headers an endpoint that did not finish: the body
+// read fails because the caller stopped it, so ErrMalformedResponse is wrong.
+func TestChatStream_ParentCancellationMidStreamIsNotMalformed(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"hi"}}]}` + "\n\n"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := New(Config{BaseURL: srv.URL, IdleTimeout: 10 * time.Second, CallTimeout: 10 * time.Second})
+	stream, _, err := c.ChatStream(ctx, ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if !stream.Next() {
+		t.Fatalf("no first event: %v", stream.Err())
+	}
+	cancel()
+	for stream.Next() {
+	}
+	err = stream.Err()
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrMalformedResponse) {
+		t.Errorf("err = %v, want context.Canceled and not ErrMalformedResponse", err)
+	}
+}
+
 // --- RawPost -----------------------------------------------------------------
 
 func TestRawPost_ReturnsBodyAndHeaders(t *testing.T) {
@@ -447,14 +503,14 @@ func TestErrors_TheConfiguredKeyNeverAppearsWhateverItsShape(t *testing.T) {
 
 // Two ways the value pass could miss, both from the review of this change:
 // the shape pass eating the middle of a key that contains an sk- run, so the
-// value is no longer in the text; and the 4 KiB cut landing inside the key,
+// value is no longer in the text; and the read cut landing inside the key,
 // so only its head is in the buffer. And the streaming error frame, which is
 // parsed on another path than a status error.
 func TestErrors_TheKeyIsStrippedBeforeTheShapePassAndAcrossTheCut(t *testing.T) {
 	// Assembled at runtime: a literal of this shape is exactly what
 	// scripts/secret-scan.sh refuses to let into the tree.
 	key := "gw-" + "sk" + "-" + strings.Repeat("a", 24) + "-tail"
-	filler := strings.Repeat("x", maxErrorBody-10)
+	filler := strings.Repeat("x", maxErrorRead-10)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		switch {
@@ -589,5 +645,24 @@ func TestNew_CopiesTheHeaderMap(t *testing.T) {
 	h["X-A"] = "mutated"
 	if c.headers["X-A"] != "1" {
 		t.Error("New must copy the header map")
+	}
+}
+
+// A stream read to its end releases its contexts without waiting for Close:
+// the call-cap timer otherwise stays registered on the parent until it fires.
+func TestChatStream_DrainedStreamReleasesItsContexts(t *testing.T) {
+	srv := sseServer(t, frames(contentDelta("hi")))
+	stream, _, err := New(Config{BaseURL: srv.URL}).ChatStream(context.Background(),
+		ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for stream.Next() {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if stream.callCtx.Err() == nil {
+		t.Error("the call context is still live after the stream ended")
 	}
 }

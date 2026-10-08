@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 )
 
 // The non-streaming call.
@@ -51,7 +52,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	// off-peak boundary to the wrong window.
 	at := c.now()
 
-	raw, hdr, timing, err := c.rawPost(ctx, routeChat, body)
+	raw, hdr, timing, err := c.rawCall(ctx, http.MethodPost, routeChat, body)
 	sum.timing = timing
 	// Read before the error checks: a proxy 429/5xx returns its headers, and
 	// its call id is what matches the failure to the gateway's own log. A
@@ -82,7 +83,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 			})
 		}
 	}
-	if pl.profile.Tools.recoversInline() {
+	if pl.recoversInline() {
 		rec := recoverInline(resp.Content, resp.Reasoning, len(resp.ToolCalls))
 		resp.Content, resp.Reasoning = rec.content, rec.reasoning
 		resp.ToolCalls = append(resp.ToolCalls, rec.calls...)

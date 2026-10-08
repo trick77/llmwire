@@ -3,8 +3,11 @@ package llmwire
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -263,12 +266,7 @@ func (r *Registry) Provider(name string) (Provider, error) {
 // sortedKeys orders a map's keys, so every listing and every error names
 // things in the same order on every run.
 func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(m))
 }
 
 // validate checks a provider's host. A trailing slash is trimmed at use, so
@@ -290,8 +288,15 @@ func (pv Provider) validate() error {
 func validateBaseURL(raw string, allowLoopbackHTTP bool) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("base_url %q: %w", raw, err)
+		// The *url.Error quotes the input, userinfo and all; only its cause prints.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
+		return fmt.Errorf("base_url does not parse: %w", err)
 	}
+	// The refusals below name the URL without the query and userinfo they reject.
+	raw = RedactURL(raw)
 	switch {
 	case u.Scheme == "http" && allowLoopbackHTTP && isLoopbackHost(u.Hostname()):
 	case u.Scheme != "https":

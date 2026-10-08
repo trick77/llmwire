@@ -236,6 +236,162 @@ func TestEmbed_NoPartialResults(t *testing.T) {
 	}
 }
 
+// The batches that succeeded before one failed were paid for. No vectors come
+// back, but their tokens and cost still reach Stats, as a cut stream's do.
+func TestEmbed_FailedCallStillAccountsThePaidBatches(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"boom","code":"500"}}`))
+			return
+		}
+		raw, _ := readAllBody(r)
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		rows := make([]map[string]any, 0, len(req.Input))
+		for i := range req.Input {
+			rows = append(rows, map[string]any{"index": i, "embedding": []float32{1}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "m", "data": rows,
+			"usage": map[string]any{"prompt_tokens": 1000 * len(req.Input)}})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := embedClient(t, srv)
+	if _, _, err := c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)}); err == nil {
+		t.Fatal("expected the failing batch to fail the call")
+	}
+	m := c.Stats().Models["text-embedding-3-small"]
+	if m.Errors != 1 || m.InputTokens != 128000 {
+		t.Errorf("errors = %d, input tokens = %d; want 1 and the two paid batches' 128000", m.Errors, m.InputTokens)
+	}
+	if m.UnpricedCalls != 0 || m.CostNanoUSD == 0 {
+		t.Errorf("unpriced = %d, cost = %d; want the paid batches priced", m.UnpricedCalls, m.CostNanoUSD)
+	}
+}
+
+// Behind a proxy the call id is what matches a call to the gateway's own log,
+// on Embed as on Chat.
+func TestEmbed_CarriesTheGatewayBlock(t *testing.T) {
+	srv, _ := embedServer(t, false)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(litellmCallIDHeader, "call-7")
+		w.Header().Set(litellmKeySpendHeader, "lots")
+		srv.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+
+	resp, warnings, err := embedClient(t, proxy).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Gateway.CallID != "call-7" {
+		t.Errorf("gateway = %+v, want call id call-7", resp.Gateway)
+	}
+	// The unusable key spend arrives on every batch and is named once.
+	var spend int
+	for _, w := range warnings {
+		if w.Feature == "key_spend" {
+			spend++
+		}
+	}
+	if spend != 1 {
+		t.Errorf("warnings = %v, want one key_spend warning", warnings)
+	}
+}
+
+// A model that cannot be priced says so once per call, not once per batch.
+func TestEmbed_PricingWarningOncePerCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := readAllBody(r)
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		rows := make([]map[string]any, 0, len(req.Input))
+		for i := range req.Input {
+			rows = append(rows, map[string]any{"index": i, "embedding": []float32{1}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "m", "data": rows})
+	}))
+	t.Cleanup(srv.Close)
+
+	_, warnings, err := embedClient(t, srv).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 {
+		t.Errorf("warnings = %v, want the unpriced batches named once", warnings)
+	}
+}
+
+// CallTimeout bounds the whole Embed call, not each batch: three batches that
+// each fit the cap but together outrun it end in ErrCallCap.
+func TestEmbed_CallTimeoutBoundsTheWholeCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		raw, _ := readAllBody(r)
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		rows := make([]map[string]any, 0, len(req.Input))
+		for i := range req.Input {
+			rows = append(rows, map[string]any{"index": i, "embedding": []float32{1}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "m", "data": rows})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{BaseURL: srv.URL, CallTimeout: 450 * time.Millisecond})
+	_, _, err := c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)})
+	if !errors.Is(err, ErrCallCap) {
+		t.Fatalf("err = %v, want ErrCallCap", err)
+	}
+	if m := c.Stats().Models["text-embedding-3-small"]; m.Errors != 1 {
+		t.Errorf("errors = %d, want the call logged as failed", m.Errors)
+	}
+}
+
+// A batch that answered 2xx but did not decode was likely billed with nothing to
+// read, so the sum of the batches before it is no longer a total: unknown, not
+// understated.
+func TestEmbed_UndecodableBatchMakesTheTotalUnknown(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 3 {
+			_, _ = w.Write([]byte(`not json`))
+			return
+		}
+		raw, _ := readAllBody(r)
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		rows := make([]map[string]any, 0, len(req.Input))
+		for i := range req.Input {
+			rows = append(rows, map[string]any{"index": i, "embedding": []float32{1}})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "m", "data": rows,
+			"usage": map[string]any{"prompt_tokens": len(req.Input)}})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := embedClient(t, srv)
+	if _, _, err := c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)}); err == nil {
+		t.Fatal("expected the undecodable batch to fail the call")
+	}
+	m := c.Stats().Models["text-embedding-3-small"]
+	if m.UnreportedCalls != 1 || m.UnpricedCalls != 1 || m.InputTokens != 0 {
+		t.Errorf("stats = %+v, want the call unreported and unpriced", m)
+	}
+}
+
 // Usage is summed only while every batch reported it: a partial sum understates and
 // is indistinguishable from a real total.
 func TestEmbed_PartialUsageIsNotSummed(t *testing.T) {

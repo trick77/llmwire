@@ -1,9 +1,6 @@
 package llmwire
 
-import (
-	"encoding/json"
-	"fmt"
-)
+import "encoding/json"
 
 // Wire rendering: a coerced request becomes the JSON body.
 //
@@ -48,9 +45,7 @@ func renderChatBody(pl *wirePlan) ([]byte, error) {
 	if len(req.Stop) > 0 {
 		body["stop"] = req.Stop
 	}
-	if err := renderReasoning(body, req.Reasoning, pl.profile.Reasoning); err != nil {
-		return nil, err
-	}
+	renderReasoning(body, req.Reasoning, pl.profile.Reasoning)
 	if len(req.Tools) > 0 {
 		body["tools"] = renderTools(req.Tools)
 	}
@@ -223,10 +218,10 @@ func renderResponseFormat(f ResponseFormat) any {
 // its own default, on or off. Restating a default would add a key for no
 // effect — and on the model that cannot be switched off, sending the knob at
 // all is how you learn its error code is overloaded.
-func renderReasoning(body map[string]any, want ReasoningRequest, r Reasoning) error {
-	if want == nil {
-		return nil
-	}
+//
+// A budget always has its parameter name here: the loader requires budget_param
+// for a budget control and plan refuses a budget on any other.
+func renderReasoning(body map[string]any, want ReasoningRequest, r Reasoning) {
 	switch w := want.(type) {
 	case reasoningOff:
 		// Reached only where the profile says the model can be switched off:
@@ -242,17 +237,8 @@ func renderReasoning(body map[string]any, want ReasoningRequest, r Reasoning) er
 	case reasoningEffort:
 		body["reasoning_effort"] = w.level
 	case reasoningBudget:
-		if r.BudgetParam == "" {
-			// Unreachable through plan, which refuses a budget on any other
-			// control, and the profile loader requires the name for this one. An
-			// error rather than a silent omission: a dropped budget is a 10x cost
-			// surprise, which is exactly the failure this package exists to catch.
-			return fmt.Errorf("llmwire: a token budget was requested but the profile names no " +
-				"parameter to send it under")
-		}
 		body[r.BudgetParam] = w.tokens
 	}
-	return nil
 }
 
 // renderEmbedBody builds one embeddings request. Inputs is a single batch, not

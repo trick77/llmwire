@@ -3,7 +3,10 @@ package llmwire
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"slices"
 )
 
 // Embeddings.
@@ -24,7 +27,7 @@ const routeEmbeddings = "/embeddings"
 const embedBatchSize = 64
 
 // Embed returns one vector per input, in the order of the inputs.
-func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, []Warning, error) {
+func (c *Client) Embed(ctx context.Context, req EmbedRequest) (_ *EmbedResponse, warnings []Warning, err error) {
 	if c.routes != nil {
 		return c.routedEmbed(ctx, req)
 	}
@@ -33,13 +36,23 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 		return nil, nil, err
 	}
 
+	// CallTimeout bounds the whole call, every batch together; each exchange
+	// also caps itself, which is the same bound for a single batch.
+	callCtx, cancelCall := context.WithTimeout(ctx, c.cap)
+	defer cancelCall()
+
 	out := &EmbedResponse{Vectors: make([][]float32, len(req.Inputs))}
 	sum := callSummary{kind: "embed", model: req.Model, inputs: len(req.Inputs)}
 	defer func() {
-		sum.timing, sum.warnings = out.Timing, warnings
-		if sum.err == nil {
-			sum.usage = out.Usage
+		// rawCall reads an outer deadline as the caller's own; this one is not.
+		// Only a deadline error is renamed: a 429 that landed as the cap ran
+		// out keeps its code and Retry-After.
+		if errors.Is(err, context.DeadlineExceeded) && callCtx.Err() != nil && ctx.Err() == nil {
+			err = fmt.Errorf("llmwire: %w", &callCapError{cap: c.cap})
 		}
+		// Usage on failure too: the batches before the failing one were paid
+		// for, and a failed call returns no response to carry them.
+		sum.timing, sum.warnings, sum.usage, sum.err = out.Timing, warnings, out.Usage, err
 		c.finish(sum)
 	}()
 	// Summed only while every batch has reported: a partial sum understates and is
@@ -47,12 +60,20 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 	// number is unknown.
 	var inputTotal int64
 	allReported := true
+	// Once per call: an unpriced model or a bad gateway header says the same
+	// thing for every batch.
+	warnOnce := func(ws []Warning) {
+		for _, w := range ws {
+			if !slices.Contains(warnings, w) {
+				warnings = append(warnings, w)
+			}
+		}
+	}
 
 	for start := 0; start < len(req.Inputs); start += embedBatchSize {
 		// Checked between batches so a cancelled context stops the loop rather
 		// than finishing a long corpus nobody is waiting for.
-		if err := ctx.Err(); err != nil {
-			sum.err = err
+		if err := callCtx.Err(); err != nil {
 			return nil, warnings, err
 		}
 		end := min(start+embedBatchSize, len(req.Inputs))
@@ -60,26 +81,38 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 
 		body, err := renderEmbedBody(p, batch, dimensions)
 		if err != nil {
-			sum.err = err
 			return nil, warnings, err
 		}
 		at := c.now()
-		raw, hdr, timing, err := c.rawPost(ctx, routeEmbeddings, body)
+		raw, hdr, timing, err := c.rawCall(callCtx, http.MethodPost, routeEmbeddings, body)
 		// Summed before the error check, so the log line for a failed corpus
 		// includes the batch that failed: that is the one whose wait explains
 		// the failure.
 		out.Timing.Headers += timing.Headers
 		out.Timing.Total += timing.Total
+		// Read before the error check, as on Chat: on a failure the failing
+		// batch's call id is the one that matches the gateway's own log.
+		var gwWarnings []Warning
+		out.Gateway, gwWarnings = parseGatewayHeaders(hdr)
+		sum.gateway = out.Gateway
+		warnOnce(gwWarnings)
 		if err != nil {
 			// No partial result. A half-filled [][]float32 is worse than none,
 			// because the caller cannot tell which rows are real, and a row of
 			// zeros is a valid-looking vector that means nothing.
-			sum.err = err
+			//
+			// Only a status error is known unbilled. Any other failure may have
+			// been charged for, so the sum so far is no longer a total.
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) {
+				out.Usage = Usage{}
+			}
 			return nil, warnings, err
 		}
 		batchResp, err := parseEmbedResponseWith(c.redact, raw, len(batch))
 		if err != nil {
-			sum.err = err
+			// Answered, so likely billed, but with no usage to read.
+			out.Usage = Usage{}
 			return nil, warnings, err
 		}
 		copy(out.Vectors[start:end], batchResp.vectors)
@@ -88,7 +121,7 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 		// Priced per batch, with the model that ran it: a total is a sum of
 		// per-call prices, never re-derived from summed tokens.
 		cost, priceWarnings := priceCall(p, batchResp.usage, hdr, 200, at)
-		warnings = append(warnings, priceWarnings...)
+		warnOnce(priceWarnings)
 		out.Usage.Cost.NanoUSD += cost.NanoUSD
 		out.Usage.Cost.Provenance = mergeProvenance(out.Usage.Cost.Provenance, cost.Provenance, start == 0)
 		out.Usage.Cost.AppliedAt = cost.AppliedAt
@@ -100,20 +133,19 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, [
 			out.Usage.Cost.NanoUSD = 0
 		}
 
-		if t := batchResp.usage.Input.Total; t != nil {
+		// Kept current per batch, so a later failure still accounts what was
+		// paid. Built by hand rather than through parseUsage, so the flag it
+		// would have set is set here: a sum of reported batches is reported.
+		if t := batchResp.usage.Input.Total; t != nil && allReported {
 			inputTotal += *t
+			noCache := inputTotal
+			out.Usage.Input.Total, out.Usage.Input.NoCache = &inputTotal, &noCache
+			out.Usage.reported = true
 		} else {
 			allReported = false
+			out.Usage.Input.Total, out.Usage.Input.NoCache = nil, nil
+			out.Usage.reported = false
 		}
-	}
-
-	if allReported && len(req.Inputs) > 0 {
-		out.Usage.Input.Total = &inputTotal
-		noCache := inputTotal
-		out.Usage.Input.NoCache = &noCache
-		// Built by hand rather than through parseUsage, so the flag it would
-		// have set is set here: a sum of reported batches is reported.
-		out.Usage.reported = true
 	}
 	return out, warnings, nil
 }

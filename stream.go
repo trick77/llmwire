@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -68,6 +69,11 @@ const (
 	// nobody made deliberately.
 	maxStreamLine = 1 << 20
 	maxErrorBody  = 4 << 10
+	// maxErrorRead bounds what httpError reads before decoding. Larger than
+	// the field cap: LiteLLM writes code after a message that embeds the
+	// upstream text, so a body cut at the field cap loses the code to the
+	// decode. Every kept field is capped at maxErrorBody afterwards.
+	maxErrorRead = 64 << 10
 )
 
 // streamDelta is one chunk's incremental payload.
@@ -432,6 +438,10 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 	switch {
 	case frameErr != nil:
 		endErr = frameErr
+	case errors.Is(sc.Err(), context.Canceled), errors.Is(sc.Err(), context.DeadlineExceeded):
+		// The read was stopped from this side: the caller, a guard or the
+		// call cap. explain names which; the endpoint did nothing wrong.
+		endErr = fmt.Errorf("llmwire: reading stream: %w", sc.Err())
 	case sc.Err() != nil:
 		// A scanner failure is a stream cut short: a line past the cap, a
 		// body that ended mid-line. Wrapped in the sentinel a caller

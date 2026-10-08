@@ -485,45 +485,12 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	if c.routes != nil {
 		return StreamResult{}, c.errSeveralHosts("RawStream")
 	}
-	// Two nested contexts, because their failures mean different things and the
-	// error has to say which: callCtx is the overall cap, reqCtx is what the
-	// stallGuard cancels. Cancelling reqCtx leaves callCtx's deadline intact so
-	// the two stay distinguishable afterwards.
-	callCtx, cancelCall := context.WithTimeout(ctx, c.cap)
-	defer cancelCall()
-	reqCtx, cancelReq := context.WithCancel(callCtx)
-	defer cancelReq()
-
-	req, err := c.newRequest(reqCtx, http.MethodPost, routeChat, body)
+	x, timing, _, err := c.openStream(ctx, body)
 	if err != nil {
-		return StreamResult{}, err
+		return StreamResult{Timing: timing}, err
 	}
-	req.Header.Set("Accept", "text/event-stream")
-
-	guard := newStallGuard(cancelReq, c.header, stallHeaders)
-	defer guard.stop()
-
-	start := c.now()
-	resp, err := c.http.Do(req)
-	if err != nil {
-		// Timing on the error path too: how long the dial waited is the
-		// figure that says whether the header bound or the host was at fault.
-		waited := c.now().Sub(start)
-		return StreamResult{Timing: Timing{Headers: waited, Total: waited}},
-			c.explain(ctx, callCtx, guard, c.dialError(routeChat, err))
-	}
-	defer func() { _ = resp.Body.Close() }()
-	headers := c.now().Sub(start)
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// The headers figure survives the failure: a 503 after 45s against a
-		// 60s header bound is exactly the margin the probe suite records.
-		return StreamResult{Timing: Timing{Headers: headers, Total: headers}}, c.httpError(resp)
-	}
-
-	// Headers are in, so the bound that matters from here is silence, not
-	// arrival.
-	guard.arm(c.idle, stallIdle)
+	defer x.release()
+	defer func() { _ = x.resp.Body.Close() }()
 
 	// Content only, which is what this entry point promises. The parser's sink
 	// carries every channel now, and the iterator in streamiter.go consumes all of
@@ -538,12 +505,82 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	}
 
 	// Below profile resolution, so no inline recovery: the caller owns the body.
-	res, _, err := readStream(resp.Body, guard, streamBounds{idle: c.idle}, sink, c.redact, false, c.now, start)
-	res.Timing.Headers = headers
+	res, _, err := readStream(x.resp.Body, x.guard, streamBounds{idle: c.idle}, sink, c.redact, false, c.now, x.start)
+	res.Timing.Headers = x.headers
 	if err != nil {
-		return res, c.explain(ctx, callCtx, guard, err)
+		return res, c.explain(ctx, x.callCtx, x.guard, err)
 	}
 	return res, nil
+}
+
+// streamExchange is a streaming response whose headers are in, with the bounds
+// around it. Whoever holds it calls release once the body is done with.
+type streamExchange struct {
+	resp *http.Response
+	// callCtx is the whole-call bound, kept so explain can tell it from the
+	// caller's own cancellation.
+	callCtx context.Context
+	// cancelReq cancels the request; cancelCall releases the whole-call bound.
+	cancelReq  context.CancelFunc
+	cancelCall context.CancelFunc
+	guard      *stallGuard
+	start      time.Time
+	headers    time.Duration
+}
+
+func (x *streamExchange) release() {
+	x.guard.stop()
+	x.cancelReq()
+	x.cancelCall()
+}
+
+// openStream is the one streaming exchange: it POSTs body to /chat/completions
+// for an SSE answer and returns once a 2xx has its headers, with the idle guard
+// armed; x carries the start and header time from there. The Timing and Header
+// returned describe a FAILURE only: everything is released, the error is
+// classified, the Timing says how long the headers took, and a non-2xx brings
+// its headers, whose proxy call id matches the failure to the gateway's log.
+func (c *Client) openStream(ctx context.Context, body []byte) (*streamExchange, Timing, http.Header, error) {
+	// Two nested contexts, because their failures mean different things and the
+	// error has to say which: callCtx is the overall cap, reqCtx is what the
+	// stallGuard cancels. Cancelling reqCtx leaves callCtx's deadline intact so
+	// the two stay distinguishable afterwards.
+	callCtx, cancelCall := context.WithTimeout(ctx, c.cap)
+	reqCtx, cancelReq := context.WithCancel(callCtx)
+	x := &streamExchange{callCtx: callCtx, cancelReq: cancelReq, cancelCall: cancelCall}
+
+	req, err := c.newRequest(reqCtx, http.MethodPost, routeChat, body)
+	if err != nil {
+		cancelReq()
+		cancelCall()
+		return nil, Timing{}, nil, err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+
+	x.guard = newStallGuard(cancelReq, c.header, stallHeaders)
+	x.start = c.now()
+	resp, err := c.http.Do(req)
+	x.headers = c.now().Sub(x.start)
+	// Timing on the error paths too: how long the dial waited is the figure
+	// that says whether the header bound or the host was at fault, and a 503
+	// after 45s against a 60s header bound is the margin the probe suite records.
+	timing := Timing{Headers: x.headers, Total: x.headers}
+	if err != nil {
+		err = c.explain(ctx, callCtx, x.guard, c.dialError(routeChat, err))
+		x.release()
+		return nil, timing, nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		err = c.httpError(resp)
+		_ = resp.Body.Close()
+		x.release()
+		return nil, timing, resp.Header, err
+	}
+	// Headers are in, so the bound that matters from here is silence, not
+	// arrival.
+	x.guard.arm(c.idle, stallIdle)
+	x.resp = resp
+	return x, Timing{}, nil, nil
 }
 
 // RawPost sends an already-built body to an arbitrary route and returns the
@@ -557,14 +594,8 @@ func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.R
 	if c.routes != nil {
 		return nil, nil, c.errSeveralHosts("RawPost")
 	}
-	raw, hdr, _, err := c.rawPost(ctx, route, body)
+	raw, hdr, _, err := c.rawCall(ctx, http.MethodPost, route, body)
 	return raw, hdr, err
-}
-
-// rawPost is RawPost with the call's Timing. Separate so the exported signature
-// the probe suite calls stays put while Chat and Embed get the figures.
-func (c *Client) rawPost(ctx context.Context, route string, body []byte) (json.RawMessage, http.Header, Timing, error) {
-	return c.rawCall(ctx, http.MethodPost, route, body)
 }
 
 // rawCall is the one non-streaming exchange: a POST carrying a body, or a GET
@@ -699,7 +730,7 @@ func (c *Client) httpError(resp *http.Response) error {
 	// leave its head in the message, and the value pass needs it whole. The
 	// parser bounds every field it keeps to the cap afterwards, so the extra
 	// bytes never reach a log.
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, int64(maxErrorBody+len(c.apiKey))))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, int64(maxErrorRead+len(c.apiKey))))
 	apiErr := parseAPIErrorWith(c.redact, resp.StatusCode, raw)
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return newRateLimitError(apiErr, resp.Header, c.now())

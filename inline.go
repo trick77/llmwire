@@ -29,7 +29,7 @@ import (
 // deltas, recovers the calls once the answer is complete and cuts the markup from
 // the accumulated text, so no caller ever sees it. Recovery runs whether or not
 // the request offered tools: the case that leaked was a tool-free call answered
-// with a tool call.
+// with a tool call. On a native model it never runs on a JSON reply.
 
 const (
 	inlineToolCallMarker   = "<tool_call>"
@@ -49,17 +49,21 @@ var (
 
 	// For the <tool_invocation …/> variant. The arguments value is raw JSON with
 	// nested braces and quotes, so it is located by balanced-brace scanning (see
-	// scanJSONObject) rather than a regex; only the name attribute is matched
+	// balancedObjectEnd) rather than a regex; only the name attribute is matched
 	// here. The \b anchors the match to the `name` attribute so a name-suffixed
 	// attribute ahead of it (display_name="x" …) is not mistaken for the tool name.
 	inlineInvocationName = regexp.MustCompile(`\bname\s*=\s*"([^"]*)"`)
 	inlineInvocationArgs = regexp.MustCompile(`arguments\s*=\s*`)
 )
 
-// recoversInline reports whether this profile's answers are parsed for inline
-// tool-call markup.
-func (t Tools) recoversInline() bool {
-	return t.RecoverInlineMarkup || t.Format == FormatXML
+// recoversInline reports whether this call's answer is parsed for inline
+// tool-call markup. A FormatXML model sends calls no other way, so it always is.
+// A native model opted in is not on a JSON reply (ResponseFormat.text): a string
+// value may quote the markup, and the cut would leave a fragment that no longer
+// parses.
+func (pl *wirePlan) recoversInline() bool {
+	t := pl.profile.Tools
+	return t.Format == FormatXML || t.RecoverInlineMarkup && pl.req.ResponseFormat.text()
 }
 
 // inlineToolCallID is the synthetic id of the index-th (0-based) recovered call.
@@ -230,8 +234,8 @@ func parseInvocationAt(content string, start int) (ToolCall, int, bool) {
 		if valStart >= len(seg) || seg[valStart] != '{' {
 			return ToolCall{}, 0, false
 		}
-		jsonEnd, ok := scanJSONObject(seg, valStart)
-		if !ok {
+		jsonEnd := balancedObjectEnd(seg, valStart)
+		if jsonEnd < 0 {
 			return ToolCall{}, 0, false
 		}
 		raw := seg[valStart:jsonEnd]
@@ -248,41 +252,6 @@ func parseInvocationAt(content string, start int) (ToolCall, int, bool) {
 	}
 	end := start + afterAttrs + closeRel + 1
 	return ToolCall{Type: "function", Name: name, Arguments: args}, end, true
-}
-
-// scanJSONObject returns the index just past the '}' closing the object that
-// opens at s[open], respecting quoted strings and escapes so braces inside string
-// values do not end the scan early. ok is false if the object never closes.
-func scanJSONObject(s string, open int) (int, bool) {
-	depth := 0
-	inString := false
-	escaped := false
-	for i := open; i < len(s); i++ {
-		c := s[i]
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inString = true
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return i + 1, true
-			}
-		}
-	}
-	return 0, false
 }
 
 // inlineArguments renders the <parameter=key>value</parameter> pairs of one

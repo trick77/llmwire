@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -72,18 +71,12 @@ func (c *Client) logCall(s callSummary) {
 			attrs = append(attrs, "reasoning", r)
 		}
 		if len(req.ExtraBody) > 0 {
-			keys := make([]string, 0, len(req.ExtraBody))
-			for k := range req.ExtraBody {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			attrs = append(attrs, "extra_body_keys", strings.Join(keys, ","))
+			attrs = append(attrs, "extra_body_keys", strings.Join(sortedKeys(req.ExtraBody), ","))
 		}
 	}
 	if s.kind == "embed" {
 		attrs = append(attrs, "inputs", s.inputs)
-	}
-	if s.kind != "embed" {
+	} else {
 		attrs = append(attrs, "finish_reason", s.finishReason,
 			"content_chars", s.content, "reasoning_chars", s.reasoning, "tool_calls", s.toolCalls)
 	}
@@ -285,11 +278,7 @@ func (c *Client) Stats() Stats {
 // LogValue renders the stats as one line of flat attributes per model, for a
 // shutdown or periodic summary from the application's own logger.
 func (s Stats) LogValue() slog.Value {
-	names := make([]string, 0, len(s.Models))
-	for k := range s.Models {
-		names = append(names, k)
-	}
-	sort.Strings(names)
+	names := sortedKeys(s.Models)
 	attrs := make([]slog.Attr, 0, len(names))
 	for _, name := range names {
 		m := s.Models[name]
