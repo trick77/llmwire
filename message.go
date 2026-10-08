@@ -358,6 +358,9 @@ type EmbedResponse struct {
 	// Timing is summed over the batches the inputs were split into, so it is
 	// the wall-clock the whole call spent on the wire, not one request's.
 	Timing Timing
+	// Gateway is the last batch's proxy headers, as on ChatResponse: its call
+	// id, and the key spend as of the end of the call. Empty on a direct route.
+	Gateway Gateway
 }
 
 // ChatResponse is a completed non-streaming turn.

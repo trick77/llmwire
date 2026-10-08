@@ -274,6 +274,25 @@ func TestEmbed_FailedCallStillAccountsThePaidBatches(t *testing.T) {
 	}
 }
 
+// Behind a proxy the call id is what matches a call to the gateway's own log,
+// on Embed as on Chat.
+func TestEmbed_CarriesTheGatewayBlock(t *testing.T) {
+	srv, _ := embedServer(t, false)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(litellmCallIDHeader, "call-7")
+		srv.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+
+	resp, _, err := embedClient(t, proxy).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Gateway.CallID != "call-7" {
+		t.Errorf("gateway = %+v, want call id call-7", resp.Gateway)
+	}
+}
+
 // CallTimeout bounds the whole Embed call, not each batch: three batches that
 // each fit the cap but together outrun it end in ErrCallCap.
 func TestEmbed_CallTimeoutBoundsTheWholeCall(t *testing.T) {

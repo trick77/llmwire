@@ -76,6 +76,12 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (_ *EmbedResponse,
 		// the failure.
 		out.Timing.Headers += timing.Headers
 		out.Timing.Total += timing.Total
+		// Read before the error check, as on Chat: on a failure the failing
+		// batch's call id is the one that matches the gateway's own log.
+		var gwWarnings []Warning
+		out.Gateway, gwWarnings = parseGatewayHeaders(hdr)
+		sum.gateway = out.Gateway
+		warnings = append(warnings, gwWarnings...)
 		if err != nil {
 			// No partial result. A half-filled [][]float32 is worse than none,
 			// because the caller cannot tell which rows are real, and a row of
