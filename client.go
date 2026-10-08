@@ -557,14 +557,8 @@ func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.R
 	if c.routes != nil {
 		return nil, nil, c.errSeveralHosts("RawPost")
 	}
-	raw, hdr, _, err := c.rawPost(ctx, route, body)
+	raw, hdr, _, err := c.rawCall(ctx, http.MethodPost, route, body)
 	return raw, hdr, err
-}
-
-// rawPost is RawPost with the call's Timing. Separate so the exported signature
-// the probe suite calls stays put while Chat and Embed get the figures.
-func (c *Client) rawPost(ctx context.Context, route string, body []byte) (json.RawMessage, http.Header, Timing, error) {
-	return c.rawCall(ctx, http.MethodPost, route, body)
 }
 
 // rawCall is the one non-streaming exchange: a POST carrying a body, or a GET

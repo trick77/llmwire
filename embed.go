@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"slices"
 )
 
@@ -71,7 +72,7 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (_ *EmbedResponse,
 			return nil, warnings, err
 		}
 		at := c.now()
-		raw, hdr, timing, err := c.rawPost(callCtx, routeEmbeddings, body)
+		raw, hdr, timing, err := c.rawCall(callCtx, http.MethodPost, routeEmbeddings, body)
 		// Summed before the error check, so the log line for a failed corpus
 		// includes the batch that failed: that is the one whose wait explains
 		// the failure.
