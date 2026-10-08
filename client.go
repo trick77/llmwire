@@ -536,9 +536,10 @@ func (x *streamExchange) release() {
 
 // openStream is the one streaming exchange: it POSTs body to /chat/completions
 // for an SSE answer and returns once a 2xx has its headers, with the idle guard
-// armed. On failure everything is released, the error is classified, and the
-// Timing says how long the headers took; the headers come back on a non-2xx,
-// whose proxy call id is what matches the failure to the gateway's own log.
+// armed; x carries the start and header time from there. The Timing and Header
+// returned describe a FAILURE only: everything is released, the error is
+// classified, the Timing says how long the headers took, and a non-2xx brings
+// its headers, whose proxy call id matches the failure to the gateway's log.
 func (c *Client) openStream(ctx context.Context, body []byte) (*streamExchange, Timing, http.Header, error) {
 	// Two nested contexts, because their failures mean different things and the
 	// error has to say which: callCtx is the overall cap, reqCtx is what the
@@ -579,7 +580,7 @@ func (c *Client) openStream(ctx context.Context, body []byte) (*streamExchange, 
 	// arrival.
 	x.guard.arm(c.idle, stallIdle)
 	x.resp = resp
-	return x, timing, resp.Header, nil
+	return x, Timing{}, nil, nil
 }
 
 // RawPost sends an already-built body to an arbitrary route and returns the

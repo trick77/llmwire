@@ -167,8 +167,7 @@ func (s *Stream) read(pl *wirePlan, at time.Time) {
 	// Released once explain has read them, so a caller who drains the stream
 	// without Close does not keep the call-cap timer alive. Close stays a no-op
 	// on them.
-	s.cancelReq()
-	s.cancelCall()
+	s.release()
 	// Priced however the stream ended. A caller who Closes after EventFinish
 	// has, on an endpoint that sends usage in the finish chunk, already
 	// received the figures; and a stream cut after its usage frame was paid
@@ -336,7 +335,7 @@ func (s *Stream) Close() error {
 		// Cancelling reqCtx unblocks the body read the goroutine is sitting in.
 		s.cancelReq()
 		<-s.done
-		s.cancelCall()
+		s.release()
 	})
 	return s.Err()
 }
