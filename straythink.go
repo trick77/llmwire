@@ -10,13 +10,10 @@ const (
 
 // leakCanApply reports whether a reply to req can carry the leak at all. It
 // was observed with thinking switched off, where no reasoning block belongs in
-// content. A JSON reply is never cut: a string value may hold the tag, and a
-// cut would leave a fragment that no longer parses.
+// content.
 func leakCanApply(req ChatRequest) bool {
-	if _, off := req.Reasoning.(reasoningOff); !off {
-		return false
-	}
-	return req.ResponseFormat.Kind == FormatUnset || req.ResponseFormat.Kind == FormatText
+	_, off := req.Reasoning.(reasoningOff)
+	return off && req.ResponseFormat.text()
 }
 
 // cutStrayCloseTag splits content at the FIRST close tag when it ends a

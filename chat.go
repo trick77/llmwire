@@ -82,7 +82,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 			})
 		}
 	}
-	if pl.profile.Tools.recoversInline() {
+	if pl.profile.Tools.recoversInline() && pl.req.ResponseFormat.text() {
 		rec := recoverInline(resp.Content, resp.Reasoning, len(resp.ToolCalls))
 		resp.Content, resp.Reasoning = rec.content, rec.reasoning
 		resp.ToolCalls = append(resp.ToolCalls, rec.calls...)

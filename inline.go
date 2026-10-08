@@ -29,7 +29,7 @@ import (
 // deltas, recovers the calls once the answer is complete and cuts the markup from
 // the accumulated text, so no caller ever sees it. Recovery runs whether or not
 // the request offered tools: the case that leaked was a tool-free call answered
-// with a tool call.
+// with a tool call. It never runs on a JSON reply (ResponseFormat.text).
 
 const (
 	inlineToolCallMarker   = "<tool_call>"

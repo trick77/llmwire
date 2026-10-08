@@ -177,7 +177,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, headers time.Duration) {
 	res, inlineWarnings, err := readStream(resp.Body, s.guard,
 		streamBounds{idle: s.client.idle, toolIdle: pl.req.ToolCallIdleTimeout}, s.push, s.client.redact,
-		pl.profile.Tools.recoversInline(), s.client.now, start)
+		pl.profile.Tools.recoversInline() && pl.req.ResponseFormat.text(), s.client.now, start)
 	res.Timing.Headers = headers
 	res.ReasoningSent = reasoningLabel(pl.req.Reasoning)
 
