@@ -203,6 +203,11 @@ func (s *Stream) read(resp *http.Response, pl *wirePlan, at, start time.Time, he
 	case err != nil:
 		err = s.client.explain(s.ctx, s.callCtx, s.guard, err)
 	}
+	// Released once explain has read them, so a caller who drains the stream
+	// without Close does not keep the call-cap timer alive. Close stays a no-op
+	// on them.
+	s.cancelReq()
+	s.cancelCall()
 	// Priced however the stream ended. A caller who Closes after EventFinish
 	// has, on an endpoint that sends usage in the finish chunk, already
 	// received the figures; and a stream cut after its usage frame was paid

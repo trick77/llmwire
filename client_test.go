@@ -647,3 +647,22 @@ func TestNew_CopiesTheHeaderMap(t *testing.T) {
 		t.Error("New must copy the header map")
 	}
 }
+
+// A stream read to its end releases its contexts without waiting for Close:
+// the call-cap timer otherwise stays registered on the parent until it fires.
+func TestChatStream_DrainedStreamReleasesItsContexts(t *testing.T) {
+	srv := sseServer(t, frames(contentDelta("hi")))
+	stream, _, err := New(Config{BaseURL: srv.URL}).ChatStream(context.Background(),
+		ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for stream.Next() {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if stream.callCtx.Err() == nil {
+		t.Error("the call context is still live after the stream ended")
+	}
+}
