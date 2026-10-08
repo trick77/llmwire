@@ -3,6 +3,7 @@ package llmwire
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"maps"
 	"net/url"
@@ -288,7 +289,11 @@ func validateBaseURL(raw string, allowLoopbackHTTP bool) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		// The *url.Error quotes the input, userinfo and all; only its cause prints.
-		return fmt.Errorf("base_url does not parse: %w", err.(*url.Error).Err)
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
+		return fmt.Errorf("base_url does not parse: %w", err)
 	}
 	// The refusals below name the URL without the query and userinfo they reject.
 	raw = RedactURL(raw)
