@@ -49,7 +49,7 @@ var (
 
 	// For the <tool_invocation …/> variant. The arguments value is raw JSON with
 	// nested braces and quotes, so it is located by balanced-brace scanning (see
-	// scanJSONObject) rather than a regex; only the name attribute is matched
+	// balancedObjectEnd) rather than a regex; only the name attribute is matched
 	// here. The \b anchors the match to the `name` attribute so a name-suffixed
 	// attribute ahead of it (display_name="x" …) is not mistaken for the tool name.
 	inlineInvocationName = regexp.MustCompile(`\bname\s*=\s*"([^"]*)"`)
@@ -230,8 +230,8 @@ func parseInvocationAt(content string, start int) (ToolCall, int, bool) {
 		if valStart >= len(seg) || seg[valStart] != '{' {
 			return ToolCall{}, 0, false
 		}
-		jsonEnd, ok := scanJSONObject(seg, valStart)
-		if !ok {
+		jsonEnd := balancedObjectEnd(seg, valStart)
+		if jsonEnd < 0 {
 			return ToolCall{}, 0, false
 		}
 		raw := seg[valStart:jsonEnd]
@@ -248,41 +248,6 @@ func parseInvocationAt(content string, start int) (ToolCall, int, bool) {
 	}
 	end := start + afterAttrs + closeRel + 1
 	return ToolCall{Type: "function", Name: name, Arguments: args}, end, true
-}
-
-// scanJSONObject returns the index just past the '}' closing the object that
-// opens at s[open], respecting quoted strings and escapes so braces inside string
-// values do not end the scan early. ok is false if the object never closes.
-func scanJSONObject(s string, open int) (int, bool) {
-	depth := 0
-	inString := false
-	escaped := false
-	for i := open; i < len(s); i++ {
-		c := s[i]
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inString = true
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return i + 1, true
-			}
-		}
-	}
-	return 0, false
 }
 
 // inlineArguments renders the <parameter=key>value</parameter> pairs of one
