@@ -342,15 +342,15 @@ left absent.
 | `eval_harness_test.go` `evalRates` | done in §1 |
 | `eval_probe_test.go` `TestProbe_ChatHonoursTheOutputCap` | done in §3 |
 
-Adding those Go rows is what makes the merge mint a release tag
-(`release.yaml` triggers on `**.go`, `go.mod`, `go.sum`); a `profiles.yaml`-only
-change ships no tag.
+A merge mints no tag: once it is on master, release by hand
+(`gh workflow run Release -f bump=patch`).
 
 ## 7. Ship
 
-CI order: `gofmt -l .`, `./scripts/secret-scan.sh`, `go vet ./...`,
-`go build ./...`, `go test -race ./...`. Patch coverage 75% on non-comment
-lines. Test fixtures assemble keys at runtime (`fakeKey`), never as literals.
+The gate is `ship check` ([ship](https://github.com/trick77/ship), `ship.yaml`;
+`ship hooks` once per clone runs it on every push): gofmt, build, golangci-lint,
+secret scan (tree and unpushed commits), `go test -race`, 75% line floor, 75%
+patch coverage on non-comment lines. Test fixtures assemble keys at runtime (`fakeKey`), never as literals.
 No key, no `.env`, no full URL in anything committed, the findings note
 included.
 
