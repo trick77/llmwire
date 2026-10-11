@@ -1,0 +1,9 @@
+# The gate (ship check, and ship pre-push in the hook) and the release, see github.com/trick77/ship.
+# A Go module: go get resolves only v-prefixed semver tags.
+tag_prefix: v
+go:
+  # Attributes coverage across package boundaries (llmwiretest included).
+  coverpkg: ./...
+steps:
+  # Keys and .env never enter the tree: the evals use real, paid keys.
+  - { name: secret scan, run: ./scripts/secret-scan.sh }
