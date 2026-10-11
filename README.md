@@ -322,7 +322,8 @@ ship check   # gofmt, build, golangci-lint, secret scan, go test -race, coverage
 
 Keys are read from the environment only. `.env` is gitignored, and
 `scripts/secret-scan.sh` refuses keys and `.env` files entering the tree — a step of
-`ship check`, so it runs on every push and in CI.
+`ship check`, so it runs on every push from a clone with `ship hooks` and in CI when
+dispatched by hand.
 
 ## Licence
 

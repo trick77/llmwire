@@ -136,7 +136,8 @@ loopback hosts only. **A gateway is
 env, not profiles**: `LLMWIRE_LITELLM_MODELS=<id>[=<alias>],...` routes listed
 profiles through litellm (`gateway.go` `viaGateway`, same resolve/validate as a
 YAML route); aliases are the operator's, never shipped. Read by `FromEnv` and the evals. `.env` gitignored, loaded under
-`LLMWIRE_EVAL=1` (real env wins). `scripts/secret-scan.sh` runs in `ship check`: every push **and** CI.
+`LLMWIRE_EVAL=1` (real env wins). `scripts/secret-scan.sh` runs in `ship check`: every push from a clone with `ship hooks`, and CI when dispatched.
+Nothing server-side runs it on its own: GitHub-side edits and Dependabot PRs pass unscanned.
 CI holds no key.
 
 ## Evals
