@@ -12,7 +12,7 @@ Bedrock: permanently out of scope.
 Gate: `ship check` ([ship](https://github.com/trick77/ship), `ship.yaml`): gofmt,
 build, golangci-lint (`.golangci.yaml`), secret scan, `go test -race`, 75% line floor,
 75% on changed lines. `ship hooks` once per clone: pre-push runs it. CI and release by
-hand only (`gh workflow run CI|Release`). Go 1.25. No Makefile.
+hand only (`gh workflow run CI|Release`). Go 1.26. No Makefile.
 
 ## Quirks are data
 
