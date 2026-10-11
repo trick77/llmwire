@@ -312,17 +312,17 @@ a failed eval is a finding, not a flake.
 
 ## Development
 
+The gate is [ship](https://github.com/trick77/ship), configured in `ship.yaml`:
+
 ```
-gofmt -l .          # must print nothing
-./scripts/secret-scan.sh
-go vet ./...
-go build ./...
-go test -race ./...
+ship() { go run "github.com/trick77/ship@$(git ls-remote https://github.com/trick77/ship refs/heads/master | cut -f1)" "$@"; }
+ship hooks   # once per clone: the pre-push hook runs ship check on every push
+ship check   # gofmt, build, golangci-lint, secret scan, go test -race, coverage
 ```
 
 Keys are read from the environment only. `.env` is gitignored, and
-`scripts/secret-scan.sh` refuses keys and `.env` files entering the tree — from the
-pre-commit hook and from CI, since a hook only protects one machine.
+`scripts/secret-scan.sh` refuses keys and `.env` files entering the tree — a step of
+`ship check`, so it runs on every push and in CI.
 
 ## Licence
 

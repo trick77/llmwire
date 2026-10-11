@@ -9,8 +9,10 @@ Bedrock: permanently out of scope.
 
 ## Commands
 
-CI order: `gofmt -l .`, `./scripts/secret-scan.sh`, `go vet ./...`, `go build ./...`,
-`go test -race ./...`. Go 1.25. No Makefile, no golangci-lint.
+Gate: `ship check` ([ship](https://github.com/trick77/ship), `ship.yaml`): gofmt,
+build, golangci-lint (`.golangci.yaml`), secret scan, `go test -race`, 75% line floor,
+75% on changed lines. `ship hooks` once per clone: pre-push runs it. CI and release by
+hand only (`gh workflow run CI|Release`). Go 1.25. No Makefile.
 
 ## Quirks are data
 
@@ -134,7 +136,7 @@ loopback hosts only. **A gateway is
 env, not profiles**: `LLMWIRE_LITELLM_MODELS=<id>[=<alias>],...` routes listed
 profiles through litellm (`gateway.go` `viaGateway`, same resolve/validate as a
 YAML route); aliases are the operator's, never shipped. Read by `FromEnv` and the evals. `.env` gitignored, loaded under
-`LLMWIRE_EVAL=1` (real env wins). `scripts/secret-scan.sh` runs pre-commit **and** CI.
+`LLMWIRE_EVAL=1` (real env wins). `scripts/secret-scan.sh` runs in `ship check`: every push **and** CI.
 CI holds no key.
 
 ## Evals
