@@ -9,10 +9,10 @@ Bedrock: permanently out of scope.
 
 ## Commands
 
-Gate: `ship check` ([ship](https://github.com/trick77/ship), `ship.yaml`): gofmt,
-build, golangci-lint (`.golangci.yaml`), secret scan, `go test -race`, 75% line floor,
-75% on changed lines. `ship hooks` once per clone: pre-push runs it. CI and release by
-hand only (`gh workflow run CI|Release`). Go 1.26. No Makefile.
+Gate: `ship check` ([ship](https://github.com/trick77/ship), `ship.yaml`; `ship` is the `ship()` from ship's README). `ship hooks` once per clone: pre-push runs it.
+gofmt, build, golangci-lint (`.golangci.yaml`), secret scan, `go test -race`, 75% line floor,
+75% on changed lines. CI on every pull request; release by hand only
+(`gh workflow run Release`). Go 1.26. No Makefile.
 
 ## Quirks are data
 
