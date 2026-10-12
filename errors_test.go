@@ -180,9 +180,10 @@ func TestRetryAfter(t *testing.T) {
 // It is assembled rather than written as a literal on purpose:
 // ship check's secret scan refuses anything key-shaped entering the tree, and these
 // tests would otherwise be the one place in the repo needing an exemption from
-// the very guard they exercise. Composing the fixture keeps the scanner
-// absolute — no allowlist, no marker comment, nothing that could be copied into
-// a file which really is leaking — while still exercising the real pattern.
+// the very guard they exercise. The scanner honours a ship:allow-secret line
+// marker, but composing the fixture means no line here needs one — nothing that
+// could be copied into a file which really is leaking — while still exercising
+// the real pattern.
 func fakeKey(prefix, body string) string { return prefix + "-" + body }
 
 // An upstream error body is echoed back verbatim and can carry a credential.
