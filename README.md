@@ -320,10 +320,9 @@ ship hooks   # once per clone: the pre-push hook runs ship check on every push
 ship check   # gofmt, build, golangci-lint, secret scan, go test -race, coverage
 ```
 
-Keys are read from the environment only. `.env` is gitignored, and
-`scripts/secret-scan.sh` refuses keys and `.env` files entering the tree — a step of
-`ship check`, so it runs on every push from a clone with `ship hooks` and in CI when
-dispatched by hand.
+Keys are read from the environment only. `.env` is gitignored, and `ship check`'s
+secret scan refuses keys and `.env` files entering the tree: on every push from a
+clone with `ship hooks`, and in CI on every pull request.
 
 ## Licence
 

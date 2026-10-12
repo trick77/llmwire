@@ -1,14 +1,14 @@
 name: Release
 
-# By hand only. No images: go build, next v-tag from the bump and a GitHub release.
-# gh workflow run Release -f bump=patch
+# By hand only (Actions minutes): gh workflow run Release -f bump=patch. auto: patch, or what the commits since the
+# last tag ask for (Release: minor|major).
 on:
   workflow_dispatch:
     inputs:
       bump:
         description: "Version bump"
         type: choice
-        options: [patch, minor, major]
+        options: [patch, minor, major, auto]
         default: patch
 
 jobs:

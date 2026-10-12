@@ -10,9 +10,9 @@ Bedrock: permanently out of scope.
 ## Commands
 
 Gate: `ship check` ([ship](https://github.com/trick77/ship), `ship.yaml`; `ship` is the `ship()` from ship's README). `ship hooks` once per clone: pre-push runs it.
-gofmt, build, golangci-lint (`.golangci.yaml`), secret scan, `go test -race`, 75% line floor,
+gofmt, build, golangci-lint (ship's config, no repo copy), secret scan, `go test -race`, 75% line floor,
 75% on changed lines. CI on every pull request; release by hand only
-(`gh workflow run Release`). Go 1.26. No Makefile.
+(`gh workflow run Release`). Go 1.27. No Makefile.
 
 ## Quirks are data
 
@@ -136,8 +136,8 @@ loopback hosts only. **A gateway is
 env, not profiles**: `LLMWIRE_LITELLM_MODELS=<id>[=<alias>],...` routes listed
 profiles through litellm (`gateway.go` `viaGateway`, same resolve/validate as a
 YAML route); aliases are the operator's, never shipped. Read by `FromEnv` and the evals. `.env` gitignored, loaded under
-`LLMWIRE_EVAL=1` (real env wins). `scripts/secret-scan.sh` runs in `ship check`: every push from a clone with `ship hooks`, and CI when dispatched.
-Nothing server-side runs it on its own: GitHub-side edits and Dependabot PRs pass unscanned.
+`LLMWIRE_EVAL=1` (real env wins). `ship check` runs a secret scan (built into ship): every push from a clone with `ship hooks`, CI on every PR.
+Pushes straight to a branch without a PR (GitHub-side edits) pass unscanned.
 CI holds no key.
 
 ## Evals

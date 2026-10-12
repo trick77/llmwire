@@ -52,10 +52,11 @@ truth, comment standard) and the head comment of `profiles.yaml`.
   `eval_harness_test.go`; it reads the shipped host and fails the run if the
   URL variable is set beside it. A missing key skips that provider's probes
   with a named reason; it never falls back.
-- **New key prefix?** `scripts/secret-scan.sh` (`PATTERN='(sk|tp)-...'`) and
-  `Redact` by shape (`errors.go`, the `sk-`/`tp-` run) only know those two.
-  A key with another prefix is invisible to the scan and to redaction: extend
-  both, with a test, before the first probe logs anything.
+- **New key prefix?** ship's secret scan (`secretRe` in ship's
+  `internal/check/secrets.go`) and `Redact` by shape (`errors.go`, the
+  `sk-`/`tp-` run) only know `sk-`/`tp-`. A key with another prefix is invisible
+  to the scan and to redaction: extend both, with a test, before the first probe
+  logs anything.
 - **User-Agent.** A host sold as one client's backend may refuse a neutral UA
   as a bot (`identity.go` head comment; MiMo's Token Plan host does). Probe
   with the default UA first; if refused, `emulate_opencode: true` on the
