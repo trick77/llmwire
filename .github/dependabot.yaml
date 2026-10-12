@@ -1,26 +1,45 @@
 version: 2
 updates:
-  # The module itself, at the repo root: this is a library, so there is no
-  # backend/ui split and no Containerfile to track.
-  #
-  # Only one direct dependency exists (gopkg.in/yaml.v3) and that is deliberate,
-  # so a PR here is rare and worth reading rather than rubber-stamping.
   - package-ecosystem: gomod
     directory: /
     commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: weekly
+      day: sunday
+      time: "07:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
     groups:
-      go-minor-and-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
+      gomod-non-major:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+      gomod-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
 
-  # GitHub Actions. Releases are cut by hand, so an action bump never cuts one.
   - package-ecosystem: github-actions
     directory: /
     commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: weekly
+      day: sunday
+      time: "07:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
     groups:
-      actions:
-        patterns: ["*"]
+      actions-non-major:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+      actions-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
