@@ -162,5 +162,7 @@ dead workaround labelled dead rather than deleted.
 ## Git & CI
 
 - Default branch `master`; branch + PR, never push to `master`.
-- A merge touching `**.go` / `go.mod` / `go.sum` auto-mints a semver tag.
+- Commit subjects + PR titles: Go style `area: what` (`profiles: …`, `stream: …`), gated by ship; release
+  notes list them by area.
+- A merge ships nothing: release by hand only (`gh workflow run Release -f bump=patch`).
 - `.yaml`, never `.yml`.

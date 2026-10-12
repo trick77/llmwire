@@ -7,6 +7,7 @@ updates:
   # so a PR here is rare and worth reading rather than rubber-stamping.
   - package-ecosystem: gomod
     directory: /
+    commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: weekly
     groups:
@@ -14,10 +15,10 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
-  # GitHub Actions. The release workflow mints a semver tag on any merge touching
-  # **.go, go.mod or go.sum, so an action bump alone does not cut a release.
+  # GitHub Actions. Releases are cut by hand, so an action bump never cuts one.
   - package-ecosystem: github-actions
     directory: /
+    commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: weekly
     groups:
