@@ -302,6 +302,64 @@ func TestPrice_TierThreshold(t *testing.T) {
 	}
 }
 
+// output_multiplier_permille splits the tier: OpenAI's long context is 2x input
+// and cache, 1.5x output. One multiplier would be wrong on one side.
+func TestPrice_TierSplitsInputAndOutput(t *testing.T) {
+	doc := `profiles:
+  - id: t
+    wire_model_id: t
+    max_tokens_param: max_tokens
+    verified: source-derived
+    cost:
+      input: 1.0
+      cache_read: 0.5
+      cache_write: 0
+      output: 1.0
+      tiers:
+        - {name: long-context, min_input_tokens: 1000, multiplier_permille: 2000, output_multiplier_permille: 1500}
+      source_url: https://vendor.example/pricing
+      verified_on: 2026-09-12
+`
+	u := Usage{
+		Input:  InputTokens{Total: i64(1_000_000), NoCache: i64(500_000), CacheRead: i64(500_000)},
+		Output: OutputTokens{Total: i64(1_000_000)},
+	}
+	// Input side (0.50 + 0.25) x 2 = 1.50; output 1.00 x 1.5 = 1.50.
+	cost, _ := priceWith(t, doc, "t", u, time.Unix(0, 0).UTC())
+	if cost.Tier != "long-context" || cost.NanoUSD != 3_000_000_000 {
+		t.Errorf("tier=%q cost=%d, want long-context and 3_000_000_000", cost.Tier, cost.NanoUSD)
+	}
+
+	bad := strings.Replace(doc, "output_multiplier_permille: 1500", "output_multiplier_permille: 900", 1)
+	if _, err := NewRegistry([]byte(bad)); err == nil || !strings.Contains(err.Error(), "output_multiplier_permille") {
+		t.Errorf("an output multiplier under 1000 loaded: %v", err)
+	}
+}
+
+// The shipped gpt-6.1-sol tier: past 272K input the pricing page's long-context
+// row, 4.00 input / 15.00 output.
+func TestPrice_GPT61SolLongContext(t *testing.T) {
+	p := mustLookup(t, Default(), "gpt-6.1-sol")
+	at := time.Unix(0, 0).UTC()
+	for _, tc := range []struct {
+		prompt   int64
+		tier     string
+		wantNano int64
+	}{
+		{272_000, "", 272_000*2_000 + 10_000*10_000},
+		{272_001, "long-context", 272_001*4_000 + 10_000*15_000},
+	} {
+		u := Usage{
+			Input:  InputTokens{Total: i64(tc.prompt), NoCache: i64(tc.prompt)},
+			Output: OutputTokens{Total: i64(10_000)},
+		}
+		cost, _ := priceCall(p, u, nil, 200, at)
+		if cost.Tier != tc.tier || cost.NanoUSD != tc.wantNano {
+			t.Errorf("prompt %d: tier=%q cost=%d, want %q and %d", tc.prompt, cost.Tier, cost.NanoUSD, tc.tier, tc.wantNano)
+		}
+	}
+}
+
 // Rounding is UP, once, on the summed total. Rounding per lane would over-report
 // by a nano per lane; rounding down would under-report, which is the direction
 // that silently raises what a budget cap allows.

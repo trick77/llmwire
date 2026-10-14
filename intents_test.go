@@ -178,6 +178,8 @@ func TestReasoningIntents_ShippedProfiles(t *testing.T) {
 		{"mimo-v2.5-pro", "off", "medium"},
 		{"mimo-v2.5", "off", "medium"},
 		{"gpt-5.5", "off", "medium"},
+		// No none on the page: the floor is low.
+		{"gpt-6.1-sol", "low", "medium"},
 	} {
 		for intent, want := range map[string]string{"minimal": tc.minimal, "balanced": tc.balanced} {
 			r := ReasoningMinimal()

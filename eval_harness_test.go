@@ -97,6 +97,10 @@ var evalRates = map[string]evalRate{
 	"gpt-5.4": {2.50, 15.00},
 	// Model page 5.00/30.00, standard tier under 272K input tokens.
 	"gpt-5.5": {5.00, 30.00},
+	// Pricing page long-context rates (> 272K input), the highest published:
+	// cache write 5.00 (above long-context input 4.00) and output 15.00,
+	// against 2.00/10.00 under the threshold.
+	"gpt-6.1-sol": {5.00, 15.00},
 }
 
 // meter accumulates spend across the whole run. Shared by every probe, because

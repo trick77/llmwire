@@ -277,6 +277,19 @@ type CostTier struct {
 	// a call cheaper would under-report, and under-reporting is the direction
 	// that silently raises what a budget cap allows.
 	MultiplierPermille int32 `yaml:"multiplier_permille"`
+	// OutputMultiplierPermille, when set, replaces MultiplierPermille on the
+	// output lane only: OpenAI's long-context tier is 2x input and cache, 1.5x
+	// output, and one multiplier for both is wrong one way or the other.
+	// 0 means unset; otherwise at least 1000, as above.
+	OutputMultiplierPermille int32 `yaml:"output_multiplier_permille"`
+}
+
+// outputPermille is the multiplier the tier puts on the output lane.
+func (t CostTier) outputPermille() int32 {
+	if t.OutputMultiplierPermille != 0 {
+		return t.OutputMultiplierPermille
+	}
+	return t.MultiplierPermille
 }
 
 // CostWindow is a wall-clock multiplier in the provider's own timezone.
@@ -400,6 +413,9 @@ func (b *CostBlock) validateTiers(bad func(string, ...any) error) error {
 		case t.MultiplierPermille < 1000:
 			return bad("tier %q multiplier_permille is %d; a tier below 1000 would make a big prompt "+
 				"cheaper and under-report spend", t.Name, t.MultiplierPermille)
+		case t.OutputMultiplierPermille != 0 && t.OutputMultiplierPermille < 1000:
+			return bad("tier %q output_multiplier_permille is %d; below 1000 would make a big prompt's "+
+				"output cheaper and under-report spend", t.Name, t.OutputMultiplierPermille)
 		}
 		seenName[t.Name] = true
 		seenThreshold[t.MinInputTokens] = true
@@ -542,15 +558,19 @@ func priceCall(p *Profile, u Usage, hdr http.Header, status int, at time.Time) (
 	// a dollar per million runs to 1e21 — twenty times past int64. Rounding each
 	// lane to nano first would fit, but it would round four times instead of once
 	// and over-report every call by up to four nano.
-	scaled := new(big.Int)
-	addLane(scaled, u.Input.NoCache, b.Input)
-	addLane(scaled, u.Input.CacheRead, b.CacheRead)
-	addLane(scaled, u.Input.CacheWrite, b.CacheWrite)
-	addLane(scaled, u.Output.Total, b.Output)
+	// The tier multiplies the input side and the output side separately, since
+	// a tier may weigh them differently; the window then scales the sum.
+	in, out := new(big.Int), new(big.Int)
+	addLane(in, u.Input.NoCache, b.Input)
+	addLane(in, u.Input.CacheRead, b.CacheRead)
+	addLane(in, u.Input.CacheWrite, b.CacheWrite)
+	addLane(out, u.Output.Total, b.Output)
 
-	tier, tierPermille := b.selectTier(*u.Input.Total)
+	tier, inPermille, outPermille := b.selectTier(*u.Input.Total)
 	window, windowPermille := b.selectWindow(at)
-	scaled.Mul(scaled, big.NewInt(int64(tierPermille)))
+	in.Mul(in, big.NewInt(int64(inPermille)))
+	out.Mul(out, big.NewInt(int64(outPermille)))
+	scaled := new(big.Int).Add(in, out)
 	scaled.Mul(scaled, big.NewInt(int64(windowPermille)))
 
 	// ONE rounding site, on the summed total, rounding UP so llmwire never
@@ -598,19 +618,20 @@ func ceilDivBig(n, d *big.Int) (int64, error) {
 	return q.Int64(), nil
 }
 
-// selectTier returns the highest threshold the prompt met.
+// selectTier returns the highest threshold the prompt met, with its input-side
+// and output-side multipliers.
 //
 // Thresholded on the prompt TOTAL, cached tokens included: vendors price by how
 // much context they had to hold, not by what they ended up billing at full rate.
-func (b *CostBlock) selectTier(inputTotal int64) (string, int32) {
-	name, permille := "", int32(1000)
+func (b *CostBlock) selectTier(inputTotal int64) (name string, in, out int32) {
+	in, out = 1000, 1000
 	var best int64
 	for _, t := range b.Tiers {
 		if inputTotal >= t.MinInputTokens && t.MinInputTokens > best {
-			best, name, permille = t.MinInputTokens, t.Name, t.MultiplierPermille
+			best, name, in, out = t.MinInputTokens, t.Name, t.MultiplierPermille, t.outputPermille()
 		}
 	}
-	return name, permille
+	return name, in, out
 }
 
 // selectWindow evaluates the instant in each window's OWN zone.
