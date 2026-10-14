@@ -524,3 +524,49 @@ func TestWarnings_RendersStably(t *testing.T) {
 		t.Error("Warnings is not stable across calls")
 	}
 }
+
+// gpt-6.1-sol takes no tools over Chat Completions (model page: "Chat
+// Completions is supported without tool calling."), though its features list
+// says function_calling. A request carrying tools is refused before a socket
+// opens; under BestEffort the tools and the choice go together.
+func TestValidate_GPT61SolRefusesTools(t *testing.T) {
+	c := testClient(t, nil)
+	req := ChatRequest{
+		Model:      "gpt-6.1-sol",
+		Messages:   []Message{User("hello")},
+		Tools:      []Tool{{Name: "search"}},
+		ToolChoice: ToolChoice{Mode: ToolChoiceRequired},
+	}
+	var unsup *UnsupportedError
+	if _, err := c.Validate(req); !errors.As(err, &unsup) {
+		t.Fatalf("error is %v, want *UnsupportedError", err)
+	}
+
+	req.BestEffort = true
+	pl := mustPlan(t, c, req, false)
+	if pl.req.Tools != nil || pl.req.ToolChoice.Mode != ToolChoiceUnset {
+		t.Errorf("BestEffort kept tools %v / choice %v; want both dropped", pl.req.Tools, pl.req.ToolChoice)
+	}
+}
+
+// A history from a model that did call tools, switched to gpt-6.1-sol by
+// config, is tool calling too. Refused even under BestEffort: dropping the
+// turns would rewrite the conversation.
+func TestValidate_ToolHistoryOnANoToolsModel(t *testing.T) {
+	c := testClient(t, nil)
+	for name, msgs := range map[string][]Message{
+		"assistant tool call": {User("hi"), {Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "search"}}}},
+		"tool result":         {User("hi"), ToolResult("c1", "x")},
+	} {
+		_, err := c.Validate(ChatRequest{Model: "gpt-6.1-sol", Messages: msgs, BestEffort: true})
+		var unsup *UnsupportedError
+		if !errors.As(err, &unsup) || unsup.Demotable {
+			t.Errorf("%s: err %v, want a non-demotable *UnsupportedError", name, err)
+		}
+	}
+	if _, err := c.Validate(ChatRequest{Model: "gpt-5.5", Messages: []Message{
+		User("hi"), ToolResult("c1", "x"),
+	}}); err != nil {
+		t.Errorf("a tools model refused tool history: %v", err)
+	}
+}

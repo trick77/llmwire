@@ -597,6 +597,19 @@ func (v *validation) checkMaxTokens(req ChatRequest) {
 }
 
 func (v *validation) checkTools(req ChatRequest) {
+	if !v.profile.Tools.Supported {
+		// A history carrying tool calls or results is tool calling too: a
+		// conversation started on another model and switched to this one by
+		// config. Not demotable, since there is no lossless coercion: dropping
+		// those turns rewrites the conversation the caller sent.
+		for i, m := range req.Messages {
+			if m.Role == RoleTool || len(m.ToolCalls) > 0 {
+				v.reject("tools", fmt.Sprintf("message %d carries a tool call or result, "+
+					"and this model does not support tool calling", i))
+				return
+			}
+		}
+	}
 	if len(req.Tools) == 0 {
 		if req.ToolChoice.Mode != ToolChoiceUnset {
 			v.warn(WarnUnsupported, "tool_choice",

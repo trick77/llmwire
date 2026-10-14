@@ -1123,3 +1123,103 @@ profiles:
     notes: >-
       Every bit source-derived. Thinks at medium unless told otherwise, so a
       caller with a tight output cap sends none or raises the cap.
+
+  # ---------------------------------------------------------------------------
+  # gpt-6.1-sol, from its model page (developers.openai.com/api/docs/models/
+  # gpt-6.1-sol, read 2026-10-14) and the pricing page. A new series, so
+  # nothing is carried from gpt-5.x without saying so. Two breaks from the
+  # gpt-5.x shape: thinking cannot be switched off, and Chat Completions
+  # takes no tools.
+  # ---------------------------------------------------------------------------
+  - id: gpt-6.1-sol
+    display_name: GPT-6.1 Sol
+    endpoint: chat
+    wire_model_id: gpt-6.1-sol
+    provider: openai
+    verified: source-derived
+
+    # NOT measured: carried from the gpt-5.x reasoning series, which caps
+    # output with max_completion_tokens. The page does not name the cap.
+    max_tokens_param: max_completion_tokens
+
+    # NOT measured, model page 2026-10-14: "`reasoning.effort` supports `low`,
+    # `medium` (default), `high`, `xhigh`, and `max`." and "The `none` and
+    # `minimal` reasoning efforts are not supported." So it always thinks:
+    # ReasoningMinimal resolves to low, ReasoningOff is refused.
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: false
+      control: effort
+      effort_values: [low, medium, high, xhigh, max]
+      default_effort: medium
+      # NOT measured, a choice: the documented default, as on gpt-5.x.
+      # overhead ABSENT: DefaultReasoningOverhead applies.
+      balanced: medium
+
+    # temperature and top_p ABSENT: this page says nothing about either, and
+    # gpt-5.x's forced_value 1.0 is not carried across a series boundary. A
+    # caller sending either is refused in plan until a probe reads the shape.
+
+    # NOT measured, model page: the features list says function_calling, but
+    # the endpoints table says "Chat Completions is supported without tool
+    # calling." and "Use the Responses API for tool calling." This library
+    # speaks Chat Completions only, so tools are refused in plan.
+    tools:
+      supported: false
+
+    # NOT measured, model page lists structured outputs; API reference.
+    output:
+      json_object: true
+      json_schema: true
+      strict_schema: true
+
+    # NOT measured, API reference, as gpt-5.x.
+    streaming:
+      supported: true
+      needs_include_usage: true
+      accepts_stream_options: true
+
+    # NOT measured, model page: 1,050,000-token context, 128,000 maximum
+    # output, "maximum input: 922,000". Long-context pricing is the tier in
+    # the cost block.
+    limits:
+      context: 1050000
+      max_output: 128000
+
+    # NOT measured, model page: text and image in, text out.
+    vision: true
+
+    # Pricing page, standard tier, short context (<= 272K input tokens):
+    # 2.00 / 0.10 cached / 2.50 cache write / 10.00. cache_write is 0 HERE,
+    # not 2.50, per the usage.go head comment: no shipped cache_write rate is
+    # non-zero before a probe reads whether cache_write_tokens sits inside or
+    # beside prompt_tokens. Either way 0 UNDER-reports: inside, written tokens
+    # price at the input rate, 0.50 per million short; beside, they price at
+    # nothing, 2.50 short. 2.50 would over-report by 2.00 if inside. Behind a
+    # gateway this block is dropped.
+    cost:
+      input: 2.00
+      cache_read: 0.10
+      cache_write: 0
+      output: 10.00
+      # Model page: "Prompts with more than 272K input tokens are priced at
+      # 2x input and cache rates and 1.5x output for the full request."
+      # Pricing page long-context row 4.00 / 0.20 / 5.00 / 15.00 agrees.
+      tiers:
+        - name: long-context
+          min_input_tokens: 272001
+          multiplier_permille: 2000
+          output_multiplier_permille: 1500
+      source_url: https://developers.openai.com/api/docs/pricing
+      verified_on: 2026-10-14
+
+    notes: >-
+      Every bit source-derived. Always thinks (low at the least, medium by
+      default) and cannot be told not to, so a caller with a tight output cap
+      raises the cap. MaxAnswerTokens adds DefaultReasoningOverhead (1024), not
+      a measured figure, and at xhigh or max that is likely short: expect
+      finish_reason length with an empty answer until an overhead is measured.
+      No tool calling over Chat Completions: a request carrying tools is
+      refused, or under BestEffort sent without them; a history carrying tool
+      calls or results is refused outright.
