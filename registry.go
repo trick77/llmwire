@@ -243,11 +243,6 @@ func applyDefaults(p *Profile) {
 	if p.Verified == "" {
 		p.Verified = VerifiedSource
 	}
-	if p.Endpoint == EndpointChat && p.Streaming.Supported && p.Reasoning.Supported && p.Reasoning.StreamField == "" {
-		// Every reasoning model measured streams on this field, and an endpoint
-		// that uses the other spelling is handled by the parser reading both.
-		p.Reasoning.StreamField = "reasoning_content"
-	}
 	if p.Tools.Supported && p.Tools.Format == "" {
 		p.Tools.Format = FormatNative
 	}

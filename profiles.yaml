@@ -530,8 +530,8 @@ profiles:
       balanced: medium
       # NOT measured: reasoning arrived on every probe, but stream.go reads both
       # `reasoning_content` and `reasoning` and content wins, so which key the
-      # delta carried cannot be read back out of a StreamResult. This is the
-      # load default, not a measurement.
+      # delta carried cannot be read back out of a StreamResult. The family's
+      # spelling, recorded; nothing in the library reads this field.
       stream_field: reasoning_content
 
     # NOT measured on this generation. supported stays true because these are
@@ -732,7 +732,7 @@ profiles:
       # Balanced. overhead ABSENT: DefaultReasoningOverhead applies.
       balanced: medium
       # NOT measured, for the same reason as -pro: the delta key cannot be read
-      # back out of a StreamResult. Load default.
+      # back out of a StreamResult. The family's spelling, recorded.
       stream_field: reasoning_content
 
     # NOT measured; same reasoning as -pro above, including why
