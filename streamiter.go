@@ -2,6 +2,7 @@ package llmwire
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"time"
@@ -146,7 +147,14 @@ func (s *Stream) read(pl *wirePlan, at time.Time) {
 	s.guard.stop()
 
 	s.mu.Lock()
-	stopped := s.stopped
+	// A caller-initiated Close cancelled the request, and explain() would
+	// report that as "exceeded the call cap" — a timeout that never happened.
+	// The truncation guard's "ended without finish_reason" is equally wrong
+	// here: the caller stopped reading on purpose. Only an ending the Close
+	// could have caused counts, though: a Close that lands after the endpoint
+	// already failed the stream (an error frame, a cut body) must not turn
+	// that failure into a clean stop, so a non-cancellation error is kept.
+	stopped := s.stopped && (err == nil || errors.Is(err, context.Canceled))
 	s.mu.Unlock()
 
 	// Headers were complete before the body was read, so the gateway block
@@ -156,10 +164,6 @@ func (s *Stream) read(pl *wirePlan, at time.Time) {
 	res.Gateway, gwWarnings = parseGatewayHeaders(resp.Header)
 	switch {
 	case stopped:
-		// A caller-initiated Close cancelled the request, and explain() would
-		// report that as "exceeded the call cap" — a timeout that never happened.
-		// The truncation guard's "ended without finish_reason" is equally wrong
-		// here: the caller stopped reading on purpose.
 		err = nil
 	case err != nil:
 		err = s.client.explain(s.ctx, s.callCtx, s.guard, err)
