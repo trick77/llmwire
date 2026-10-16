@@ -701,12 +701,14 @@ func TestClient_ScrubStripsTheKeyByValueAndKeepsTheChain(t *testing.T) {
 	if !errors.Is(err, cause) {
 		t.Error("scrub must keep the original as its cause")
 	}
-	// Nothing to scrub: the error comes back as given, not wrapped.
+	// Nothing to scrub: the error comes back as given, not wrapped. Identity
+	// is the assertion, so errors.Is would pass for exactly the rewrap this
+	// checks against.
 	clean := errors.New("no key here")
-	if got := c.scrub(clean); got != clean {
+	if got := c.scrub(clean); got != clean { //nolint:errorlint // identity, see above
 		t.Errorf("scrub rewrapped a clean error: %v", got)
 	}
-	if got := New(Config{BaseURL: "https://example.test"}).scrub(cause); got != cause {
+	if got := New(Config{BaseURL: "https://example.test"}).scrub(cause); got != cause { //nolint:errorlint // identity
 		t.Error("a client with no key has nothing to scrub")
 	}
 }
