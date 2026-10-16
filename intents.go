@@ -97,12 +97,12 @@ func (v *validation) checkBudgetRoom(req ChatRequest) {
 		return
 	}
 	b, ok := v.out.Reasoning.(reasoningBudget)
-	max := v.profile.Limits.MaxOutput
-	if !ok || b.tokens <= 0 || max <= 0 || int64(b.tokens) < max {
+	limit := v.profile.Limits.MaxOutput
+	if !ok || b.tokens <= 0 || limit <= 0 || int64(b.tokens) < limit {
 		return
 	}
 	v.refuseOrDrop("reasoning", fmt.Sprintf("a reasoning budget of %d leaves no room for an answer "+
-		"under this model's output limit of %d", b.tokens, max), nil)
+		"under this model's output limit of %d", b.tokens, limit), nil)
 }
 
 // checkAnswerBudget turns MaxAnswerTokens into the wire cap. Runs after
@@ -122,25 +122,25 @@ func (v *validation) checkAnswerBudget(req ChatRequest) {
 		v.reject("max_answer_tokens", fmt.Sprintf("an answer budget of %d is not positive; leave MaxAnswerTokens nil for no cap", answer))
 		return
 	}
-	max := v.profile.Limits.MaxOutput
+	limit := v.profile.Limits.MaxOutput
 	// A budget with no room at all was refused or dropped by checkBudgetRoom;
 	// one that squeezes the answer is said here.
-	if b, ok := v.out.Reasoning.(reasoningBudget); ok && b.tokens > 0 && max > 0 &&
-		int64(answer) <= max && int64(answer)+int64(b.tokens) > max {
+	if b, ok := v.out.Reasoning.(reasoningBudget); ok && b.tokens > 0 && limit > 0 &&
+		int64(answer) <= limit && int64(answer)+int64(b.tokens) > limit {
 		v.warn(WarnCompatibility, "max_answer_tokens",
 			fmt.Sprintf("budget %d plus answer %d exceed the output limit of %d; the answer gets %d",
-				b.tokens, answer, max, max-int64(b.tokens)))
+				b.tokens, answer, limit, limit-int64(b.tokens)))
 	}
 	wire := int64(answer) + int64(reasoningOverhead(v.out.Reasoning, v.profile.Reasoning))
-	if max > 0 {
-		if int64(answer) > max {
+	if limit > 0 {
+		if int64(answer) > limit {
 			v.warn(WarnCompatibility, "max_answer_tokens",
-				fmt.Sprintf("%d exceeds this model's output limit of %d; the cap sent is the limit", answer, max))
+				fmt.Sprintf("%d exceeds this model's output limit of %d; the cap sent is the limit", answer, limit))
 		}
 		// Otherwise clamped silently: a level's overhead is an allowance, not
 		// an allotment, and the endpoint would clamp anyway. A budget always
 		// stays below the clamp (checked above).
-		wire = min(wire, max)
+		wire = min(wire, limit)
 	}
 	n := int(wire)
 	v.out.MaxTokens = &n

@@ -336,11 +336,8 @@ func (g *inlineGate) flush() string {
 // partialMarkerSuffixLen returns the length of the longest suffix of s that is a
 // proper prefix of marker ("abc<too" against "<tool_call>" is 4).
 func partialMarkerSuffixLen(s, marker string) int {
-	max := len(marker) - 1
-	if len(s) < max {
-		max = len(s)
-	}
-	for n := max; n > 0; n-- {
+	longest := min(len(marker)-1, len(s))
+	for n := longest; n > 0; n-- {
 		if strings.HasPrefix(marker, s[len(s)-n:]) {
 			return n
 		}

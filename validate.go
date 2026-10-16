@@ -435,7 +435,7 @@ func (v *validation) checkReasoning(req ChatRequest) {
 		}
 		// A toggle model with effort_values takes the level beside its switch;
 		// one without has no such knob and the level is a mismatch.
-		if r.Control != ControlEffort && (r.Control != ControlToggleObject || len(r.EffortValues) <= 0) {
+		if r.Control != ControlEffort && (r.Control != ControlToggleObject || len(r.EffortValues) == 0) {
 			v.refuseOrDrop("reasoning", reasoningControlMismatch(r.Control, "an effort level"),
 				reasoningControlHint(r))
 			return
@@ -587,13 +587,13 @@ func (v *validation) checkMaxTokens(req ChatRequest) {
 		v.reject("max_tokens", fmt.Sprintf("a cap of %d is not positive; leave MaxTokens nil for no cap", *req.MaxTokens))
 		return
 	}
-	max := v.profile.Limits.MaxOutput
-	if max <= 0 || int64(*req.MaxTokens) <= max {
+	limit := v.profile.Limits.MaxOutput
+	if limit <= 0 || int64(*req.MaxTokens) <= limit {
 		return
 	}
 	v.warn(WarnCompatibility, "max_tokens",
 		fmt.Sprintf("%d exceeds this model's output limit of %d, which the endpoint clamps silently",
-			*req.MaxTokens, max))
+			*req.MaxTokens, limit))
 }
 
 func (v *validation) checkTools(req ChatRequest) {
