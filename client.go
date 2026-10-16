@@ -50,7 +50,7 @@ const (
 	// DefaultCallTimeout is the backstop for a stream that stays alive forever
 	// without finishing — dribbling frames past any sane answer length.
 	DefaultCallTimeout = 15 * time.Minute
-	// headerBackstopHeadroom is how much later than the stall guard the
+	// headerBackstopHeadroom is how much later than the whole-call cap the
 	// transport's own header timeout fires. Large enough that the guard always
 	// wins the race and names the bound; small enough that a request still ends
 	// if the guard somehow never fires at all.
@@ -190,17 +190,21 @@ func New(cfg Config) *Client {
 		// values instead of being silently dropped. Built after the defaults
 		// resolve, so the backstop matches the bound actually configured.
 		tr := http.DefaultTransport.(*http.Transport).Clone()
-		// Deliberately LONGER than the guard's own header bound.
+		// Deliberately LONGER than every header-phase bound the guard arms.
 		//
 		// Transport.ResponseHeaderTimeout is a backstop for the case the guard
-		// cannot cover, not a second bound of equal standing: it is an HTTP/1.1
-		// feature and does not apply once a connection is negotiated as HTTP/2,
-		// which is what these endpoints do. Setting the two to the same value
-		// makes them race, and when the transport wins the error is its generic
-		// "timeout awaiting response headers" rather than the guard's named
-		// bound — losing exactly the classification the split bounds exist to
-		// provide. The headroom makes the guard reliably first.
-		tr.ResponseHeaderTimeout = cfg.HeaderTimeout + headerBackstopHeadroom
+		// cannot cover, not a second bound of equal standing. It applies on
+		// HTTP/2 as well as HTTP/1.1 (the h2 client reads it off the
+		// http.Transport it was configured from), so it must sit above the
+		// LARGEST bound the guard arms for the header phase: c.header on a
+		// stream, but the whole-call cap on the non-streaming routes, where the
+		// endpoint withholds headers until the answer is ready (see rawCall).
+		// Sat at c.header + headroom it silently capped every non-streaming
+		// call at 90s, and the transport's generic "timeout awaiting response
+		// headers" is an error explain cannot name — losing exactly the
+		// classification the split bounds exist to provide. The headroom makes
+		// the guard reliably first.
+		tr.ResponseHeaderTimeout = cfg.CallTimeout + headerBackstopHeadroom
 		hc = &http.Client{Transport: tr}
 	}
 	headers := make(map[string]string, len(cfg.Headers))
@@ -584,12 +588,13 @@ func (c *Client) openStream(ctx context.Context, body []byte) (*streamExchange, 
 }
 
 // RawPost sends an already-built body to an arbitrary route and returns the
-// decoded JSON response, the response headers and the status. Used for
-// non-streaming completions, for embeddings, and by the probe suite when the
-// interesting part of a response is its headers.
+// raw JSON response and the response headers. Used for non-streaming
+// completions, for embeddings, and by the probe suite when the interesting
+// part of a response is its headers.
 //
 // The headers are returned because a gateway reports per-call spend and the
-// real deployment name there and nowhere else.
+// real deployment name there and nowhere else. A non-2xx is the typed error a
+// completion would return, with the headers beside it.
 func (c *Client) RawPost(ctx context.Context, route string, body []byte) (json.RawMessage, http.Header, error) {
 	if c.routes != nil {
 		return nil, nil, c.errSeveralHosts("RawPost")
@@ -626,8 +631,8 @@ func (c *Client) rawCall(ctx context.Context, method, route string, body []byte)
 	// to answer. The guard is still worth arming: when nothing arrives at all, the
 	// failure says "no response headers" rather than a bare context deadline.
 	//
-	// (The transport's own ResponseHeaderTimeout, set in New to c.header + 30s,
-	// remains the unnamed backstop it has always been on this path.)
+	// (The transport's own ResponseHeaderTimeout, set in New to c.cap + 30s so
+	// it sits above this arming too, remains the unnamed backstop on this path.)
 	guard := newStallGuard(cancelReq, c.cap, stallHeaders)
 	defer guard.stop()
 

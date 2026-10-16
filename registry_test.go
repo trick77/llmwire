@@ -672,10 +672,10 @@ func TestNewRegistry_AppliesOnlyTheSafeDefaults(t *testing.T) {
 	if p.WireModelID != "minimal" {
 		t.Errorf("wire_model_id = %q, want it defaulted from the id", p.WireModelID)
 	}
-	// Every reasoning model measured streams on this field, and the parser reads
-	// the other spelling too, so defaulting it is safe.
-	if p.Reasoning.StreamField != "reasoning_content" {
-		t.Errorf("stream_field = %q, want reasoning_content", p.Reasoning.StreamField)
+	// stream_field is recorded, never read (the parser takes both spellings),
+	// so it is NOT defaulted: a profile that did not say stays empty.
+	if p.Reasoning.StreamField != "" {
+		t.Errorf("stream_field = %q, want it left empty rather than defaulted", p.Reasoning.StreamField)
 	}
 	if p.Tools.Format != FormatNative {
 		t.Errorf("tools.format = %q, want the native default", p.Tools.Format)

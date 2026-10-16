@@ -645,8 +645,8 @@ func (b *CostBlock) selectWindow(at time.Time) (string, int32) {
 		if !w.days[local.Weekday()] {
 			continue
 		}
-		min := local.Hour()*60 + local.Minute()
-		if min >= w.fromMin && min < w.toMin {
+		minute := local.Hour()*60 + local.Minute()
+		if minute >= w.fromMin && minute < w.toMin {
 			return w.Name, w.MultiplierPermille
 		}
 	}

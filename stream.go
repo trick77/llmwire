@@ -226,7 +226,7 @@ const (
 // deltas are real data frames, so a legitimately long thinking phase still
 // re-arms the guard and is unaffected by this rule.
 //
-// With recover set, content and reasoning deltas pass through an inline gate
+// With recovery set, content and reasoning deltas pass through an inline gate
 // before reaching the sink (see inline.go): text before a marker streams as
 // usual, the markup and everything after it is withheld, the first call's name
 // is surfaced as a tool-call event as soon as it parses, and the calls recovered
@@ -241,7 +241,7 @@ const (
 // from the caller so every Timing figure shares one clock and one origin. Total
 // is written on every return, the error ones included, which is what the named
 // result and the deferred write are for.
-func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink func(streamEvent), redact redactor, recover bool, now func() time.Time, start time.Time) (res StreamResult, warnings []Warning, err error) {
+func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink func(streamEvent), redact redactor, recovery bool, now func() time.Time, start time.Time) (res StreamResult, _ []Warning, err error) {
 	defer func() { res.Timing.Total = now().Sub(start) }()
 	var (
 		content   strings.Builder
@@ -267,7 +267,7 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 	// Gates exist only when the profile asks for recovery; a nil gate passes
 	// text straight through.
 	var contentGate, reasoningGate *inlineGate
-	if recover {
+	if recovery {
 		contentGate, reasoningGate = &inlineGate{}, &inlineGate{}
 	}
 	// earlyName records which channel the first inline call's name went out
@@ -404,7 +404,7 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 			}
 			if ch.FinishReason != "" {
 				res.FinishReason = ch.FinishReason
-				if recover {
+				if recovery {
 					heldFinish = &streamEvent{kind: evFinish, finishReason: ch.FinishReason}
 				} else {
 					emit(streamEvent{kind: evFinish, finishReason: ch.FinishReason})
@@ -452,7 +452,7 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 		endErr = fmt.Errorf("llmwire: %w: stream ended after %d events (%d chars) without finish_reason or %s",
 			ErrMalformedResponse, res.Events, res.Chars, doneMarker)
 	}
-	if !recover {
+	if !recovery {
 		return res, nil, endErr
 	}
 	defer func() {
@@ -510,10 +510,10 @@ const (
 // keeps its own name.
 //
 // Doing this rather than leaning on Transport.ResponseHeaderTimeout alone is
-// deliberate: that setting is an HTTP/1.1 transport feature and does not apply
-// once a connection is negotiated as HTTP/2, which is the case for these
-// endpoints. It is still set, as a backstop; this is the bound actually relied
-// on.
+// deliberate: that setting is one number for every route, and the header
+// phase needs a different bound on a stream than on a non-streaming call
+// (see rawCall). It is still set, as a backstop above both; this is the bound
+// actually relied on, and the one that names itself when it fires.
 type stallGuard struct {
 	cancel context.CancelFunc
 

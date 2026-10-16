@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -626,15 +627,31 @@ func TestNew_DefaultHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
 	if !ok {
 		t.Fatalf("transport is %T, want *http.Transport", c.http.Transport)
 	}
-	// A backstop only, and deliberately LATER than the guard: the two would
-	// otherwise race, and a transport win reports its own generic timeout
-	// instead of the named bound the split exists to provide.
-	if tr.ResponseHeaderTimeout != DefaultHeaderTimeout+headerBackstopHeadroom {
-		t.Errorf("ResponseHeaderTimeout = %v, want the header bound plus headroom (%v)",
-			tr.ResponseHeaderTimeout, DefaultHeaderTimeout+headerBackstopHeadroom)
+	// A backstop only, and deliberately LATER than every header-phase bound
+	// the guard arms: the two would otherwise race, and a transport win
+	// reports its own generic timeout instead of the named bound the split
+	// exists to provide. The largest such bound is the whole-call cap, which
+	// rawCall arms for the header phase because a non-streaming endpoint
+	// withholds headers until the answer is ready; and the setting applies on
+	// HTTP/2 too, so a backstop sized to the stream's header bound capped
+	// every non-streaming call at 90s.
+	if tr.ResponseHeaderTimeout != DefaultCallTimeout+headerBackstopHeadroom {
+		t.Errorf("ResponseHeaderTimeout = %v, want the call cap plus headroom (%v)",
+			tr.ResponseHeaderTimeout, DefaultCallTimeout+headerBackstopHeadroom)
 	}
-	if tr.ResponseHeaderTimeout <= DefaultHeaderTimeout {
-		t.Error("the transport backstop must fire after the stall guard, not with it")
+	if tr.ResponseHeaderTimeout <= DefaultCallTimeout {
+		t.Error("the transport backstop must fire after the whole-call cap, not with it")
+	}
+}
+
+// The backstop follows a configured cap, not the default: a caller who raises
+// CallTimeout for a slow non-streaming model must not be cut at the default
+// plus headroom by the transport.
+func TestNew_TransportBackstopFollowsTheConfiguredCallCap(t *testing.T) {
+	c := New(Config{BaseURL: "https://example.test", CallTimeout: 45 * time.Minute})
+	tr := c.http.Transport.(*http.Transport)
+	if tr.ResponseHeaderTimeout != 45*time.Minute+headerBackstopHeadroom {
+		t.Errorf("ResponseHeaderTimeout = %v, want 45m plus headroom", tr.ResponseHeaderTimeout)
 	}
 }
 
@@ -664,5 +681,34 @@ func TestChatStream_DrainedStreamReleasesItsContexts(t *testing.T) {
 	}
 	if stream.callCtx.Err() == nil {
 		t.Error("the call context is still live after the stream ended")
+	}
+}
+
+// scrub is the last line of redaction: an error built where no redactor was
+// in reach, whose text carries the key by value, is wrapped so the text is
+// clean and errors.Is still sees the original.
+func TestClient_ScrubStripsTheKeyByValueAndKeepsTheChain(t *testing.T) {
+	const key = "plain-token-with-no-known-shape"
+	c := New(Config{BaseURL: "https://example.test", APIKey: key})
+	cause := errors.New("upstream echoed Authorization: Bearer " + key)
+	err := c.scrub(fmt.Errorf("wrapped: %w", cause))
+	if strings.Contains(err.Error(), key) {
+		t.Fatalf("scrubbed error still carries the key: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Errorf("scrubbed error = %q, want the key replaced by [REDACTED]", err.Error())
+	}
+	if !errors.Is(err, cause) {
+		t.Error("scrub must keep the original as its cause")
+	}
+	// Nothing to scrub: the error comes back as given, not wrapped. Identity
+	// is the assertion, so errors.Is would pass for exactly the rewrap this
+	// checks against.
+	clean := errors.New("no key here")
+	if got := c.scrub(clean); got != clean { //nolint:errorlint // identity, see above
+		t.Errorf("scrub rewrapped a clean error: %v", got)
+	}
+	if got := New(Config{BaseURL: "https://example.test"}).scrub(cause); got != cause { //nolint:errorlint // identity
+		t.Error("a client with no key has nothing to scrub")
 	}
 }

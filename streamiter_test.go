@@ -668,3 +668,33 @@ func TestChatStream_ReturnedWarningsAreTheCallersOwn(t *testing.T) {
 		}
 	}
 }
+
+// Only an ending the Close could have caused reads as caller-stopped: a
+// cancellation with the guard silent. A Close that lands after the endpoint
+// failed the stream, after the guard cancelled it, or after it ran to its end
+// must not relabel what happened, because the window between readStream
+// returning and the reader snapshotting stopped is real and cannot be driven
+// from a test server.
+func TestCallerStopped_OnlyACancellationTheCloseCaused(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		stopped    bool
+		err        error
+		guardFired bool
+		want       bool
+	}{
+		{"close cancelled the read", true, fmt.Errorf("llmwire: reading stream: %w", context.Canceled), false, true},
+		{"no close at all", false, context.Canceled, false, false},
+		{"clean end, close raced it", true, nil, false, false},
+		{"guard fired, close raced it", true, context.Canceled, true, false},
+		{"call cap, close raced it", true, context.DeadlineExceeded, false, false},
+		{"error frame, close raced it", true, &APIError{StatusCode: 0, Code: "1210"}, false, false},
+		{"cut body, close raced it", true, fmt.Errorf("llmwire: %w: stream ended", ErrMalformedResponse), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := callerStopped(tc.stopped, tc.err, tc.guardFired); got != tc.want {
+				t.Errorf("callerStopped(%v, %v, %v) = %v, want %v", tc.stopped, tc.err, tc.guardFired, got, tc.want)
+			}
+		})
+	}
+}

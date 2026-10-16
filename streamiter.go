@@ -2,6 +2,7 @@ package llmwire
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"time"
@@ -146,7 +147,8 @@ func (s *Stream) read(pl *wirePlan, at time.Time) {
 	s.guard.stop()
 
 	s.mu.Lock()
-	stopped := s.stopped
+	guardFired, _ := s.guard.firedReason()
+	stopped := callerStopped(s.stopped, err, guardFired != "")
 	s.mu.Unlock()
 
 	// Headers were complete before the body was read, so the gateway block
@@ -156,10 +158,6 @@ func (s *Stream) read(pl *wirePlan, at time.Time) {
 	res.Gateway, gwWarnings = parseGatewayHeaders(resp.Header)
 	switch {
 	case stopped:
-		// A caller-initiated Close cancelled the request, and explain() would
-		// report that as "exceeded the call cap" — a timeout that never happened.
-		// The truncation guard's "ended without finish_reason" is equally wrong
-		// here: the caller stopped reading on purpose.
 		err = nil
 	case err != nil:
 		err = s.client.explain(s.ctx, s.callCtx, s.guard, err)
@@ -213,6 +211,21 @@ func (s *Stream) read(pl *wirePlan, at time.Time) {
 	s.cond.Broadcast()
 	s.mu.Unlock()
 	close(s.done)
+}
+
+// callerStopped says whether a stream's ending was the caller's Close and
+// nothing else. A Close cancels the request, and explain() would report that
+// cancellation as "exceeded the call cap", a timeout that never happened; the
+// truncation guard's "ended without finish_reason" is equally wrong, since the
+// caller stopped reading on purpose. So only an ending the Close could have
+// caused counts: a cancellation, with the stall guard silent. Everything else
+// is kept whatever Close did, because Close can land after the fact: a stream
+// the endpoint already failed (an error frame, a cut body) is a failure, a
+// stream the guard already cancelled is the stall it names (the guard cancels
+// with the same context.Canceled a Close does), and a stream that ran to its
+// end is clean, with its header lane intact.
+func callerStopped(stopped bool, err error, guardFired bool) bool {
+	return stopped && err != nil && errors.Is(err, context.Canceled) && !guardFired
 }
 
 // push queues one event. Called on the reading goroutine and must never block.
@@ -325,7 +338,8 @@ func (s *Stream) Warnings() []Warning {
 //
 // Idempotent, and correct to defer: a caller who read to the end gets a no-op, and
 // one who returns early gets a cancelled request. A deliberate close is not an
-// error, so Err stays nil for it.
+// error, so Err stays nil for it, unless the endpoint or a bound had already
+// failed the stream before the Close landed: that failure is still reported.
 func (s *Stream) Close() error {
 	s.closeOne.Do(func() {
 		s.mu.Lock()

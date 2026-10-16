@@ -96,8 +96,9 @@ type Reasoning struct {
 	// means the vendor does not say.
 	DefaultEffort string `yaml:"default_effort"`
 	// StreamField names the delta field reasoning arrives on: "reasoning_content"
-	// on every model measured so far, "reasoning" on some servers. Empty means
-	// reasoning is not streamed separately.
+	// on every model measured so far, "reasoning" on some servers. Recorded,
+	// not read: the parser takes both spellings (stream.go, reasoningSpelling),
+	// so no default is applied either, and empty means nobody looked.
 	StreamField string `yaml:"stream_field"`
 	// BudgetParam is the wire key a token budget is sent under, and is required
 	// when Control is ControlBudget. There is no default because the vendors
