@@ -18,8 +18,8 @@ func TestChat_StrayCloseTagIsCutWhereTheProfileSaysItLeaks(t *testing.T) {
 	body := `{"model":"mimo-v2.6-flash","choices":[{"finish_reason":"stop",
 	  "message":{"content":"draft line),</think>FOUND: svc/A.java:67 the answer"}}],
 	  "usage":{"prompt_tokens":10,"completion_tokens":5}}`
-	srv, _ := jsonServer(t, 200, body)
-	resp, warnings, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	srv := jsonServer(t, 200, body)
+	resp, warnings, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model:     "mimo-v2.6-flash",
 		Messages:  []Message{User("hi")},
 		Reasoning: ReasoningOff(),
@@ -47,8 +47,8 @@ func TestChat_StrayCloseTagIsCutWhereTheProfileSaysItLeaks(t *testing.T) {
 func TestChat_StrayCloseTagIsLeftAloneWithoutTheBit(t *testing.T) {
 	body := `{"model":"mimo-v2.6-pro","choices":[{"finish_reason":"stop",
 	  "message":{"content":"a</think>b"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
-	srv, _ := jsonServer(t, 200, body)
-	resp, _, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	srv := jsonServer(t, 200, body)
+	resp, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model:    "mimo-v2.6-pro",
 		Messages: []Message{User("hi")},
 	})
@@ -66,9 +66,9 @@ func cutCase(t *testing.T, content string, req ChatRequest) *ChatResponse {
 	b, _ := json.Marshal(content)
 	body := `{"model":"mimo-v2.6-flash","choices":[{"finish_reason":"stop","message":{"content":` +
 		string(b) + `}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
-	srv, _ := jsonServer(t, 200, body)
+	srv := jsonServer(t, 200, body)
 	req.Model, req.Messages = "mimo-v2.6-flash", []Message{User("hi")}
-	resp, _, err := chatClient(t, srv).Chat(context.Background(), req)
+	resp, _, err := clientOn(t, srv.URL).Chat(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}

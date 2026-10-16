@@ -30,7 +30,7 @@ func TestFromEnv(t *testing.T) {
 		t.Setenv("LLMWIRE_GW_BASE_URL", "")
 		t.Setenv("LLMWIRE_GW_API_KEY", "")
 		m := map[string]string{"LLMWIRE_GW_BASE_URL": "https://map.example/v1/", "LLMWIRE_GW_API_KEY": "m"}
-		c, err := FromEnv("m", Config{Registry: reg, Lookup: func(k string) (string, bool) { v, ok := m[k]; return v, ok }})
+		c, err := FromEnv("m", Config{Registry: reg, Lookup: mapLookup(m)})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -72,14 +70,6 @@ func TestValidate_UnknownToolChoiceModeIsRejected(t *testing.T) {
 }
 
 // --- loader rules --------------------------------------------------------------------
-
-const embedHead = `profiles:
-  - id: e
-    endpoint: embeddings
-    wire_model_id: e
-    verified: measured
-    embedding: {default_dimensions: 8}
-`
 
 // Every rule the loader's comments promised and the code lacked. Each case
 // loaded clean before the fix.
@@ -229,16 +219,6 @@ func TestNewRegistry_BadProvidersAreNamedInOrder(t *testing.T) {
 	}
 }
 
-// A lone "." is a stray character, not a free lane.
-func TestRate_LoneDotIsRefused(t *testing.T) {
-	for _, v := range []string{".", "-."} {
-		doc := chatHead + "    cost:\n      input: '" + v + "'\n      cache_read: 0\n      cache_write: 0\n      output: 0\n" + goodProvenance
-		if _, err := NewRegistry([]byte(doc)); err == nil || !strings.Contains(err.Error(), "not a decimal number") {
-			t.Errorf("rate %q: err = %v, want a refusal", v, err)
-		}
-	}
-}
-
 // --- reported figures from a gateway ---------------------------------------------
 
 // big.Rat.SetString accepts fractions, hex floats and an exponent of any
@@ -290,19 +270,8 @@ func TestParseUsage_NegativeCountIsNotReported(t *testing.T) {
 // fix the route inherited the base's needs_include_usage: false and every
 // stream through the gateway was Unpriced.
 func TestFromEnv_gatewayStreamAsksForUsage(t *testing.T) {
-	var body []byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n"))
-	}))
-	defer srv.Close()
-	env := map[string]string{
-		"LLMWIRE_LITELLM_BASE_URL": srv.URL,
-		"LLMWIRE_LITELLM_API_KEY":  "gw-key",
-		GatewayModelsEnv:           "glm-5.3-flash=proxy-glm",
-	}
-	c, err := FromEnv("glm-5.3-flash", Config{Lookup: func(k string) (string, bool) { v, ok := env[k]; return v, ok }})
+	srv := sseServer(t, hiStream)
+	c, err := FromEnv("glm-5.3-flash", Config{Lookup: mapLookup(gatewayEnv(srv.URL, "glm-5.3-flash=proxy-glm"))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,12 +283,12 @@ func TestFromEnv_gatewayStreamAsksForUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sent map[string]any
-	if err := json.Unmarshal(body, &sent); err != nil {
+	if err := json.Unmarshal(srv.lastBody(), &sent); err != nil {
 		t.Fatal(err)
 	}
 	opts, _ := sent["stream_options"].(map[string]any)
 	if opts["include_usage"] != true {
-		t.Errorf("body = %s, want stream_options.include_usage on a gateway route", body)
+		t.Errorf("body = %s, want stream_options.include_usage on a gateway route", srv.lastBody())
 	}
 }
 
@@ -370,7 +339,7 @@ func TestFromEnv_baseURLFromTheEnvironmentIsValidated(t *testing.T) {
 	} {
 		t.Run(tc.url, func(t *testing.T) {
 			env := map[string]string{"LLMWIRE_GW_BASE_URL": tc.url, "LLMWIRE_GW_API_KEY": "k"}
-			_, err := FromEnv("m", Config{Registry: reg, Lookup: func(k string) (string, bool) { v, ok := env[k]; return v, ok }})
+			_, err := FromEnv("m", Config{Registry: reg, Lookup: mapLookup(env)})
 			if err != nil && strings.Contains(err.Error(), "hunter2") {
 				t.Fatalf("refusal prints the credential: %v", err)
 			}
@@ -486,23 +455,10 @@ func TestValidateStream_SeesTheStreamingRefusal(t *testing.T) {
 // exactly the call that failed: the header lane is withheld unless the
 // stream ended cleanly.
 func TestChatStream_CutGatewayStreamIgnoresTheCostHeader(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set(litellmCostHeader, "0")
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"half\"}}]}\n\n"))
-	}))
-	t.Cleanup(srv.Close)
-	reg := registryFrom(t, `profiles:
-  - id: m
-    wire_model_id: m
-    max_tokens_param: max_tokens
-    verified: measured
-    streaming: {supported: true, accepts_stream_options: true}
-  - id: m-via
-    base: m
-    gateway: litellm
-    wire_model_id: proxy/m
-`)
+	srv := sseServer(t, []string{`data: {"choices":[{"delta":{"content":"half"}}]}`},
+		reply{header: map[string]string{litellmCostHeader: "0"}})
+	// gatewayStreamDoc without its cost block: nothing to fall back on.
+	reg := registryFrom(t, chatHead+streamingBlock+viaTail)
 	c := New(Config{BaseURL: srv.URL, Registry: reg})
 	s, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "m-via", Messages: []Message{User("hi")}})
 	if err != nil {
@@ -524,16 +480,13 @@ func TestChatStream_CutGatewayStreamIgnoresTheCostHeader(t *testing.T) {
 func TestReadStream_ErrorFrameStillRecoversInline(t *testing.T) {
 	body := "data: " + contentDelta("<tool_call><function=search><parameter=q>x</parameter></function></tool_call>") + "\n\n" +
 		"data: {\"error\":{\"message\":\"upstream exploded\",\"code\":\"1210\"}}\n\n"
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	guard := newStallGuard(cancel, time.Hour, stallHeaders)
-	defer guard.stop()
+	res, events, _, err := readSSE(t, body, readOpts{recovery: true, keepErr: true})
 	var calls int
-	res, _, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, func(ev streamEvent) {
+	for _, ev := range events {
 		if ev.kind == evToolCall {
 			calls++
 		}
-	}, Redact, true, time.Now, time.Now())
+	}
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Code != "1210" {
 		t.Fatalf("err = %v, want the frame's *APIError", err)

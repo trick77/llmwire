@@ -8,16 +8,8 @@ import (
 	"testing"
 )
 
-// gatewayEnv is a Lookup over a map: the litellm pair plus whatever list the
-// test declares, nothing from the process.
-func gatewayEnv(models string) func(string) (string, bool) {
-	m := map[string]string{
-		"LLMWIRE_LITELLM_BASE_URL": "https://gw.example/v1/",
-		"LLMWIRE_LITELLM_API_KEY":  "gw-key",
-		GatewayModelsEnv:           models,
-	}
-	return func(k string) (string, bool) { v, ok := m[k]; return v, ok }
-}
+// gwHost carries the trailing slash on purpose: FromEnv trims it.
+const gwHost = "https://gw.example/v1/"
 
 func TestParseGatewayModels(t *testing.T) {
 	got, err := parseGatewayModels(" gpt-5.4-mini = ai-gateway-gpt-5.4-mini ,text-embedding-3-small,, ")
@@ -36,7 +28,7 @@ func TestParseGatewayModels(t *testing.T) {
 
 func TestFromEnv_gatewayModels(t *testing.T) {
 	t.Run("a listed model goes to the gateway under its alias", func(t *testing.T) {
-		c, err := FromEnv("mimo-v2.5-pro", Config{Lookup: gatewayEnv("mimo-v2.5-pro=proxy-mimo")})
+		c, err := FromEnv("mimo-v2.5-pro", Config{Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.5-pro=proxy-mimo"))})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -65,7 +57,7 @@ func TestFromEnv_gatewayModels(t *testing.T) {
 	})
 
 	t.Run("a bare id keeps the public name on the wire", func(t *testing.T) {
-		c, err := FromEnv("text-embedding-3-small", Config{Lookup: gatewayEnv("text-embedding-3-small")})
+		c, err := FromEnv("text-embedding-3-small", Config{Lookup: mapLookup(gatewayEnv(gwHost, "text-embedding-3-small"))})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -77,13 +69,9 @@ func TestFromEnv_gatewayModels(t *testing.T) {
 
 	t.Run("an unlisted model is untouched", func(t *testing.T) {
 		t.Setenv("LLMWIRE_MIMO_BASE_URL", "")
-		m := gatewayEnv("glm-5.3-flash=proxy-glm")
-		c, err := FromEnv("mimo-v2.5-pro", Config{Lookup: func(k string) (string, bool) {
-			if k == "LLMWIRE_MIMO_API_KEY" {
-				return "mimo-key", true
-			}
-			return m(k)
-		}})
+		m := gatewayEnv(gwHost, "glm-5.3-flash=proxy-glm")
+		m["LLMWIRE_MIMO_API_KEY"] = "mimo-key"
+		c, err := FromEnv("mimo-v2.5-pro", Config{Lookup: mapLookup(m)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,13 +85,9 @@ func TestFromEnv_gatewayModels(t *testing.T) {
 
 	t.Run("the gateway's URL and key are required and named", func(t *testing.T) {
 		for _, missing := range []string{"LLMWIRE_LITELLM_BASE_URL", "LLMWIRE_LITELLM_API_KEY"} {
-			full := gatewayEnv("mimo-v2.5-pro")
-			_, err := FromEnv("mimo-v2.5-pro", Config{Lookup: func(k string) (string, bool) {
-				if k == missing {
-					return "", false
-				}
-				return full(k)
-			}})
+			full := gatewayEnv(gwHost, "mimo-v2.5-pro")
+			delete(full, missing)
+			_, err := FromEnv("mimo-v2.5-pro", Config{Lookup: mapLookup(full)})
 			var me *MissingEnvError
 			if !errors.As(err, &me) || me.Var != missing {
 				t.Errorf("without %s: err = %v, want a MissingEnvError naming it", missing, err)
@@ -115,12 +99,12 @@ func TestFromEnv_gatewayModels(t *testing.T) {
 		// The list is validated as a whole on every build: a typo'd entry
 		// would otherwise let the model it meant fall through to its vendor,
 		// bypassing the gateway with nothing said.
-		_, err := FromEnv("mimo-v2.5-pro", Config{Lookup: gatewayEnv("mimo-v2.5-pr=x")})
+		_, err := FromEnv("mimo-v2.5-pro", Config{Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.5-pr=x"))})
 		var ue *UnknownModelError
 		if !errors.As(err, &ue) || !strings.Contains(err.Error(), GatewayModelsEnv) {
 			t.Fatalf("err = %v, want UnknownModelError naming the variable", err)
 		}
-		if _, err := FromEnv("mimo-v2.5-pro", Config{Lookup: gatewayEnv("mimo-v2.5-pro=a=b")}); err == nil {
+		if _, err := FromEnv("mimo-v2.5-pro", Config{Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.5-pro=a=b"))}); err == nil {
 			t.Fatal("a malformed entry must fail the build")
 		}
 	})
@@ -139,7 +123,7 @@ profiles:
     temperature: {supported: true, forced_value: 1.0}
     streaming: {supported: true, accepts_stream_options: true}
 `)
-		c, err := FromEnv("forced", Config{Registry: reg, Lookup: gatewayEnv("forced=proxy-forced")})
+		c, err := FromEnv("forced", Config{Registry: reg, Lookup: mapLookup(gatewayEnv(gwHost, "forced=proxy-forced"))})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -150,7 +134,7 @@ profiles:
 	})
 
 	t.Run("an explicit base url still wins over the list", func(t *testing.T) {
-		c, err := FromEnv("mimo-v2.5-pro", Config{BaseURL: "https://cfg.example", Lookup: gatewayEnv("mimo-v2.5-pro=proxy")})
+		c, err := FromEnv("mimo-v2.5-pro", Config{BaseURL: "https://cfg.example", Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.5-pro=proxy"))})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -163,7 +147,7 @@ profiles:
 	t.Run("the log line names the route", func(t *testing.T) {
 		var buf bytes.Buffer
 		log := slog.New(slog.NewTextHandler(&buf, nil))
-		if _, err := FromEnv("mimo-v2.5-pro", Config{Logger: log, Lookup: gatewayEnv("mimo-v2.5-pro=proxy-mimo")}); err != nil {
+		if _, err := FromEnv("mimo-v2.5-pro", Config{Logger: log, Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.5-pro=proxy-mimo"))}); err != nil {
 			t.Fatal(err)
 		}
 		for _, want := range []string{"wire_model=proxy-mimo", "gateway=litellm", "provider=litellm", "base_url=https://gw.example/v1", "api_key=LLMWIRE_LITELLM_API_KEY"} {
@@ -195,7 +179,7 @@ profiles:
 	if _, err := reg.viaGateway(map[string]string{"r": "x"}); err == nil || !strings.Contains(err.Error(), "already a route") {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := FromEnv("m", Config{Registry: reg, Lookup: gatewayEnv("r=x")}); err == nil || !strings.Contains(err.Error(), "already a route") {
+	if _, err := FromEnv("m", Config{Registry: reg, Lookup: mapLookup(gatewayEnv(gwHost, "r=x"))}); err == nil || !strings.Contains(err.Error(), "already a route") {
 		t.Fatalf("building m with a route listed: err = %v", err)
 	}
 }
@@ -204,7 +188,7 @@ profiles:
 // model must carry the embeddings route too, or the second model leaves under
 // its public name and is priced from the vendor's table.
 func TestFromEnv_gatewayModelsRoutesTheWholeList(t *testing.T) {
-	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: gatewayEnv("gpt-5.4-mini=a,text-embedding-3-small=b")})
+	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: mapLookup(gatewayEnv(gwHost, "gpt-5.4-mini=a,text-embedding-3-small=b"))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +203,7 @@ func TestFromEnv_gatewayModelsRoutesTheWholeList(t *testing.T) {
 
 // The caller's key is the vendor's; the gateway has its own.
 func TestFromEnv_gatewayModelsRefusesACallerKey(t *testing.T) {
-	_, err := FromEnv("gpt-5.4-mini", Config{APIKey: "sk-openai", Lookup: gatewayEnv("gpt-5.4-mini=a")})
+	_, err := FromEnv("gpt-5.4-mini", Config{APIKey: "sk-openai", Lookup: mapLookup(gatewayEnv(gwHost, "gpt-5.4-mini=a"))})
 	if err == nil || !strings.Contains(err.Error(), "LLMWIRE_LITELLM_API_KEY") {
 		t.Fatalf("err = %v, want a refusal naming the gateway's key variable", err)
 	}
@@ -229,7 +213,7 @@ func TestFromEnv_gatewayModelsRefusesACallerKey(t *testing.T) {
 // such a document resolves to the empty provider the way a YAML route does.
 func TestFromEnv_gatewayModelsWithoutAProvidersSection(t *testing.T) {
 	reg := registryFrom(t, chatHead+"    provider: litellm\n")
-	c, err := FromEnv("m", Config{Registry: reg, Lookup: gatewayEnv("m=alias")})
+	c, err := FromEnv("m", Config{Registry: reg, Lookup: mapLookup(gatewayEnv(gwHost, "m=alias"))})
 	if err != nil {
 		t.Fatal(err)
 	}

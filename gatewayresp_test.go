@@ -5,23 +5,15 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-func gatewayLookup(srv *httptest.Server) func(string) (string, bool) {
-	env := map[string]string{
-		"LLMWIRE_LITELLM_BASE_URL": srv.URL,
-		"LLMWIRE_LITELLM_API_KEY":  "gw-key",
-		GatewayModelsEnv:           "gpt-5.4-mini=ai-gateway-gpt-5.4-mini",
-	}
-	return func(k string) (string, bool) { v, ok := env[k]; return v, ok }
-}
-
-func gatewayClient(t *testing.T, srv *httptest.Server) *Client {
+// gatewayClient routes gpt-5.4-mini through a litellm at url; log is the
+// client's logger, nil for none.
+func gatewayClient(t *testing.T, url string, log *slog.Logger) *Client {
 	t.Helper()
-	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: gatewayLookup(srv)})
+	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: mapLookup(gatewayEnv(url, "gpt-5.4-mini=ai-gateway-gpt-5.4-mini")), Logger: log})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,17 +21,10 @@ func gatewayClient(t *testing.T, srv *httptest.Server) *Client {
 }
 
 func TestChat_GatewayCallIDIsLoggedOnARejection(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("x-litellm-call-id", "call-rejected")
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(`{"error":{"message":"slow down","code":"429"}}`))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusTooManyRequests, `{"error":{"message":"slow down","code":"429"}}`,
+		reply{header: map[string]string{"x-litellm-call-id": "call-rejected"}})
 	var logs bytes.Buffer
-	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: gatewayLookup(srv), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := gatewayClient(t, srv.URL, slog.New(slog.NewTextHandler(&logs, nil)))
 	if _, _, err := c.Chat(context.Background(), ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}}); err == nil {
 		t.Fatal("expected the 429")
 	}
@@ -49,14 +34,10 @@ func TestChat_GatewayCallIDIsLoggedOnARejection(t *testing.T) {
 }
 
 func TestStream_GatewayHeadersSurviveACutStream(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("x-litellm-call-id", "call-cut")
-		w.Header().Set("Content-Type", "text/event-stream")
-		// One frame, then EOF without [DONE] or finish_reason: a cut stream.
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
-	}))
-	defer srv.Close()
-	st, _, err := gatewayClient(t, srv).ChatStream(context.Background(),
+	// One frame, then EOF without [DONE] or finish_reason: a cut stream.
+	srv := sseServer(t, []string{`data: {"choices":[{"delta":{"content":"hi"}}]}`},
+		reply{header: map[string]string{"x-litellm-call-id": "call-cut"}})
+	st, _, err := gatewayClient(t, srv.URL, nil).ChatStream(context.Background(),
 		ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}})
 	if err != nil {
 		t.Fatal(err)
@@ -71,17 +52,10 @@ func TestStream_GatewayHeadersSurviveACutStream(t *testing.T) {
 }
 
 func TestStream_GatewayCallIDIsLoggedOnARejectedOpen(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("x-litellm-call-id", "call-stream-rejected")
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte(`{"error":{"message":"upstream down","code":"502"}}`))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusBadGateway, `{"error":{"message":"upstream down","code":"502"}}`,
+		reply{header: map[string]string{"x-litellm-call-id": "call-stream-rejected"}})
 	var logs bytes.Buffer
-	c, err := FromEnv("gpt-5.4-mini", Config{Lookup: gatewayLookup(srv), Logger: slog.New(slog.NewTextHandler(&logs, nil))})
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := gatewayClient(t, srv.URL, slog.New(slog.NewTextHandler(&logs, nil)))
 	if _, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}}); err == nil {
 		t.Fatal("expected the 502")
 	}
@@ -93,17 +67,14 @@ func TestStream_GatewayCallIDIsLoggedOnARejectedOpen(t *testing.T) {
 const gatewayChatBody = `{"model":"ai-gateway-gpt-5.4-mini","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`
 
 func TestChat_GatewayHeadersRideOnTheResponse(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("x-litellm-call-id", "call-42")
-		w.Header().Set("x-litellm-model-name", "azure/gpt-5.4-mini")
-		w.Header().Set("x-litellm-key-spend", "12.5")
-		w.Header().Set("x-litellm-response-cost", "1.23e-05")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(gatewayChatBody))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusOK, gatewayChatBody, reply{header: map[string]string{
+		"x-litellm-call-id":       "call-42",
+		"x-litellm-model-name":    "azure/gpt-5.4-mini",
+		"x-litellm-key-spend":     "12.5",
+		"x-litellm-response-cost": "1.23e-05",
+	}})
 
-	resp, warnings, err := gatewayClient(t, srv).Chat(context.Background(),
+	resp, warnings, err := gatewayClient(t, srv.URL, nil).Chat(context.Background(),
 		ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}})
 	if err != nil {
 		t.Fatal(err)
@@ -124,11 +95,7 @@ func TestChat_GatewayHeadersRideOnTheResponse(t *testing.T) {
 }
 
 func TestChat_DirectRouteHasNoGatewayBlock(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(gatewayChatBody))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusOK, gatewayChatBody)
 	resp, _, err := New(Config{BaseURL: srv.URL}).Chat(context.Background(),
 		ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}})
 	if err != nil {
@@ -156,16 +123,12 @@ func TestChat_KeySpendVariants(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				if tc.value != "" {
-					w.Header().Set("x-litellm-key-spend", tc.value)
-				}
-				w.Header().Set("x-litellm-response-cost", "0.001")
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(gatewayChatBody))
-			}))
-			defer srv.Close()
-			resp, warnings, err := gatewayClient(t, srv).Chat(context.Background(),
+			header := map[string]string{"x-litellm-response-cost": "0.001"}
+			if tc.value != "" {
+				header["x-litellm-key-spend"] = tc.value
+			}
+			srv := jsonServer(t, http.StatusOK, gatewayChatBody, reply{header: header})
+			resp, warnings, err := gatewayClient(t, srv.URL, nil).Chat(context.Background(),
 				ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}})
 			if err != nil {
 				t.Fatal(err)
@@ -195,14 +158,11 @@ func TestChat_KeySpendVariants(t *testing.T) {
 }
 
 func TestChat_NoneCostLiteralIsUnpricedNotCorrupt(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("x-litellm-call-id", "call-7")
-		w.Header().Set("x-litellm-response-cost", "None")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(gatewayChatBody))
-	}))
-	defer srv.Close()
-	resp, warnings, err := gatewayClient(t, srv).Chat(context.Background(),
+	srv := jsonServer(t, http.StatusOK, gatewayChatBody, reply{header: map[string]string{
+		"x-litellm-call-id":       "call-7",
+		"x-litellm-response-cost": "None",
+	}})
+	resp, warnings, err := gatewayClient(t, srv.URL, nil).Chat(context.Background(),
 		ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}})
 	if err != nil {
 		t.Fatal(err)
@@ -219,14 +179,11 @@ func TestChat_NoneCostLiteralIsUnpricedNotCorrupt(t *testing.T) {
 }
 
 func TestStream_GatewayHeadersRideOnTheResult(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("x-litellm-call-id", "call-stream")
-		w.Header().Set("x-litellm-model-name", "azure/gpt-5.4-mini")
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n"))
-	}))
-	defer srv.Close()
-	st, _, err := gatewayClient(t, srv).ChatStream(context.Background(),
+	srv := sseServer(t, hiStream, reply{header: map[string]string{
+		"x-litellm-call-id":    "call-stream",
+		"x-litellm-model-name": "azure/gpt-5.4-mini",
+	}})
+	st, _, err := gatewayClient(t, srv.URL, nil).ChatStream(context.Background(),
 		ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}})
 	if err != nil {
 		t.Fatal(err)

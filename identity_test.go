@@ -3,7 +3,6 @@ package llmwire
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -49,12 +48,7 @@ func TestNewSessionID_hasTheUpstreamShapeAndIsUnique(t *testing.T) {
 
 // Off by default, and the default identity says llmwire.
 func TestEmulateOpenCode_offSendsNothingOfIt(t *testing.T) {
-	var got http.Header
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Clone()
-		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"x"}}]}`))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusOK, `{"choices":[{"finish_reason":"stop","message":{"content":"x"}}]}`)
 
 	_, _, err := New(Config{BaseURL: srv.URL}).Chat(context.Background(), ChatRequest{
 		Model: "glm-5.3-flash", Messages: []Message{User("hi")},
@@ -62,6 +56,7 @@ func TestEmulateOpenCode_offSendsNothingOfIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := srv.last().Header
 	if ua := got.Get("User-Agent"); !strings.HasPrefix(ua, "llmwire/") {
 		t.Errorf("User-Agent = %q, want the library's own", ua)
 	}
@@ -73,12 +68,7 @@ func TestEmulateOpenCode_offSendsNothingOfIt(t *testing.T) {
 // On: the client string, and the pair carrying one id — the same id across
 // calls, because one Client is one session.
 func TestEmulateOpenCode_sendsTheIdentityAndKeepsOneSession(t *testing.T) {
-	var seen []http.Header
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = append(seen, r.Header.Clone())
-		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"x"}}]}`))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusOK, `{"choices":[{"finish_reason":"stop","message":{"content":"x"}}]}`)
 
 	c := New(Config{BaseURL: srv.URL, EmulateOpenCode: true})
 	for i := 0; i < 3; i++ {
@@ -89,7 +79,8 @@ func TestEmulateOpenCode_sendsTheIdentityAndKeepsOneSession(t *testing.T) {
 		}
 	}
 
-	first := seen[0]
+	seen := srv.requests()
+	first := seen[0].Header
 	if first.Get("User-Agent") != OpenCodeUserAgent {
 		t.Errorf("User-Agent = %q, want %q", first.Get("User-Agent"), OpenCodeUserAgent)
 	}
@@ -100,9 +91,9 @@ func TestEmulateOpenCode_sendsTheIdentityAndKeepsOneSession(t *testing.T) {
 	if first.Get(HeaderSessionAffinity) != id {
 		t.Errorf("affinity %q != session %q; the pair must carry one value", first.Get(HeaderSessionAffinity), id)
 	}
-	for i, h := range seen[1:] {
-		if h.Get(HeaderSessionID) != id {
-			t.Errorf("call %d changed session to %q without an idle gap", i+1, h.Get(HeaderSessionID))
+	for i, r := range seen[1:] {
+		if r.Header.Get(HeaderSessionID) != id {
+			t.Errorf("call %d changed session to %q without an idle gap", i+1, r.Header.Get(HeaderSessionID))
 		}
 	}
 }
@@ -116,19 +107,14 @@ func TestEmulateOpenCode_sendsTheIdentityAndKeepsOneSession(t *testing.T) {
 func TestEmulateOpenCode_precedence(t *testing.T) {
 	capture := func(t *testing.T, cfg Config) http.Header {
 		t.Helper()
-		var got http.Header
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			got = r.Header.Clone()
-			_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"x"}}]}`))
-		}))
-		defer srv.Close()
+		srv := jsonServer(t, http.StatusOK, `{"choices":[{"finish_reason":"stop","message":{"content":"x"}}]}`)
 		cfg.BaseURL, cfg.EmulateOpenCode = srv.URL, true
 		if _, _, err := New(cfg).Chat(context.Background(), ChatRequest{
 			Model: "glm-5.3-flash", Messages: []Message{User("hi")},
 		}); err != nil {
 			t.Fatal(err)
 		}
-		return got
+		return srv.last().Header
 	}
 
 	t.Run("flag beats the UserAgent field", func(t *testing.T) {
@@ -166,7 +152,7 @@ func TestEmulateOpenCode_precedence(t *testing.T) {
 // A session ends when its user steps away. Driven by the injected clock, so the
 // half-hour is asserted rather than waited for.
 func TestEmulateOpenCode_rotatesAfterAnIdleGap(t *testing.T) {
-	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	now := testStart
 	s := newSession(func() time.Time { return now })
 
 	first, rotated := s.current()

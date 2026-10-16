@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,13 +27,9 @@ func spoolFiles(t *testing.T, dir string) []string {
 }
 
 func TestSpoolTransport_WritesStatusHeadersAndBody(t *testing.T) {
-	body := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("X-Request-Id", "req-1")
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
+	lines := []string{`data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`, doneFrame}
+	body := strings.Join(lines, "\n\n") + "\n\n"
+	srv := sseServer(t, lines, reply{header: map[string]string{"X-Request-Id": "req-1"}})
 
 	dir := filepath.Join(t.TempDir(), "spool")
 	hc := &http.Client{Transport: NewSpoolTransport(dir, nil, nil)}
@@ -74,7 +69,7 @@ func TestSpoolTransport_WritesStatusHeadersAndBody(t *testing.T) {
 }
 
 func TestSpoolTransport_SkipLeavesNothingBehind(t *testing.T) {
-	srv, _ := jsonServer(t, 200, `{"model":"glm-5.3-flash","choices":[{"finish_reason":"stop","message":{"content":"x"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	srv := jsonServer(t, 200, `{"model":"glm-5.3-flash","choices":[{"finish_reason":"stop","message":{"content":"x"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	dir := filepath.Join(t.TempDir(), "spool")
 	skipped := 0
 	hc := &http.Client{Transport: NewSpoolTransport(dir, nil, func(r *http.Request) bool {
@@ -94,7 +89,7 @@ func TestSpoolTransport_SkipLeavesNothingBehind(t *testing.T) {
 }
 
 func TestSpoolTransport_SequenceCountsPerTransport(t *testing.T) {
-	srv, _ := jsonServer(t, 200, `{"model":"glm-5.3-flash","choices":[{"finish_reason":"stop","message":{"content":"x"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	srv := jsonServer(t, 200, `{"model":"glm-5.3-flash","choices":[{"finish_reason":"stop","message":{"content":"x"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	dir := filepath.Join(t.TempDir(), "spool")
 	c := New(Config{BaseURL: srv.URL, HTTPClient: &http.Client{Transport: NewSpoolTransport(dir, nil, nil)}})
 	for i := 0; i < 2; i++ {

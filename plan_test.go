@@ -10,8 +10,6 @@ import (
 // had to re-derive the same decision from the profile — two copies of one policy,
 // free to disagree. These tests pin the coerced request instead.
 
-func f64(v float64) *float64 { return &v }
-
 func mustPlan(t *testing.T, c *Client, req ChatRequest, stream bool) *wirePlan {
 	t.Helper()
 	pl, _, err := c.plan(req, stream)
@@ -332,13 +330,7 @@ func TestPlan_IncludeUsageFollowsTheProfile(t *testing.T) {
 // not demotable: the caller chose a method, and there is nothing to demote a
 // method to.
 func TestPlan_NonStreamingModelRefusesTheStreamMethod(t *testing.T) {
-	reg := registryFrom(t, `profiles:
-  - id: sync
-    wire_model_id: sync
-    max_tokens_param: max_tokens
-    verified: source-derived
-`)
-	_, _, err := testClient(t, reg).plan(ChatRequest{
+	_, _, err := testClient(t, registryFrom(t, syncDoc)).plan(ChatRequest{
 		Model:      "sync",
 		Messages:   []Message{User("hi")},
 		BestEffort: true,

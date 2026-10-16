@@ -1,25 +1,12 @@
 package llmwire
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
-
-// readFixture runs a recorded SSE body through the parser with a guard that
-// never fires, which is what lets these tests assert parsing alone.
-func readFixture(t *testing.T, body string) (StreamResult, error) {
-	t.Helper()
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	guard := newStallGuard(cancel, time.Hour, stallHeaders)
-	defer guard.stop()
-	res, _, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, nil, Redact, false, time.Now, time.Now())
-	return res, err
-}
 
 // The usage object arrives in a trailing chunk with an EMPTY choices array,
 // after the chunk carrying finish_reason — and that earlier chunk carries
@@ -322,18 +309,15 @@ func TestReadStream_OnDeltaReceivesEveryContentFragment(t *testing.T) {
 data: {"choices":[{"delta":{"content":"two"},"finish_reason":"stop"}]}
 
 `
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	guard := newStallGuard(cancel, time.Hour, stallHeaders)
-	defer guard.stop()
+	res, events, _, err := readSSE(t, body, readOpts{keepErr: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	var got []string
-	res, _, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, func(ev streamEvent) {
+	for _, ev := range events {
 		if ev.kind == evContent {
 			got = append(got, ev.text)
 		}
-	}, Redact, false, time.Now, time.Now())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
 	}
 	if strings.Join(got, "") != res.Content {
 		t.Errorf("streamed %q but returned %q; they must agree", strings.Join(got, ""), res.Content)

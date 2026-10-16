@@ -197,8 +197,8 @@ func TestReasoningIntents_ShippedProfiles(t *testing.T) {
 // The resolved request is what a caller persists and logs, so it rides back on
 // both results.
 func TestReasoningSent_OnChatAndStream(t *testing.T) {
-	srv, _ := jsonServer(t, 200, goodCompletion)
-	resp, _, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	srv := jsonServer(t, 200, goodCompletion)
+	resp, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model: "glm-5.3-flash", Messages: []Message{User("hi")}, Reasoning: ReasoningMinimal(),
 	})
 	if err != nil {
@@ -208,8 +208,8 @@ func TestReasoningSent_OnChatAndStream(t *testing.T) {
 		t.Errorf("Chat ReasoningSent = %q, want low", resp.ReasoningSent)
 	}
 
-	srv2 := sseServer(t, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
-	s, _, err := chatClient(t, srv2).ChatStream(context.Background(), ChatRequest{
+	srv2 := sseServer(t, []string{`data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`, doneFrame})
+	s, _, err := clientOn(t, srv2.URL).ChatStream(context.Background(), ChatRequest{
 		Model: "mimo-v2.6-pro", Messages: []Message{User("hi")}, Reasoning: ReasoningMinimal(),
 	})
 	if err != nil {
@@ -225,7 +225,7 @@ func TestReasoningSent_OnChatAndStream(t *testing.T) {
 	}
 
 	// Nothing sent reads as empty: the model ran at its own default.
-	resp, _, err = chatClient(t, srv).Chat(context.Background(), ChatRequest{Model: "glm-5.3-flash", Messages: []Message{User("hi")}})
+	resp, _, err = clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{Model: "glm-5.3-flash", Messages: []Message{User("hi")}})
 	if err != nil {
 		t.Fatal(err)
 	}

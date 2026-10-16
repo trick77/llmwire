@@ -9,26 +9,11 @@ import (
 	"testing"
 )
 
-func modelsServer(t *testing.T, status int, body string, seen *http.Request) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if seen != nil {
-			*seen = *r.Clone(context.Background())
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
 func TestListModels_ReadsGatewayLimits(t *testing.T) {
-	var seen http.Request
-	srv := modelsServer(t, 200, `{"object":"list","data":[
+	srv := jsonServer(t, 200, `{"object":"list","data":[
 		{"id":"ai-gateway-gpt-5.5","object":"model","max_input_tokens":400000,"max_output_tokens":128000,"litellm_params":{"model":"azure/gpt-5.5"}},
 		{"id":"plain","object":"model"}
-	]}`, &seen)
+	]}`)
 
 	c := New(Config{BaseURL: srv.URL, APIKey: "team-key-of-no-known-shape"})
 	entries, warnings, err := c.ListModels(context.Background())
@@ -38,6 +23,7 @@ func TestListModels_ReadsGatewayLimits(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Errorf("warnings = %v, want none", warnings)
 	}
+	seen := srv.last()
 	if seen.Method != http.MethodGet || seen.URL.Path != "/models" {
 		t.Errorf("request = %s %s, want GET /models", seen.Method, seen.URL.Path)
 	}
@@ -81,7 +67,7 @@ func TestListModels_UnusableLimitIsNilWithAWarning(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := modelsServer(t, 200, `{"data":[{"id":"m","max_input_tokens":`+tc.value+`}]}`, nil)
+			srv := jsonServer(t, 200, `{"data":[{"id":"m","max_input_tokens":`+tc.value+`}]}`)
 			c := New(Config{BaseURL: srv.URL})
 			entries, warnings, err := c.ListModels(context.Background())
 			if err != nil {
@@ -112,7 +98,7 @@ func TestListModels_UnusableLimitIsNilWithAWarning(t *testing.T) {
 }
 
 func TestListModels_RowsWithoutAnIdAreSkippedNotFatal(t *testing.T) {
-	srv := modelsServer(t, 200, `{"data":[{"object":"model"},"junk",{"id":"ok"}]}`, nil)
+	srv := jsonServer(t, 200, `{"data":[{"object":"model"},"junk",{"id":"ok"}]}`)
 	c := New(Config{BaseURL: srv.URL})
 	entries, warnings, err := c.ListModels(context.Background())
 	if err != nil {
@@ -128,7 +114,7 @@ func TestListModels_RowsWithoutAnIdAreSkippedNotFatal(t *testing.T) {
 
 func TestListModels_NoDataListIsAShapeError(t *testing.T) {
 	for _, body := range []string{`{"object":"list"}`, `{"data":null}`, `{"data":{"id":"m"}}`} {
-		srv := modelsServer(t, 200, body, nil)
+		srv := jsonServer(t, 200, body)
 		c := New(Config{BaseURL: srv.URL})
 		_, _, err := c.ListModels(context.Background())
 		if !errors.Is(err, ErrResponseShape) {
@@ -139,7 +125,7 @@ func TestListModels_NoDataListIsAShapeError(t *testing.T) {
 
 func TestListModels_ErrorStatusIsTypedAndRedacted(t *testing.T) {
 	const key = "listing-key-of-no-known-shape"
-	srv := modelsServer(t, 401, `{"error":{"message":"bad key `+key+`","type":"auth_error","code":"401"}}`, nil)
+	srv := jsonServer(t, 401, `{"error":{"message":"bad key `+key+`","type":"auth_error","code":"401"}}`)
 	c := New(Config{BaseURL: srv.URL, APIKey: key})
 	_, _, err := c.ListModels(context.Background())
 	var apiErr *APIError
@@ -167,5 +153,3 @@ func TestListModels_HonoursTheCallerContext(t *testing.T) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

@@ -11,57 +11,9 @@ import (
 	"time"
 )
 
-// jsonServer answers every request with one fixed status and body, and records
-// the request body so a test can assert what went on the wire.
-func jsonServer(t *testing.T, status int, body string) (*httptest.Server, *[]byte) {
-	t.Helper()
-	var seen []byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen, _ = readAllBody(r)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &seen
-}
-
-func readAllBody(r *http.Request) ([]byte, error) {
-	defer r.Body.Close()
-	buf := make([]byte, 0, 1024)
-	tmp := make([]byte, 512)
-	for {
-		n, err := r.Body.Read(tmp)
-		buf = append(buf, tmp[:n]...)
-		if err != nil {
-			return buf, nil
-		}
-	}
-}
-
-func chatClient(t *testing.T, srv *httptest.Server) *Client {
-	t.Helper()
-	return New(Config{
-		BaseURL:  srv.URL,
-		Registry: Default(),
-		Now:      func() time.Time { return time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC) },
-	})
-}
-
-const goodCompletion = `{
-  "model": "glm-5.3-flash",
-  "choices": [{
-    "finish_reason": "stop",
-    "message": {"role": "assistant", "content": "hello", "reasoning_content": "thought"}
-  }],
-  "usage": {"prompt_tokens": 258, "completion_tokens": 100,
-            "prompt_tokens_details": {"cached_tokens": 192},
-            "completion_tokens_details": {"reasoning_tokens": 40}}
-}`
-
 func TestChat_HappyPath(t *testing.T) {
-	srv, sent := jsonServer(t, 200, goodCompletion)
-	resp, warnings, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	srv := jsonServer(t, 200, goodCompletion)
+	resp, warnings, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model:    "glm-5.3-flash",
 		Messages: []Message{User("hi")},
 	})
@@ -89,7 +41,7 @@ func TestChat_HappyPath(t *testing.T) {
 	}
 	// The body carried the profile's spelling of the cap-free request.
 	var body map[string]any
-	if err := json.Unmarshal(*sent, &body); err != nil {
+	if err := json.Unmarshal(srv.lastBody(), &body); err != nil {
 		t.Fatalf("request body: %v", err)
 	}
 	if body["stream"] != nil {
@@ -101,9 +53,9 @@ func TestChat_HappyPath(t *testing.T) {
 // of 16 must arrive as max_tokens on this model. Sent as max_completion_tokens it
 // is ACCEPTED and ignored, and the endpoint returned 481 tokens.
 func TestChat_CapReachesTheWireUnderTheRightName(t *testing.T) {
-	srv, sent := jsonServer(t, 200, goodCompletion)
+	srv := jsonServer(t, 200, goodCompletion)
 	cap16 := 16
-	if _, _, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	if _, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model:     "glm-5.3-flash",
 		Messages:  []Message{User("hi")},
 		MaxTokens: &cap16,
@@ -111,7 +63,7 @@ func TestChat_CapReachesTheWireUnderTheRightName(t *testing.T) {
 		t.Fatalf("Chat: %v", err)
 	}
 	var body map[string]any
-	if err := json.Unmarshal(*sent, &body); err != nil {
+	if err := json.Unmarshal(srv.lastBody(), &body); err != nil {
 		t.Fatal(err)
 	}
 	if body["max_tokens"] != float64(16) {
@@ -130,7 +82,7 @@ func TestChat_RefusalNeverReachesTheNetwork(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, _, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	_, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model:     "glm-5.3-flash",
 		Messages:  []Message{User("hi")},
 		Reasoning: ReasoningOff(),
@@ -144,8 +96,8 @@ func TestChat_RefusalNeverReachesTheNetwork(t *testing.T) {
 // An error object delivered under a 200. Read as an empty success it would look
 // like a model that answered with nothing.
 func TestChat_ErrorInsideA200IsSurfaced(t *testing.T) {
-	srv, _ := jsonServer(t, 200, `{"error":{"message":"thinking cannot be disabled","code":"1210"}}`)
-	_, _, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	srv := jsonServer(t, 200, `{"error":{"message":"thinking cannot be disabled","code":"1210"}}`)
+	_, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model:    "glm-5.3-flash",
 		Messages: []Message{User("hi")},
 	})
@@ -161,8 +113,8 @@ func TestChat_ErrorInsideA200IsSurfaced(t *testing.T) {
 // A 200 with neither choices nor an error object. Indexing choices[0] here would
 // panic in production on a body some endpoint really sends.
 func TestChat_NoChoicesIsAnErrorNotAPanic(t *testing.T) {
-	srv, _ := jsonServer(t, 200, `{"model":"glm-5.3-flash","choices":[]}`)
-	_, _, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	srv := jsonServer(t, 200, `{"model":"glm-5.3-flash","choices":[]}`)
+	_, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model:    "glm-5.3-flash",
 		Messages: []Message{User("hi")},
 	})
@@ -185,8 +137,8 @@ func TestChat_LenientDecoding(t *testing.T) {
                    "message": {"content": null, "reasoning": "thought", "tool_calls": null}}],
       "usage": null
     }`
-	srv, _ := jsonServer(t, 200, body)
-	resp, warnings, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	srv := jsonServer(t, 200, body)
+	resp, warnings, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model:    "mimo-v2.5-pro",
 		Messages: []Message{User("hi")},
 	})
@@ -222,8 +174,8 @@ func TestChat_ToolCalls(t *testing.T) {
                         "function": {"name": "search", "arguments": "{\"q\":\"x\"}"}}]}}],
       "usage": {"prompt_tokens": 10, "completion_tokens": 5}
     }`
-	srv, _ := jsonServer(t, 200, body)
-	resp, _, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	srv := jsonServer(t, 200, body)
+	resp, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model:    "mimo-v2.5-pro",
 		Messages: []Message{User("hi")},
 		Tools:    []Tool{{Name: "search"}},
@@ -243,8 +195,8 @@ func TestChat_ToolCalls(t *testing.T) {
 // A body that is not JSON at all — a proxy's HTML error page under a 200 — names
 // what answered instead of producing a bare "invalid character '<'".
 func TestChat_UnparseableBodyCarriesTheEvidence(t *testing.T) {
-	srv, _ := jsonServer(t, 200, "<html><body>502 Bad Gateway</body></html>")
-	_, _, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+	srv := jsonServer(t, 200, "<html><body>502 Bad Gateway</body></html>")
+	_, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 		Model:    "glm-5.3-flash",
 		Messages: []Message{User("hi")},
 	})
@@ -259,8 +211,8 @@ func TestChat_UnparseableBodyCarriesTheEvidence(t *testing.T) {
 // Status codes keep their existing classification, which Chat must not swallow.
 func TestChat_StatusErrors(t *testing.T) {
 	t.Run("400", func(t *testing.T) {
-		srv, _ := jsonServer(t, 400, `{"error":{"message":"bad","code":"1210"}}`)
-		_, _, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+		srv := jsonServer(t, 400, `{"error":{"message":"bad","code":"1210"}}`)
+		_, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 			Model:    "glm-5.3-flash",
 			Messages: []Message{User("hi")},
 		})
@@ -271,13 +223,9 @@ func TestChat_StatusErrors(t *testing.T) {
 	})
 
 	t.Run("429 keeps Retry-After", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Retry-After", "17")
-			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":{"message":"slow down","code":"rate_limit"}}`))
-		}))
-		t.Cleanup(srv.Close)
-		_, _, err := chatClient(t, srv).Chat(context.Background(), ChatRequest{
+		srv := jsonServer(t, http.StatusTooManyRequests, `{"error":{"message":"slow down","code":"rate_limit"}}`,
+			reply{header: map[string]string{"Retry-After": "17"}})
+		_, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
 			Model:    "glm-5.3-flash",
 			Messages: []Message{User("hi")},
 		})
@@ -373,10 +321,10 @@ func TestChat_SlowAnswerIsNotAHeaderStall(t *testing.T) {
 
 // A cancelled parent context stays a cancellation, not a misreported call cap.
 func TestChat_ParentCancellationIsNotACallCap(t *testing.T) {
-	srv, _ := jsonServer(t, 200, goodCompletion)
+	srv := jsonServer(t, 200, goodCompletion)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, _, err := chatClient(t, srv).Chat(ctx, ChatRequest{
+	_, _, err := clientOn(t, srv.URL).Chat(ctx, ChatRequest{
 		Model:    "glm-5.3-flash",
 		Messages: []Message{User("hi")},
 	})

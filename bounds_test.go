@@ -10,35 +10,6 @@ import (
 	"time"
 )
 
-// pausingServer streams lines, flushing each, and sleeps `pause` right after the
-// line at index pauseAfter — the shape of a model that names a tool and then
-// goes silent while it serializes the argument.
-func pausingServer(t *testing.T, lines []string, pauseAfter int, pause time.Duration) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(200)
-		flusher, _ := w.(http.Flusher)
-		for i, line := range lines {
-			if _, err := w.Write([]byte(line + "\n\n")); err != nil {
-				return
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-			if i == pauseAfter {
-				select {
-				case <-time.After(pause):
-				case <-r.Context().Done():
-					return
-				}
-			}
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
 var toolThenSilence = []string{
 	`data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}`,
 	`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"create_pdf_file","arguments":""}}]}}]}`,
@@ -61,8 +32,8 @@ func drain(t *testing.T, c *Client, req ChatRequest) (StreamResult, error) {
 // Without the per-request bound the silence after the tool name trips the idle
 // guard; with it, the same stream completes.
 func TestToolCallIdleTimeout_WidensAfterFirstFragment(t *testing.T) {
-	srv := pausingServer(t, toolThenSilence, 1, 300*time.Millisecond)
-	c := streamClient(t, srv, 100*time.Millisecond)
+	srv := sseServer(t, toolThenSilence, reply{pauseAfter: 1, pause: 300 * time.Millisecond})
+	c := streamClient(t, srv.URL, 100*time.Millisecond)
 
 	_, err := drain(t, c, hiRequest())
 	if !errors.Is(err, ErrStreamIdle) {
@@ -86,8 +57,8 @@ func TestToolCallIdleTimeout_WidensAfterFirstFragment(t *testing.T) {
 // The narrow bound still guards the phase BEFORE a tool call: silence during
 // reasoning is a stall whatever the per-request bound says.
 func TestToolCallIdleTimeout_DoesNotWidenBeforeAToolCall(t *testing.T) {
-	srv := pausingServer(t, toolThenSilence, 0, 300*time.Millisecond)
-	c := streamClient(t, srv, 100*time.Millisecond)
+	srv := sseServer(t, toolThenSilence, reply{pauseAfter: 0, pause: 300 * time.Millisecond})
+	c := streamClient(t, srv.URL, 100*time.Millisecond)
 	req := hiRequest()
 	req.ToolCallIdleTimeout = 2 * time.Second
 	if _, err := drain(t, c, req); !errors.Is(err, ErrStreamIdle) {
@@ -103,8 +74,8 @@ func TestToolCallIdleTimeout_WidensOnInlineMarker(t *testing.T) {
 		`data: {"choices":[{"delta":{"content":"<parameter=blocks>[]</parameter></function></tool_call>"},"finish_reason":"stop"}]}`,
 		`data: [DONE]`,
 	}
-	srv := pausingServer(t, lines, 0, 300*time.Millisecond)
-	c := streamClient(t, srv, 100*time.Millisecond)
+	srv := sseServer(t, lines, reply{pauseAfter: 0, pause: 300 * time.Millisecond})
+	c := streamClient(t, srv.URL, 100*time.Millisecond)
 	req := ChatRequest{Model: "mimo-v2.5-pro", Messages: []Message{User("hi")}, ToolCallIdleTimeout: 2 * time.Second}
 	res, err := drain(t, c, req)
 	if err != nil {
@@ -137,7 +108,7 @@ func TestBoundSentinels(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		lines = append(lines, `data: {"choices":[{"delta":{"content":"."}}]}`)
 	}
-	busy := flushingServer(t, lines, 5*time.Millisecond)
+	busy := sseServer(t, lines, reply{gap: 5 * time.Millisecond})
 	c = New(Config{BaseURL: busy.URL, HeaderTimeout: time.Second, IdleTimeout: time.Second, CallTimeout: 80 * time.Millisecond})
 	_, err = drain(t, c, hiRequest())
 	if !errors.Is(err, ErrCallCap) || !strings.Contains(err.Error(), "exceeded the 80ms call cap") {
@@ -152,7 +123,7 @@ func TestStreamResult_TimingMetrics(t *testing.T) {
 		`data: {"choices":[{"delta":{"content":"b"},"finish_reason":"stop"}]}`,
 		`data: [DONE]`,
 	}
-	srv := pausingServer(t, lines, 1, 120*time.Millisecond)
+	srv := sseServer(t, lines, reply{pauseAfter: 1, pause: 120 * time.Millisecond})
 	// Not streamClient: that pins the clock for pricing, and the timing figures
 	// share it.
 	c := New(Config{BaseURL: srv.URL, IdleTimeout: 5 * time.Second})

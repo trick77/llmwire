@@ -9,17 +9,6 @@ import (
 // LOAD. The embedded table is compiled in: a rule that fired at call time would
 // fire in production, on a figure someone was about to bill against.
 
-const chatHead = `profiles:
-  - id: m
-    wire_model_id: m
-    max_tokens_param: max_tokens
-    verified: measured
-`
-
-const goodProvenance = `      source_url: https://vendor.example/pricing
-      verified_on: 2026-09-12
-`
-
 // badWeekday is an intentionally misspelled weekday, kept in its own constant
 // so a spell-checker's --fix cannot quietly repair the invalid input that the
 // "window with a bad day" case depends on.
@@ -133,6 +122,27 @@ func TestCostBlock_LoadRefusals(t *testing.T) {
       cache_read: 0.03
       cache_write: 0
       output: 0.50
+` + goodProvenance,
+			want: "not a decimal number",
+		},
+		// A lone "." is a stray character, not a free lane.
+		{
+			name: "lone dot",
+			doc: chatHead + `    cost:
+      input: '.'
+      cache_read: 0
+      cache_write: 0
+      output: 0
+` + goodProvenance,
+			want: "not a decimal number",
+		},
+		{
+			name: "signed lone dot",
+			doc: chatHead + `    cost:
+      input: '-.'
+      cache_read: 0
+      cache_write: 0
+      output: 0
 ` + goodProvenance,
 			want: "not a decimal number",
 		},

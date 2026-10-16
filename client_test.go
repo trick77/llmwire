@@ -12,24 +12,11 @@ import (
 	"time"
 )
 
-// sseServer serves a fixed SSE body.
-func sseServer(t *testing.T, body string) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
 func TestRawStream_HappyPath(t *testing.T) {
-	srv := sseServer(t, `data: {"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}
-
-data: [DONE]
-
-`)
+	srv := sseServer(t, []string{
+		`data: {"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`,
+		doneFrame,
+	})
 	c := New(Config{BaseURL: srv.URL})
 	res, err := c.RawStream(context.Background(), []byte(`{}`), nil)
 	if err != nil {
@@ -46,33 +33,23 @@ data: [DONE]
 // An empty API key must send NO Authorization header rather than an empty one,
 // which some gateways reject outright.
 func TestRawStream_EmptyAPIKeySendsNoAuthorizationHeader(t *testing.T) {
-	var sawAuth, hadAuth bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, hadAuth = r.Header["Authorization"]
-		sawAuth = true
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
-	}))
-	defer srv.Close()
+	srv := sseServer(t, []string{stopFrame})
 
 	c := New(Config{BaseURL: srv.URL})
 	if _, err := c.RawStream(context.Background(), []byte(`{}`), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !sawAuth {
+	seen := srv.last()
+	if seen == nil {
 		t.Fatal("handler never ran")
 	}
-	if hadAuth {
+	if _, hadAuth := seen.Header["Authorization"]; hadAuth {
 		t.Error("an empty APIKey must not produce an Authorization header")
 	}
 }
 
 func TestRawStream_SendsConfiguredHeaders(t *testing.T) {
-	var got http.Header
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Clone()
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
-	}))
-	defer srv.Close()
+	srv := sseServer(t, []string{stopFrame})
 
 	c := New(Config{
 		BaseURL:   srv.URL,
@@ -83,6 +60,7 @@ func TestRawStream_SendsConfiguredHeaders(t *testing.T) {
 	if _, err := c.RawStream(context.Background(), []byte(`{}`), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	got := srv.last().Header
 	if got.Get("Authorization") != "Bearer secret" {
 		t.Errorf("Authorization = %q", got.Get("Authorization"))
 	}
@@ -105,29 +83,20 @@ func TestRawStream_SendsConfiguredHeaders(t *testing.T) {
 
 // The base URL must not already end in the route.
 func TestRawStream_AppendsRouteToBaseURL(t *testing.T) {
-	var path string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
-	}))
-	defer srv.Close()
+	srv := sseServer(t, []string{stopFrame})
 
 	// A trailing slash on the base must not double up.
 	c := New(Config{BaseURL: srv.URL + "/"})
 	if _, err := c.RawStream(context.Background(), []byte(`{}`), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if path != "/chat/completions" {
+	if path := srv.last().URL.Path; path != "/chat/completions" {
 		t.Errorf("path = %q, want /chat/completions", path)
 	}
 }
 
 func TestRawStream_ErrorStatusIsDecoded(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"message":"thinking cannot be disabled","code":"1210"}}`))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusBadRequest, `{"error":{"message":"thinking cannot be disabled","code":"1210"}}`)
 
 	c := New(Config{BaseURL: srv.URL})
 	_, err := c.RawStream(context.Background(), []byte(`{}`), nil)
@@ -151,11 +120,7 @@ func TestRawStream_ErrorStatusIsDecoded(t *testing.T) {
 // decoding loses the one field callers dispatch on.
 func TestRawPost_CodeAfterALongMessageSurvives(t *testing.T) {
 	long := strings.Repeat("m", 3*maxErrorBody)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"message":"` + long + `","code":"1210"}}`))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusBadRequest, `{"error":{"message":"`+long+`","code":"1210"}}`)
 
 	_, _, err := New(Config{BaseURL: srv.URL}).RawPost(context.Background(), "/chat/completions", []byte(`{}`))
 	var apiErr *APIError
@@ -171,12 +136,8 @@ func TestRawPost_CodeAfterALongMessageSurvives(t *testing.T) {
 // and stops there: it never retries on its own, because a library-level retry
 // turns a transient outage into a permanent failure for a whole job queue.
 func TestRawStream_RateLimitCarriesRetryAfter(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Retry-After", "17")
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(`{"error":{"message":"slow down","code":"1302"}}`))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusTooManyRequests, `{"error":{"message":"slow down","code":"1302"}}`,
+		reply{header: map[string]string{"Retry-After": "17"}})
 
 	c := New(Config{BaseURL: srv.URL})
 	_, err := c.RawStream(context.Background(), []byte(`{}`), nil)
@@ -196,11 +157,7 @@ func TestRawStream_RateLimitCarriesRetryAfter(t *testing.T) {
 func TestRawStream_ErrorBodyIsRedacted(t *testing.T) {
 	// Assembled, not a literal — see fakeKey in errors_test.go.
 	key := fakeKey("sk", "abcdefghijklmnopqrstuvwxyz01")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":{"message":"invalid key ` + key + `"}}`))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusUnauthorized, `{"error":{"message":"invalid key `+key+`"}}`)
 
 	c := New(Config{BaseURL: srv.URL})
 	_, err := c.RawStream(context.Background(), []byte(`{}`), nil)
@@ -413,14 +370,12 @@ func TestChatStream_ParentCancellationMidStreamIsNotMalformed(t *testing.T) {
 // --- RawPost -----------------------------------------------------------------
 
 func TestRawPost_ReturnsBodyAndHeaders(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// A gateway reports per-call spend and the real deployment name in
-		// headers and nowhere else, which is why RawPost hands them back.
-		w.Header().Set("x-litellm-response-cost", "1.23e-05")
-		w.Header().Set("x-litellm-model-name", "azure/gpt-5.4")
-		_, _ = w.Write([]byte(`{"data":[{"index":0,"embedding":[0.1,0.2]}]}`))
-	}))
-	defer srv.Close()
+	// A gateway reports per-call spend and the real deployment name in
+	// headers and nowhere else, which is why RawPost hands them back.
+	srv := jsonServer(t, http.StatusOK, `{"data":[{"index":0,"embedding":[0.1,0.2]}]}`, reply{header: map[string]string{
+		"x-litellm-response-cost": "1.23e-05",
+		"x-litellm-model-name":    "azure/gpt-5.4",
+	}})
 
 	c := New(Config{BaseURL: srv.URL})
 	raw, hdr, err := c.RawPost(context.Background(), "/embeddings", []byte(`{}`))
@@ -444,12 +399,8 @@ func TestRawPost_ReturnsBodyAndHeaders(t *testing.T) {
 }
 
 func TestRawPost_ErrorStatusIsDecodedAndHeadersStillReturned(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("x-litellm-call-id", "abc123")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"message":"bad model","code":"1211"}}`))
-	}))
-	defer srv.Close()
+	srv := jsonServer(t, http.StatusBadRequest, `{"error":{"message":"bad model","code":"1211"}}`,
+		reply{header: map[string]string{"x-litellm-call-id": "abc123"}})
 
 	c := New(Config{BaseURL: srv.URL})
 	_, hdr, err := c.RawPost(context.Background(), "/embeddings", []byte(`{}`))
@@ -668,7 +619,7 @@ func TestNew_CopiesTheHeaderMap(t *testing.T) {
 // A stream read to its end releases its contexts without waiting for Close:
 // the call-cap timer otherwise stays registered on the parent until it fires.
 func TestChatStream_DrainedStreamReleasesItsContexts(t *testing.T) {
-	srv := sseServer(t, frames(contentDelta("hi")))
+	srv := sseServer(t, frameLines(contentDelta("hi")))
 	stream, _, err := New(Config{BaseURL: srv.URL}).ChatStream(context.Background(),
 		ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
 	if err != nil {

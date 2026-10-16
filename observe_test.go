@@ -5,26 +5,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
-
-// capture builds a client on srv whose log lines land in the returned buffer,
-// at Debug so the success line is visible.
-func capture(t *testing.T, srv *httptest.Server, idle time.Duration) (*Client, *bytes.Buffer) {
-	t.Helper()
-	var buf bytes.Buffer
-	c := New(Config{
-		BaseURL:     srv.URL,
-		Registry:    Default(),
-		IdleTimeout: idle,
-		CallTimeout: 20 * time.Second,
-		Logger:      slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	})
-	return c, &buf
-}
 
 func wantAll(t *testing.T, got string, wants ...string) {
 	t.Helper()
@@ -37,8 +21,8 @@ func wantAll(t *testing.T, got string, wants ...string) {
 
 // The success line carries the figures and never the text.
 func TestChat_logsTheCallWithoutItsText(t *testing.T) {
-	srv, _ := jsonServer(t, 200, goodCompletion)
-	c, buf := capture(t, srv, time.Second)
+	srv := jsonServer(t, 200, goodCompletion)
+	c, buf := capture(t, Config{BaseURL: srv.URL, IdleTimeout: time.Second, CallTimeout: 20 * time.Second})
 	if _, _, err := c.Chat(context.Background(), ChatRequest{
 		Model: "glm-5.3-flash", Messages: []Message{User("the secret prompt")}, Reasoning: ReasoningEffort("low"),
 	}); err != nil {
@@ -80,8 +64,8 @@ func TestChat_anomaliesAreNamedWarnings(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, _ := jsonServer(t, 200, tc.body)
-			c, buf := capture(t, srv, time.Second)
+			srv := jsonServer(t, 200, tc.body)
+			c, buf := capture(t, Config{BaseURL: srv.URL, IdleTimeout: time.Second, CallTimeout: 20 * time.Second})
 			if _, _, err := c.Chat(context.Background(), hiRequest()); err != nil {
 				t.Fatal(err)
 			}
@@ -92,11 +76,11 @@ func TestChat_anomaliesAreNamedWarnings(t *testing.T) {
 
 // A failure is a Warn naming the bound, with the timing it fired at.
 func TestChatStream_logsTheBoundThatFired(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"hel"}}]}`,
 		`data: {"choices":[{"delta":{"content":"lo"}}]}`,
-	}, 2*time.Second)
-	c, buf := capture(t, srv, 50*time.Millisecond)
+	}, reply{gap: 2 * time.Second})
+	c, buf := capture(t, Config{BaseURL: srv.URL, IdleTimeout: 50 * time.Millisecond, CallTimeout: 20 * time.Second})
 	s, _, err := c.ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatal(err)
@@ -111,8 +95,8 @@ func TestChatStream_logsTheBoundThatFired(t *testing.T) {
 
 // A non-2xx is a Warn with the status; a 429 adds the retry hint.
 func TestChat_logsTheStatus(t *testing.T) {
-	srv, _ := jsonServer(t, 429, `{"error":{"message":"slow down"}}`)
-	c, buf := capture(t, srv, time.Second)
+	srv := jsonServer(t, 429, `{"error":{"message":"slow down"}}`)
+	c, buf := capture(t, Config{BaseURL: srv.URL, IdleTimeout: time.Second, CallTimeout: 20 * time.Second})
 	if _, _, err := c.Chat(context.Background(), hiRequest()); err == nil {
 		t.Fatal("want an error")
 	}
@@ -122,14 +106,14 @@ func TestChat_logsTheStatus(t *testing.T) {
 // Stats sum every finished call, failures counted apart, and the copy handed
 // out is the caller's.
 func TestStats_sumPerModel(t *testing.T) {
-	srv, _ := jsonServer(t, 200, goodCompletion)
-	c, _ := capture(t, srv, time.Second)
+	srv := jsonServer(t, 200, goodCompletion)
+	c, _ := capture(t, Config{BaseURL: srv.URL, IdleTimeout: time.Second, CallTimeout: 20 * time.Second})
 	for range 2 {
 		if _, _, err := c.Chat(context.Background(), hiRequest()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	bad, _ := jsonServer(t, 500, `{"error":{"message":"down"}}`)
+	bad := jsonServer(t, 500, `{"error":{"message":"down"}}`)
 	c.baseURL = bad.URL
 	if _, _, err := c.Chat(context.Background(), hiRequest()); err == nil {
 		t.Fatal("want an error")
@@ -159,8 +143,8 @@ func TestStats_sumPerModel(t *testing.T) {
 // happened: it gets its log line and its place in the stats, with the
 // validation warnings on the line.
 func TestChat_renderFailureIsLoggedAndCounted(t *testing.T) {
-	srv, _ := jsonServer(t, 200, goodCompletion)
-	c, buf := capture(t, srv, time.Second)
+	srv := jsonServer(t, 200, goodCompletion)
+	c, buf := capture(t, Config{BaseURL: srv.URL, IdleTimeout: time.Second, CallTimeout: 20 * time.Second})
 	req := hiRequest()
 	req.ToolChoice = ToolChoice{Mode: ToolChoiceAuto} // a validation warning
 	req.ExtraBody = map[string]any{"x": make(chan int)}
@@ -176,14 +160,8 @@ func TestChat_renderFailureIsLoggedAndCounted(t *testing.T) {
 // Timing is measured on the dial failure too: the wait before the transport
 // gave up is the figure that says whether the bound or the host was slow.
 func TestChat_dialFailureCarriesTiming(t *testing.T) {
-	var buf bytes.Buffer
 	now, _ := stepClock()
-	c := New(Config{
-		BaseURL:  "http://127.0.0.1:1",
-		Registry: Default(),
-		Now:      now,
-		Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	})
+	c, buf := capture(t, Config{BaseURL: "http://127.0.0.1:1", Now: now})
 	if _, _, err := c.Chat(context.Background(), hiRequest()); err == nil {
 		t.Fatal("a dial to port 1 succeeded")
 	}
@@ -207,14 +185,8 @@ func TestRawStream_dialFailureCarriesTiming(t *testing.T) {
 // ChatStream shares RawStream's exchange, so its failed dial logs the same
 // figures rather than a Total that also counts the classification.
 func TestChatStream_dialFailureCarriesTiming(t *testing.T) {
-	var buf bytes.Buffer
 	now, _ := stepClock()
-	c := New(Config{
-		BaseURL:  "http://127.0.0.1:1",
-		Registry: Default(),
-		Now:      now,
-		Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	})
+	c, buf := capture(t, Config{BaseURL: "http://127.0.0.1:1", Now: now})
 	if _, _, err := c.ChatStream(context.Background(), hiRequest()); err == nil {
 		t.Fatal("a dial to port 1 succeeded")
 	}
@@ -222,14 +194,8 @@ func TestChatStream_dialFailureCarriesTiming(t *testing.T) {
 }
 
 func TestEmbed_dialFailureCarriesTiming(t *testing.T) {
-	var buf bytes.Buffer
 	now, _ := stepClock()
-	c := New(Config{
-		BaseURL:  "http://127.0.0.1:1",
-		Registry: Default(),
-		Now:      now,
-		Logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	})
+	c, buf := capture(t, Config{BaseURL: "http://127.0.0.1:1", Now: now})
 	_, _, err := c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: []string{"a"}})
 	if err == nil {
 		t.Fatal("a dial to port 1 succeeded")

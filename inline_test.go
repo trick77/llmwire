@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestFirstInlineToolName(t *testing.T) {
@@ -205,30 +204,18 @@ func TestInlineGate(t *testing.T) {
 	}
 }
 
-// readInline runs readStream with recovery on and collects every event.
-func readInline(t *testing.T, body string) (StreamResult, []streamEvent, []Warning) {
-	t.Helper()
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	guard := newStallGuard(cancel, time.Hour, stallHeaders)
-	defer guard.stop()
-	var events []streamEvent
-	res, warnings, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, func(ev streamEvent) {
-		events = append(events, ev)
-	}, Redact, true, time.Now, time.Now())
-	if err != nil {
-		t.Fatalf("readStream: %v", err)
+// frameLines is a stream of deltas closed by a stop frame and [DONE], one line
+// per frame for sseServer; frames is the same stream as one body for readSSE.
+func frameLines(deltas ...string) []string {
+	lines := make([]string, 0, len(deltas)+2)
+	for _, d := range deltas {
+		lines = append(lines, "data: "+d)
 	}
-	return res, events, warnings
+	return append(lines, stopFrame, doneFrame)
 }
 
 func frames(deltas ...string) string {
-	var b strings.Builder
-	for _, d := range deltas {
-		b.WriteString("data: " + d + "\n\n")
-	}
-	b.WriteString(`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n" + "data: [DONE]\n\n")
-	return b.String()
+	return strings.Join(frameLines(deltas...), "\n\n") + "\n\n"
 }
 
 func contentDelta(s string) string {
@@ -251,7 +238,7 @@ func TestReadStream_RecoversInlineCallFromContent(t *testing.T) {
 		contentDelta("<tool_call>\n<function=tavily__"),
 		contentDelta("tavily_search>\n<parameter=q>colossus</parameter>\n</function>\n</tool_call>"),
 	)
-	res, events, warnings := readInline(t, body)
+	res, events, warnings, _ := readSSE(t, body, readOpts{recovery: true})
 
 	if res.Content != "Let me look." {
 		t.Fatalf("content = %q, want the prose only", res.Content)
@@ -298,7 +285,7 @@ func TestReadStream_RecoversInlineCallFromReasoning(t *testing.T) {
 		reasoningDelta(`<tool_invocation name="generate_image" arguments={"prompt": "a fox"} />`),
 		contentDelta("Here is the image."),
 	)
-	res, events, warnings := readInline(t, body)
+	res, events, warnings, _ := readSSE(t, body, readOpts{recovery: true})
 
 	if res.Reasoning != "I should search." {
 		t.Fatalf("reasoning = %q", res.Reasoning)
@@ -323,7 +310,7 @@ func TestReadStream_SecondInlineCallCarriesItsName(t *testing.T) {
 	body := frames(contentDelta(
 		"<tool_call><function=a><parameter=x>1</parameter></function></tool_call>" +
 			"<tool_call><function=b><parameter=y>2</parameter></function></tool_call>"))
-	res, events, _ := readInline(t, body)
+	res, events, _, _ := readSSE(t, body, readOpts{recovery: true})
 
 	if len(res.ToolCalls) != 2 || res.ToolCalls[1].ID != "inline_call_2" || res.ToolCalls[1].Name != "b" {
 		t.Fatalf("tool calls = %#v", res.ToolCalls)
@@ -341,7 +328,7 @@ func TestReadStream_SecondInlineCallCarriesItsName(t *testing.T) {
 
 func TestReadStream_UnparsedMarkupIsCutAndWarned(t *testing.T) {
 	body := frames(contentDelta(`Here you go. <tool_invocation name="generate_image" arguments={"prompt": "trunc`))
-	res, _, warnings := readInline(t, body)
+	res, _, warnings, _ := readSSE(t, body, readOpts{recovery: true})
 
 	if res.Content != "Here you go." {
 		t.Fatalf("content = %q, the broken markup must be cut", res.Content)
@@ -359,7 +346,7 @@ func TestReadStream_NativeCallsWinOverInline(t *testing.T) {
 		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"a","arguments":"{}"}}]}}]}`,
 		contentDelta("<tool_call><function=b></function></tool_call>"),
 	)
-	res, _, warnings := readInline(t, body)
+	res, _, warnings, _ := readSSE(t, body, readOpts{recovery: true})
 
 	if len(res.ToolCalls) != 1 || res.ToolCalls[0].ID != "call_1" {
 		t.Fatalf("tool calls = %#v, want the native call only", res.ToolCalls)
@@ -375,7 +362,7 @@ func TestReadStream_NativeCallsWinOverInline(t *testing.T) {
 
 func TestReadStream_PlainAnswerUntouchedWithRecoveryOn(t *testing.T) {
 	body := frames(contentDelta("a < b is 1 "), contentDelta("<"))
-	res, events, warnings := readInline(t, body)
+	res, events, warnings, _ := readSSE(t, body, readOpts{recovery: true})
 
 	if res.Content != "a < b is 1 <" {
 		t.Fatalf("content = %q", res.Content)
@@ -396,11 +383,7 @@ func TestReadStream_PlainAnswerUntouchedWithRecoveryOn(t *testing.T) {
 
 func TestReadStream_NoRecoveryLeavesMarkupAlone(t *testing.T) {
 	body := frames(contentDelta("<tool_call><function=a></function></tool_call>"))
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	guard := newStallGuard(cancel, time.Hour, stallHeaders)
-	defer guard.stop()
-	res, warnings, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, nil, Redact, false, time.Now, time.Now())
+	res, _, warnings, err := readSSE(t, body, readOpts{keepErr: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +395,7 @@ func TestReadStream_NoRecoveryLeavesMarkupAlone(t *testing.T) {
 // The MiMo profiles opt in, so a call through the public API recovers too — on
 // the streaming route and on Chat.
 func TestChatStream_MiMoRecoversInlineCall(t *testing.T) {
-	srv := sseServer(t, frames(contentDelta("<tool_call><function=search><parameter=q>x</parameter></function></tool_call>")))
+	srv := sseServer(t, frameLines(contentDelta("<tool_call><function=search><parameter=q>x</parameter></function></tool_call>")))
 	c := New(Config{BaseURL: srv.URL})
 	stream, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "mimo-v2.5-pro", Messages: []Message{User("hi")}})
 	if err != nil {
@@ -443,7 +426,7 @@ func TestChatStream_MiMoRecoversInlineCall(t *testing.T) {
 }
 
 func TestChat_MiMoRecoversInlineCall(t *testing.T) {
-	srv, _ := jsonServer(t, 200, `{"model":"mimo-v2.5-pro","choices":[{"finish_reason":"stop","message":{"content":"Sure. <tool_invocation name=\"generate_image\" arguments={\"prompt\": \"a fox\"} />"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	srv := jsonServer(t, 200, `{"model":"mimo-v2.5-pro","choices":[{"finish_reason":"stop","message":{"content":"Sure. <tool_invocation name=\"generate_image\" arguments={\"prompt\": \"a fox\"} />"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	c := New(Config{BaseURL: srv.URL})
 	resp, warnings, err := c.Chat(context.Background(), ChatRequest{Model: "mimo-v2.5-pro", Messages: []Message{User("hi")}})
 	if err != nil {
@@ -471,7 +454,7 @@ func TestChat_JSONReplyKeepsQuotedMarkup(t *testing.T) {
 	req := ChatRequest{Model: "mimo-v2.5-pro", Messages: []Message{User("hi")},
 		ResponseFormat: ResponseFormat{Kind: FormatJSONObject}}
 
-	srv, _ := jsonServer(t, 200, `{"model":"mimo-v2.5-pro","choices":[{"finish_reason":"stop","message":{"content":`+jsonString(answer)+`}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	srv := jsonServer(t, 200, `{"model":"mimo-v2.5-pro","choices":[{"finish_reason":"stop","message":{"content":`+jsonString(answer)+`}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	resp, _, err := New(Config{BaseURL: srv.URL}).Chat(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -480,7 +463,7 @@ func TestChat_JSONReplyKeepsQuotedMarkup(t *testing.T) {
 		t.Fatalf("chat: content = %q, calls = %d", resp.Content, len(resp.ToolCalls))
 	}
 
-	stream, _, err := New(Config{BaseURL: sseServer(t, frames(contentDelta(answer))).URL}).ChatStream(context.Background(), req)
+	stream, _, err := New(Config{BaseURL: sseServer(t, frameLines(contentDelta(answer))).URL}).ChatStream(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +501,7 @@ func TestWirePlan_RecoversInline(t *testing.T) {
 }
 
 func TestChat_ProfileWithoutRecoveryKeepsMarkup(t *testing.T) {
-	srv, _ := jsonServer(t, 200, `{"model":"glm-5.3-flash","choices":[{"finish_reason":"stop","message":{"content":"<tool_call><function=a></function></tool_call>"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	srv := jsonServer(t, 200, `{"model":"glm-5.3-flash","choices":[{"finish_reason":"stop","message":{"content":"<tool_call><function=a></function></tool_call>"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	c := New(Config{BaseURL: srv.URL})
 	resp, _, err := c.Chat(context.Background(), ChatRequest{Model: "glm-5.3-flash", Messages: []Message{User("hi")}})
 	if err != nil {
@@ -534,7 +517,7 @@ func TestChat_ProfileWithoutRecoveryKeepsMarkup(t *testing.T) {
 // and a Result reader hold the same text.
 func TestReadStream_ResultMatchesStreamedText(t *testing.T) {
 	body := frames(contentDelta(`Sure, here it is. <tool_invocation name="generate_image" arguments={"prompt": "a fox"} /> Done.`))
-	res, events, warnings := readInline(t, body)
+	res, events, warnings, _ := readSSE(t, body, readOpts{recovery: true})
 	var text string
 	for _, ev := range events {
 		if ev.kind == evContent {
@@ -551,7 +534,7 @@ func TestReadStream_ResultMatchesStreamedText(t *testing.T) {
 
 func TestReadStream_FinishIsTheLastEventWithRecoveryOn(t *testing.T) {
 	body := frames(contentDelta("<tool_call><function=a><parameter=x>1</parameter></function></tool_call>"))
-	_, events, _ := readInline(t, body)
+	_, events, _, _ := readSSE(t, body, readOpts{recovery: true})
 	if last := events[len(events)-1]; last.kind != evFinish || last.finishReason != "stop" {
 		t.Fatalf("last event = %#v, want the held finish", last)
 	}
@@ -564,7 +547,7 @@ func TestReadStream_FinishIsTheLastEventWithRecoveryOn(t *testing.T) {
 
 func TestReadStream_PartialBlocksAreCounted(t *testing.T) {
 	body := frames(contentDelta("<tool_call><function=a><parameter=x>1</parameter></function></tool_call><tool_call><function=b><parameter=y>2"))
-	res, _, warnings := readInline(t, body)
+	res, _, warnings, _ := readSSE(t, body, readOpts{recovery: true})
 	if len(res.ToolCalls) != 1 || res.ToolCalls[0].Name != "a" {
 		t.Fatalf("calls = %#v", res.ToolCalls)
 	}
@@ -580,7 +563,7 @@ func TestReadStream_EarlyNameFromOtherChannelIsRenamed(t *testing.T) {
 		reasoningDelta("<tool_call><function=guess>"),
 		contentDelta("<tool_call><function=real><parameter=x>1</parameter></function></tool_call>"),
 	)
-	res, events, _ := readInline(t, body)
+	res, events, _, _ := readSSE(t, body, readOpts{recovery: true})
 	if len(res.ToolCalls) != 1 || res.ToolCalls[0].Name != "real" {
 		t.Fatalf("calls = %#v", res.ToolCalls)
 	}
