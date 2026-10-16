@@ -3,8 +3,6 @@ package llmwire
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -25,9 +23,9 @@ func TestStream_WarningsAreRaceFreeWhilePolled(t *testing.T) {
 	lines = append(lines,
 		`data: {"choices":[{"delta":{"content":"!"},"finish_reason":"stop"}]}`,
 		"data: [DONE]")
-	srv := flushingServer(t, lines, time.Millisecond)
+	srv := sseServer(t, lines, reply{gap: time.Millisecond})
 
-	s, _, err := streamClient(t, srv, 5*time.Second).ChatStream(context.Background(), hiRequest())
+	s, _, err := streamClient(t, srv.URL, 5*time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -56,48 +54,6 @@ func TestStream_WarningsAreRaceFreeWhilePolled(t *testing.T) {
 
 	if err := s.Err(); err != nil {
 		t.Fatalf("Err: %v", err)
-	}
-}
-
-// A partial sum is not a smaller price, it is an unknown one. When one batch cannot
-// be priced the whole total is Unpriced, and Cost's contract is that Unpriced
-// carries 0 — otherwise a budget check is handed three batches' worth of a
-// four-batch call.
-func TestEmbed_UnpricedTotalCarriesZero(t *testing.T) {
-	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		raw, _ := readAllBody(r)
-		var req struct {
-			Input []string `json:"input"`
-		}
-		_ = json.Unmarshal(raw, &req)
-		rows := make([]map[string]any, 0, len(req.Input))
-		for i := range req.Input {
-			rows = append(rows, map[string]any{"index": i, "embedding": []float32{1}})
-		}
-		body := map[string]any{"model": "m", "data": rows}
-		// Batch 2 reports nothing, so it cannot be priced; the others can.
-		if calls != 2 {
-			body["usage"] = map[string]any{"prompt_tokens": len(req.Input)}
-		}
-		_ = json.NewEncoder(w).Encode(body)
-	}))
-	t.Cleanup(srv.Close)
-
-	resp, _, err := embedClient(t, srv).Embed(context.Background(), EmbedRequest{
-		Model:  "text-embedding-3-small",
-		Inputs: inputs(200),
-	})
-	if err != nil {
-		t.Fatalf("Embed: %v", err)
-	}
-	if resp.Usage.Cost.Provenance != Unpriced {
-		t.Fatalf("provenance = %v, want unpriced", resp.Usage.Cost.Provenance)
-	}
-	if resp.Usage.Cost.NanoUSD != 0 {
-		t.Errorf("cost = %d nano with provenance unpriced; an understated total is worse than "+
-			"an absent one", resp.Usage.Cost.NanoUSD)
 	}
 }
 

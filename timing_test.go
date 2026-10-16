@@ -4,21 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
-
-// stepClock advances one second per reading, so a test can assert Timing to the
-// second without depending on how fast the machine ran.
-func stepClock() (func() time.Time, time.Time) {
-	t0 := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
-	n := 0
-	return func() time.Time {
-		n++
-		return t0.Add(time.Duration(n) * time.Second)
-	}, t0
-}
 
 // Readings: lastData t1, frame 1 at t2, frame 2 at t3, [DONE] at t4, the
 // deferred Total at t5. FirstData counts from start, not from the first reading.
@@ -31,11 +19,7 @@ data: [DONE]
 
 `
 	now, start := stepClock()
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	guard := newStallGuard(cancel, time.Hour, stallHeaders)
-	defer guard.stop()
-	res, _, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, nil, Redact, false, now, start)
+	res, _, _, err := readSSE(t, body, readOpts{keepErr: true, clock: now, start: start})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -59,11 +43,7 @@ func TestReadStream_TimingSetOnErrorPath(t *testing.T) {
 
 `
 	now, start := stepClock()
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	guard := newStallGuard(cancel, time.Hour, stallHeaders)
-	defer guard.stop()
-	res, _, err := readStream(strings.NewReader(body), guard, streamBounds{idle: time.Hour}, nil, Redact, false, now, start)
+	res, _, _, err := readSSE(t, body, readOpts{keepErr: true, clock: now, start: start})
 	if err == nil {
 		t.Fatal("expected a truncation error")
 	}
@@ -118,10 +98,7 @@ func TestRawStream_TimingOrderedAndBounded(t *testing.T) {
 // the endpoint took to say so: a 503 after 45s against a 60s header bound is a
 // margin, not nothing.
 func TestRawStream_NonOKCarriesHeadersTiming(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(srv.Close)
+	srv := jsonServer(t, http.StatusServiceUnavailable, "")
 	now, _ := stepClock()
 	c := New(Config{BaseURL: srv.URL, Now: now})
 	res, err := c.RawStream(context.Background(), []byte(`{}`), nil)
@@ -134,10 +111,10 @@ func TestRawStream_NonOKCarriesHeadersTiming(t *testing.T) {
 }
 
 func TestChatStream_CollectCarriesTiming(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`,
 		`data: [DONE]`,
-	}, 10*time.Millisecond)
+	}, reply{gap: 10 * time.Millisecond})
 	c := New(Config{BaseURL: srv.URL, Registry: Default()})
 	s, _, err := c.ChatStream(context.Background(), hiRequest())
 	if err != nil {
@@ -158,12 +135,8 @@ func TestChatStream_CollectCarriesTiming(t *testing.T) {
 // is the model's whole latency and FirstData has nothing to measure.
 func TestChat_TimingHeadersIsTheAnswerLatency(t *testing.T) {
 	const delay = 30 * time.Millisecond
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(delay)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
-	}))
-	t.Cleanup(srv.Close)
+	srv := jsonServer(t, http.StatusOK, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+		reply{delay: delay})
 
 	c := New(Config{BaseURL: srv.URL, Registry: Default()})
 	resp, _, err := c.Chat(context.Background(), hiRequest())

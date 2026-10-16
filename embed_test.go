@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +19,7 @@ func embedServer(t *testing.T, reorder bool) (*httptest.Server, *[]int) {
 	t.Helper()
 	var batchSizes []int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := readAllBody(r)
+		raw, _ := io.ReadAll(r.Body)
 		var req struct {
 			Input      []string `json:"input"`
 			Dimensions *int     `json:"dimensions"`
@@ -56,15 +57,6 @@ func embedServer(t *testing.T, reorder bool) (*httptest.Server, *[]int) {
 	return srv, &batchSizes
 }
 
-func embedClient(t *testing.T, srv *httptest.Server) *Client {
-	t.Helper()
-	return New(Config{
-		BaseURL:  srv.URL,
-		Registry: Default(),
-		Now:      func() time.Time { return time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC) },
-	})
-}
-
 func inputs(n int) []string {
 	out := make([]string, n)
 	for i := range out {
@@ -76,7 +68,7 @@ func inputs(n int) []string {
 // 150 inputs go out as 64 + 64 + 22, and every vector comes back at its own index.
 func TestEmbed_BatchesAtSixtyFour(t *testing.T) {
 	srv, sizes := embedServer(t, false)
-	resp, warnings, err := embedClient(t, srv).Embed(context.Background(), EmbedRequest{
+	resp, warnings, err := clientOn(t, srv.URL).Embed(context.Background(), EmbedRequest{
 		Model:  "text-embedding-3-small",
 		Inputs: inputs(150),
 	})
@@ -119,7 +111,7 @@ func TestEmbed_BatchesAtSixtyFour(t *testing.T) {
 // silently wrong.
 func TestEmbed_ReassemblesByIndex(t *testing.T) {
 	srv, _ := embedServer(t, true)
-	resp, _, err := embedClient(t, srv).Embed(context.Background(), EmbedRequest{
+	resp, _, err := clientOn(t, srv.URL).Embed(context.Background(), EmbedRequest{
 		Model:  "text-embedding-3-small",
 		Inputs: inputs(5),
 	})
@@ -173,8 +165,8 @@ func TestEmbed_MalformedBatchesAreRefused(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, _ := jsonServer(t, 200, tc.body)
-			resp, _, err := embedClient(t, srv).Embed(context.Background(), EmbedRequest{
+			srv := jsonServer(t, 200, tc.body)
+			resp, _, err := clientOn(t, srv.URL).Embed(context.Background(), EmbedRequest{
 				Model:  "text-embedding-3-small",
 				Inputs: []string{"a", "b"},
 			})
@@ -211,7 +203,7 @@ func TestEmbed_NoPartialResults(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"message":"boom","code":"500"}}`))
 			return
 		}
-		raw, _ := readAllBody(r)
+		raw, _ := io.ReadAll(r.Body)
 		var req struct {
 			Input []string `json:"input"`
 		}
@@ -224,7 +216,7 @@ func TestEmbed_NoPartialResults(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	resp, _, err := embedClient(t, srv).Embed(context.Background(), EmbedRequest{
+	resp, _, err := clientOn(t, srv.URL).Embed(context.Background(), EmbedRequest{
 		Model:  "text-embedding-3-small",
 		Inputs: inputs(100),
 	})
@@ -247,7 +239,7 @@ func TestEmbed_FailedCallStillAccountsThePaidBatches(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"message":"boom","code":"500"}}`))
 			return
 		}
-		raw, _ := readAllBody(r)
+		raw, _ := io.ReadAll(r.Body)
 		var req struct {
 			Input []string `json:"input"`
 		}
@@ -261,7 +253,7 @@ func TestEmbed_FailedCallStillAccountsThePaidBatches(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := embedClient(t, srv)
+	c := clientOn(t, srv.URL)
 	if _, _, err := c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)}); err == nil {
 		t.Fatal("expected the failing batch to fail the call")
 	}
@@ -285,7 +277,7 @@ func TestEmbed_CarriesTheGatewayBlock(t *testing.T) {
 	}))
 	t.Cleanup(proxy.Close)
 
-	resp, warnings, err := embedClient(t, proxy).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)})
+	resp, warnings, err := clientOn(t, proxy.URL).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +299,7 @@ func TestEmbed_CarriesTheGatewayBlock(t *testing.T) {
 // A model that cannot be priced says so once per call, not once per batch.
 func TestEmbed_PricingWarningOncePerCall(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := readAllBody(r)
+		raw, _ := io.ReadAll(r.Body)
 		var req struct {
 			Input []string `json:"input"`
 		}
@@ -320,7 +312,7 @@ func TestEmbed_PricingWarningOncePerCall(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, warnings, err := embedClient(t, srv).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)})
+	_, warnings, err := clientOn(t, srv.URL).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +326,7 @@ func TestEmbed_PricingWarningOncePerCall(t *testing.T) {
 func TestEmbed_CallTimeoutBoundsTheWholeCall(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond)
-		raw, _ := readAllBody(r)
+		raw, _ := io.ReadAll(r.Body)
 		var req struct {
 			Input []string `json:"input"`
 		}
@@ -368,7 +360,7 @@ func TestEmbed_UndecodableBatchMakesTheTotalUnknown(t *testing.T) {
 			_, _ = w.Write([]byte(`not json`))
 			return
 		}
-		raw, _ := readAllBody(r)
+		raw, _ := io.ReadAll(r.Body)
 		var req struct {
 			Input []string `json:"input"`
 		}
@@ -382,7 +374,7 @@ func TestEmbed_UndecodableBatchMakesTheTotalUnknown(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := embedClient(t, srv)
+	c := clientOn(t, srv.URL)
 	if _, _, err := c.Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(130)}); err == nil {
 		t.Fatal("expected the undecodable batch to fail the call")
 	}
@@ -398,7 +390,7 @@ func TestEmbed_PartialUsageIsNotSummed(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		raw, _ := readAllBody(r)
+		raw, _ := io.ReadAll(r.Body)
 		var req struct {
 			Input []string `json:"input"`
 		}
@@ -408,16 +400,19 @@ func TestEmbed_PartialUsageIsNotSummed(t *testing.T) {
 			rows = append(rows, map[string]any{"index": i, "embedding": []float32{1}})
 		}
 		body := map[string]any{"model": "m", "data": rows}
-		if calls == 1 {
+		// Batch 2 of 4 reports nothing, so it cannot be priced; the others
+		// can, and the priced ones AFTER it are what the sticky provenance
+		// has to survive.
+		if calls != 2 {
 			body["usage"] = map[string]any{"prompt_tokens": len(req.Input)}
 		}
 		_ = json.NewEncoder(w).Encode(body)
 	}))
 	t.Cleanup(srv.Close)
 
-	resp, warnings, err := embedClient(t, srv).Embed(context.Background(), EmbedRequest{
+	resp, warnings, err := clientOn(t, srv.URL).Embed(context.Background(), EmbedRequest{
 		Model:  "text-embedding-3-small",
-		Inputs: inputs(100),
+		Inputs: inputs(200),
 	})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -432,6 +427,13 @@ func TestEmbed_PartialUsageIsNotSummed(t *testing.T) {
 	if resp.Usage.Cost.Provenance != Unpriced {
 		t.Errorf("cost = %+v, want unpriced when a batch could not be priced", resp.Usage.Cost)
 	}
+	// A partial sum is not a smaller price, it is an unknown one, and Cost's
+	// contract is that Unpriced carries 0: otherwise a budget check is handed
+	// three batches' worth of a four-batch call.
+	if resp.Usage.Cost.NanoUSD != 0 {
+		t.Errorf("cost = %d nano with provenance unpriced; an understated total is worse than "+
+			"an absent one", resp.Usage.Cost.NanoUSD)
+	}
 	if len(warnings) == 0 {
 		t.Error("no warning for the batch that could not be priced")
 	}
@@ -445,14 +447,14 @@ func TestEmbed_DimensionsFollowsTheProfile(t *testing.T) {
 	t.Run("supported", func(t *testing.T) {
 		var seen []byte
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			seen, _ = readAllBody(r)
+			seen, _ = io.ReadAll(r.Body)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"model": "m",
 				"data":  []map[string]any{{"index": 0, "embedding": []float32{1}}},
 			})
 		}))
 		t.Cleanup(srv.Close)
-		if _, _, err := embedClient(t, srv).Embed(context.Background(), EmbedRequest{
+		if _, _, err := clientOn(t, srv.URL).Embed(context.Background(), EmbedRequest{
 			Model:      "text-embedding-3-small",
 			Inputs:     []string{"a"},
 			Dimensions: &dims,
@@ -496,7 +498,7 @@ func TestEmbed_DimensionsFollowsTheProfile(t *testing.T) {
 	t.Run("BestEffort drops it", func(t *testing.T) {
 		var seen []byte
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			seen, _ = readAllBody(r)
+			seen, _ = io.ReadAll(r.Body)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"model": "m",
 				"data":  []map[string]any{{"index": 0, "embedding": []float32{1}}},
@@ -535,7 +537,7 @@ func TestEmbed_MalformedRequestsNeverReachTheNetwork(t *testing.T) {
 		t.Error("a malformed request was sent anyway")
 	}))
 	t.Cleanup(srv.Close)
-	c := embedClient(t, srv)
+	c := clientOn(t, srv.URL)
 	zero := 0
 
 	for _, tc := range []struct {

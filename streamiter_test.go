@@ -11,60 +11,21 @@ import (
 	"time"
 )
 
-// flushingServer writes each line, flushing after every one, so the client sees a
-// real incremental stream rather than one buffered write.
-func flushingServer(t *testing.T, lines []string, gap time.Duration) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(200)
-		flusher, _ := w.(http.Flusher)
-		for _, line := range lines {
-			if _, err := w.Write([]byte(line + "\n\n")); err != nil {
-				return
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-			if gap > 0 {
-				select {
-				case <-time.After(gap):
-				case <-r.Context().Done():
-					return
-				}
-			}
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-func streamClient(t *testing.T, srv *httptest.Server, idle time.Duration) *Client {
-	t.Helper()
-	return New(Config{
-		BaseURL:     srv.URL,
-		Registry:    Default(),
-		IdleTimeout: idle,
-		CallTimeout: 20 * time.Second,
-		Now:         func() time.Time { return time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC) },
-	})
-}
-
 func hiRequest() ChatRequest {
 	return ChatRequest{Model: "glm-5.3-flash", Messages: []Message{User("hi")}}
 }
 
 func TestChatStream_EventsThenResult(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}`,
 		`data: {"choices":[{"delta":{"content":"hel"}}]}`,
 		`data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}]}`,
 		`data: {"choices":[],"usage":{"prompt_tokens":258,"completion_tokens":100,` +
 			`"prompt_tokens_details":{"cached_tokens":192}}}`,
 		"data: [DONE]",
-	}, 0)
+	})
 
-	s, warnings, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	s, warnings, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -114,15 +75,15 @@ func TestChatStream_EventsThenResult(t *testing.T) {
 // Tool-call fragments reach the caller as fragments AND are assembled on the
 // result, so a caller can either stream them or wait.
 func TestChatStream_ToolCallFragments(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",` +
 			`"function":{"name":"search","arguments":"{\"q\":"}}]}}]}`,
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x\"}"}}]},` +
 			`"finish_reason":"tool_calls"}]}`,
 		"data: [DONE]",
-	}, 0)
+	})
 
-	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), ChatRequest{
+	s, _, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), ChatRequest{
 		Model:    "glm-5.3-flash",
 		Messages: []Message{User("hi")},
 		Tools:    []Tool{{Name: "search"}},
@@ -168,10 +129,10 @@ func TestChatStream_SlowConsumerIsNotAStall(t *testing.T) {
 	lines = append(lines,
 		`data: {"choices":[{"delta":{"content":"!"},"finish_reason":"stop"}]}`,
 		"data: [DONE]")
-	srv := flushingServer(t, lines, 0)
+	srv := sseServer(t, lines)
 
 	// An idle bound far shorter than the consumer's own pace.
-	s, _, err := streamClient(t, srv, 60*time.Millisecond).ChatStream(context.Background(), hiRequest())
+	s, _, err := streamClient(t, srv.URL, 60*time.Millisecond).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -205,7 +166,7 @@ func TestChatStream_StalledStreamIsNamed(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	s, _, err := streamClient(t, srv, 50*time.Millisecond).ChatStream(context.Background(), hiRequest())
+	s, _, err := streamClient(t, srv.URL, 50*time.Millisecond).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -227,9 +188,9 @@ func TestChatStream_EarlyCloseIsNotAnError(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		lines = append(lines, fmt.Sprintf(`data: {"choices":[{"delta":{"content":"%d"}}]}`, i))
 	}
-	srv := flushingServer(t, lines, 10*time.Millisecond)
+	srv := sseServer(t, lines, reply{gap: 10 * time.Millisecond})
 
-	s, _, err := streamClient(t, srv, 5*time.Second).ChatStream(context.Background(), hiRequest())
+	s, _, err := streamClient(t, srv.URL, 5*time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -258,12 +219,12 @@ func TestChatStream_EarlyCloseIsNotAnError(t *testing.T) {
 // An error frame inside a 200 reaches the caller as an API error rather than as a
 // short, clean answer.
 func TestChatStream_ErrorFrameInsideA200(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"partial"}}]}`,
 		`data: {"error":{"message":"upstream exploded","code":"1210"}}`,
-	}, 0)
+	})
 
-	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	s, _, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -282,9 +243,9 @@ func TestChatStream_ErrorFrameInsideA200(t *testing.T) {
 // A stream that just stops is an error, not a short answer: a dropped connection
 // ends the scan exactly like a finished one.
 func TestChatStream_TruncatedStreamIsAnError(t *testing.T) {
-	srv := flushingServer(t, []string{`data: {"choices":[{"delta":{"content":"half"}}]}`}, 0)
+	srv := sseServer(t, []string{`data: {"choices":[{"delta":{"content":"half"}}]}`})
 
-	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	s, _, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -304,7 +265,7 @@ func TestChatStream_PreFlightFailuresReturnImmediately(t *testing.T) {
 			t.Error("a refused request was sent anyway")
 		}))
 		t.Cleanup(srv.Close)
-		s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), ChatRequest{
+		s, _, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), ChatRequest{
 			Model:     "glm-5.3-flash",
 			Messages:  []Message{User("hi")},
 			Reasoning: ReasoningOff(),
@@ -319,12 +280,8 @@ func TestChatStream_PreFlightFailuresReturnImmediately(t *testing.T) {
 	})
 
 	t.Run("401 arrives as an error, not as an empty stream", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":{"message":"bad key","code":"401"}}`))
-		}))
-		t.Cleanup(srv.Close)
-		s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+		srv := jsonServer(t, http.StatusUnauthorized, `{"error":{"message":"bad key","code":"401"}}`)
+		s, _, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), hiRequest())
 		if s != nil {
 			t.Error("a 401 returned a stream")
 		}
@@ -337,15 +294,9 @@ func TestChatStream_PreFlightFailuresReturnImmediately(t *testing.T) {
 // The rendered body carries stream:true — RawStream does not inject it, and
 // neither does ChatStream: the renderer does, from the plan.
 func TestChatStream_BodyRequestsStreaming(t *testing.T) {
-	var seen []byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen, _ = readAllBody(r)
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"x\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
-	}))
-	t.Cleanup(srv.Close)
+	srv := sseServer(t, []string{`data: {"choices":[{"delta":{"content":"x"},"finish_reason":"stop"}]}`, doneFrame})
 
-	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	s, _, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -354,7 +305,7 @@ func TestChatStream_BodyRequestsStreaming(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !strings.Contains(string(seen), `"stream":true`) {
+	if seen := srv.lastBody(); !strings.Contains(string(seen), `"stream":true`) {
 		t.Errorf("request body did not ask for a stream: %s", seen)
 	}
 }
@@ -362,13 +313,7 @@ func TestChatStream_BodyRequestsStreaming(t *testing.T) {
 // A model whose profile says it cannot stream is refused by the METHOD, and
 // BestEffort cannot rescue it: there is nothing to demote a method choice to.
 func TestChatStream_NonStreamingModelIsRefused(t *testing.T) {
-	reg := registryFrom(t, `profiles:
-  - id: sync
-    wire_model_id: sync
-    max_tokens_param: max_tokens
-    verified: source-derived
-`)
-	c := New(Config{BaseURL: "https://example.invalid", Registry: reg})
+	c := New(Config{BaseURL: "https://example.invalid", Registry: registryFrom(t, syncDoc)})
 	_, _, err := c.ChatStream(context.Background(), ChatRequest{
 		Model:      "sync",
 		Messages:   []Message{User("hi")},
@@ -385,14 +330,14 @@ func TestChatStream_NonStreamingModelIsRefused(t *testing.T) {
 // Collect is the whole stream at once: every content delta to the callback in
 // order, then the result the caller would otherwise assemble by hand.
 func TestChatStream_CollectDrainsToTheResult(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}`,
 		`data: {"choices":[{"delta":{"content":"hel"}}]}`,
 		`data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"length"}]}`,
 		`data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}`,
 		"data: [DONE]",
-	}, 0)
-	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	})
+	s, _, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -418,10 +363,10 @@ func TestChatStream_CollectDrainsToTheResult(t *testing.T) {
 // delivered as they came, and the result carries whatever usage was read, so
 // a caller can account for a call that was paid for and then cut.
 func TestChatStream_CollectReturnsTheErrorWithThePartialResult(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"partial"}}]}`,
-	}, 0)
-	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	})
+	s, _, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -441,11 +386,11 @@ func TestChatStream_CollectReturnsTheErrorWithThePartialResult(t *testing.T) {
 }
 
 func TestChatStream_CollectWithoutACallbackStillCollects(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
 		"data: [DONE]",
-	}, 0)
-	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	})
+	s, _, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -456,45 +401,16 @@ func TestChatStream_CollectWithoutACallbackStillCollects(t *testing.T) {
 	}
 }
 
-// gatewayStreamDoc is gatewayDoc's shape with streaming declared, so the
-// gateway route can be driven through ChatStream. Kept separate rather than
-// adding streaming to gatewayDoc, which a dozen pricing tests read.
-const gatewayStreamDoc = `profiles:
-  - id: m
-    wire_model_id: m
-    max_tokens_param: max_tokens
-    verified: measured
-    streaming:
-      supported: true
-      accepts_stream_options: true
-    cost:
-      input: 0.15
-      cache_read: 0.03
-      cache_write: 0
-      output: 0.50
-      source_url: https://vendor.example/pricing
-      verified_on: 2026-09-12
-  - id: m-via
-    base: m
-    gateway: litellm
-    wire_model_id: proxy/m
-`
-
 // The whole point of the usage.cost lane, end to end: a STREAM behind a gateway
 // carries no cost header (it is written before the body is consumed), so without
 // the field on the final chunk the most expensive call in a turn is unpriced.
 func TestChatStream_PricesAGatewayStreamFromTheUsageBody(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`,
 		`data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10,"cost":0.0000123}}`,
 		"data: [DONE]",
-	}, 0)
-	c := New(Config{
-		BaseURL:     srv.URL,
-		Registry:    registryFrom(t, gatewayStreamDoc),
-		CallTimeout: 20 * time.Second,
-		Now:         func() time.Time { return time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC) },
 	})
+	c := clientOn(t, srv.URL, Config{Registry: registryFrom(t, gatewayStreamDoc), CallTimeout: 20 * time.Second})
 	s, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "m-via", Messages: []Message{User("hi")}})
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
@@ -518,17 +434,12 @@ func TestChatStream_PricesAGatewayStreamFromTheUsageBody(t *testing.T) {
 // priced. This is intg's state until the gateway sets
 // include_cost_in_streaming_usage.
 func TestChatStream_AGatewayStreamWithoutTheFieldStaysUnpriced(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`,
 		`data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10}}`,
 		"data: [DONE]",
-	}, 0)
-	c := New(Config{
-		BaseURL:     srv.URL,
-		Registry:    registryFrom(t, gatewayStreamDoc),
-		CallTimeout: 20 * time.Second,
-		Now:         func() time.Time { return time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC) },
 	})
+	c := clientOn(t, srv.URL, Config{Registry: registryFrom(t, gatewayStreamDoc), CallTimeout: 20 * time.Second})
 	s, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "m-via", Messages: []Message{User("hi")}})
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
@@ -550,13 +461,13 @@ func TestChatStream_AGatewayStreamWithoutTheFieldStaysUnpriced(t *testing.T) {
 // the zero value Unpriced with no warning, against the rule that Unpriced
 // always warns.
 func TestChatStream_EarlyCloseStillPricesReportedUsage(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`,
 		`data: {"choices":[{"delta":{"content":"late"}}]}`,
 		`data: {"choices":[{"delta":{"content":"later"}}]}`,
-	}, 20*time.Millisecond)
+	}, reply{gap: 20 * time.Millisecond})
 
-	s, _, err := streamClient(t, srv, 5*time.Second).ChatStream(context.Background(), hiRequest())
+	s, _, err := streamClient(t, srv.URL, 5*time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -584,8 +495,8 @@ func TestChatStream_EarlyCloseWithoutUsageWarnsUnpriced(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		lines = append(lines, `data: {"choices":[{"delta":{"content":"x"}}]}`)
 	}
-	srv := flushingServer(t, lines, 20*time.Millisecond)
-	s, _, err := streamClient(t, srv, 5*time.Second).ChatStream(context.Background(), hiRequest())
+	srv := sseServer(t, lines, reply{gap: 20 * time.Millisecond})
+	s, _, err := streamClient(t, srv.URL, 5*time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -607,12 +518,12 @@ func TestChatStream_EarlyCloseWithoutUsageWarnsUnpriced(t *testing.T) {
 // The error frame ends the scan, not the assembly: what arrived before it is
 // returned beside the error, as Collect promises for every other cut.
 func TestChatStream_ErrorFrameKeepsThePartialResult(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"partial"}}]}`,
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"f","arguments":"{}"}}]}}]}`,
 		`data: {"error":{"message":"upstream exploded","code":"1210"}}`,
-	}, 0)
-	s, _, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), hiRequest())
+	})
+	s, _, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), hiRequest())
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}
@@ -631,15 +542,15 @@ func TestChatStream_ErrorFrameKeepsThePartialResult(t *testing.T) {
 // must not race the reader appending pricing warnings to the stream's copy.
 // Caught by -race when the two shared one backing array.
 func TestChatStream_ReturnedWarningsAreTheCallersOwn(t *testing.T) {
-	srv := flushingServer(t, []string{
+	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
 		"data: [DONE]",
-	}, 0)
+	})
 	// A request that produces a validation warning, so the slice has content
 	// and spare capacity.
 	req := hiRequest()
 	req.ToolChoice = ToolChoice{Mode: ToolChoiceAuto}
-	s, warnings, err := streamClient(t, srv, time.Second).ChatStream(context.Background(), req)
+	s, warnings, err := streamClient(t, srv.URL, time.Second).ChatStream(context.Background(), req)
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
 	}

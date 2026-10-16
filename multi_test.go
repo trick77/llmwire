@@ -3,6 +3,7 @@ package llmwire
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,7 +52,7 @@ func recordingServer(t *testing.T) (*httptest.Server, func() []seenCall) {
 	var mu sync.Mutex
 	var calls []seenCall
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := readAllBody(r)
+		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		calls = append(calls, seenCall{path: r.URL.Path, auth: r.Header.Get("Authorization"), session: r.Header.Get(HeaderSessionID)})
 		mu.Unlock()
@@ -65,10 +66,6 @@ func recordingServer(t *testing.T) (*httptest.Server, func() []seenCall) {
 	}))
 	t.Cleanup(srv.Close)
 	return srv, func() []seenCall { mu.Lock(); defer mu.Unlock(); return append([]seenCall(nil), calls...) }
-}
-
-func mapLookup(m map[string]string) func(string) (string, bool) {
-	return func(k string) (string, bool) { v, ok := m[k]; return v, ok }
 }
 
 func TestFromEnvModels_RoutesEachModelToItsProvider(t *testing.T) {

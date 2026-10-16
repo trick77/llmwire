@@ -12,8 +12,6 @@ import (
 // 18:00 Singapore time is worse than no test, which is why Config.Now is
 // injectable in the first place.
 
-func i64(v int64) *int64 { return &v }
-
 // costHeader builds the response header the way net/http will read it. A map
 // literal keyed by the lowercase name would store a key Header.Get never finds,
 // since Get canonicalises and direct map writes do not — a test that passes
@@ -420,24 +418,6 @@ func TestPrice_EmbeddingsInputLaneOnly(t *testing.T) {
 }
 
 // --- the gateway lane ------------------------------------------------------
-
-const gatewayDoc = `profiles:
-  - id: m
-    wire_model_id: m
-    max_tokens_param: max_tokens
-    verified: measured
-    cost:
-      input: 0.15
-      cache_read: 0.03
-      cache_write: 0
-      output: 0.50
-      source_url: https://vendor.example/pricing
-      verified_on: 2026-09-12
-  - id: m-via
-    base: m
-    gateway: litellm
-    wire_model_id: proxy/m
-`
 
 // The gateway's own figure, in the scientific notation it actually sends.
 func TestPrice_ReportedHeader(t *testing.T) {
