@@ -226,6 +226,7 @@ func TestChat_GatewayMarginIsFlagged(t *testing.T) {
 		{"margin", map[string]string{"x-litellm-response-cost-margin-amount": "0.0007"}, true},
 		{"margin percent", map[string]string{"x-litellm-response-cost-margin-percent": "0.2"}, true},
 		{"discount", map[string]string{"x-litellm-response-cost-discount-amount": "0.001"}, true},
+		{"negative margin", map[string]string{"x-litellm-response-cost-margin-percent": "-0.1"}, true},
 		{"zero margin", map[string]string{"x-litellm-response-cost-margin-amount": "0.0"}, false},
 		{"none literal", map[string]string{"x-litellm-response-cost-margin-amount": "None"}, false},
 	}
@@ -241,7 +242,7 @@ func TestChat_GatewayMarginIsFlagged(t *testing.T) {
 			}
 			var seen bool
 			for _, w := range warnings {
-				if w.Feature == "gateway_cost" && strings.Contains(w.Details, `"0.0035"`) {
+				if w.Feature == "gateway_cost" && strings.Contains(w.Details, "not the list rate") {
 					seen = true
 				}
 			}
@@ -252,6 +253,25 @@ func TestChat_GatewayMarginIsFlagged(t *testing.T) {
 				t.Errorf("cost = %+v, want the reported total kept", resp.Usage.Cost)
 			}
 		})
+	}
+}
+
+// An adjustment beside a total that was never used says nothing true.
+func TestChat_GatewayMarginOnAnUnpricedCallIsSilent(t *testing.T) {
+	srv := jsonServer(t, http.StatusOK, gatewayChatBody, reply{header: map[string]string{
+		"x-litellm-call-id":                     "call-9",
+		"x-litellm-response-cost":               "None",
+		"x-litellm-response-cost-margin-amount": "0.0007",
+	}})
+	_, warnings, err := gatewayClient(t, srv.URL, nil).Chat(context.Background(),
+		ChatRequest{Model: "gpt-5.4-mini", Messages: []Message{User("hi")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range warnings {
+		if w.Feature == "gateway_cost" {
+			t.Errorf("warning %v on an unpriced call", w)
+		}
 	}
 }
 

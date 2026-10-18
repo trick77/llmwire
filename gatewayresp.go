@@ -108,60 +108,75 @@ func (c GatewayCost) Reported() bool {
 	return c != GatewayCost{}
 }
 
-// parseGatewayHeaders reads the block. Never fails: a bad header must not
-// fail a completion the caller already paid for, so an unusable figure is
-// nil with a warning. stream leaves Cost empty (see Gateway.Cost).
-func parseGatewayHeaders(hdr http.Header, stream bool) (Gateway, []Warning) {
-	g := Gateway{
-		CallID:       hdr.Get(litellmCallIDHeader),
-		ModelName:    hdr.Get(litellmModelHeader),
-		ResponseCost: hdr.Get(litellmCostHeader),
-		Version:      hdr.Get(litellmVersionHeader),
-	}
+// parseGatewayHeaders reads the block, Cost aside: only a non-streamed call's
+// path adds that, through parseGatewayCost, so a new call path that forgets it
+// gets no split rather than a stream's confident zeros. Never fails: a bad
+// header must not fail a completion the caller already paid for, so an
+// unusable figure is nil with a warning.
+func parseGatewayHeaders(hdr http.Header) (Gateway, []Warning) {
 	var warnings []Warning
-	usd := func(header, feature, what string) *int64 {
-		raw := hdr.Get(header)
-		if raw == "" || isNoneLiteral(raw) {
-			return nil
-		}
-		nano, err := parseReportedCost(raw)
-		if err != nil {
-			warnings = append(warnings, Warning{Kind: WarnOther, Feature: feature,
-				Details: fmt.Sprintf("gateway reported an unusable %s %q: %v", what, raw, err)})
-			return nil
-		}
-		return &nano
-	}
-	g.KeySpendNanoUSD = usd(litellmKeySpendHeader, "key_spend", "key spend")
-	if stream {
-		return g, warnings
-	}
-	g.Cost = GatewayCost{
-		InputNanoUSD:      usd(litellmCostInputHeader, "gateway_cost", "input cost"),
-		CacheReadNanoUSD:  usd(litellmCostCacheReadHeader, "gateway_cost", "cache read cost"),
-		CacheWriteNanoUSD: usd(litellmCostCacheWriteHeader, "gateway_cost", "cache write cost"),
-		OutputNanoUSD:     usd(litellmCostOutputHeader, "gateway_cost", "output cost"),
-		ReasoningNanoUSD:  usd(litellmCostReasoningHeader, "gateway_cost", "reasoning cost"),
-		ToolUsageNanoUSD:  usd(litellmCostToolUsageHeader, "gateway_cost", "tool usage cost"),
-		Original:          hdr.Get(litellmCostOriginalHeader),
-		DiscountAmount:    hdr.Get(litellmCostDiscountHeader),
-		MarginAmount:      hdr.Get(litellmCostMarginHeader),
-		MarginPercent:     hdr.Get(litellmCostMarginPercentHeader),
-	}
-	if c := g.Cost; positive(c.DiscountAmount) || positive(c.MarginAmount) || positive(c.MarginPercent) {
-		// Reported as-is: the proxy's figure is what the key is charged. But
-		// it is not the list rate every other figure here is, so say so.
-		warnings = append(warnings, Warning{Kind: WarnOther, Feature: "gateway_cost",
-			Details: fmt.Sprintf("gateway cost %q includes an operator discount (%q) or margin (%q, %q); "+
-				"not the list rate; the figure before them is %q", g.ResponseCost, c.DiscountAmount, c.MarginAmount,
-				c.MarginPercent, c.Original)})
+	g := Gateway{
+		CallID:          hdr.Get(litellmCallIDHeader),
+		ModelName:       hdr.Get(litellmModelHeader),
+		ResponseCost:    hdr.Get(litellmCostHeader),
+		Version:         hdr.Get(litellmVersionHeader),
+		KeySpendNanoUSD: headerUSD(hdr, litellmKeySpendHeader, "key_spend", "key spend", &warnings),
 	}
 	return g, warnings
 }
 
-// positive says whether a raw decimal header is a usable number above zero.
-func positive(raw string) bool {
+// parseGatewayCost reads the per-component split of a NON-STREAMED call.
+func parseGatewayCost(hdr http.Header) (GatewayCost, []Warning) {
+	var w []Warning
+	return GatewayCost{
+		InputNanoUSD:      headerUSD(hdr, litellmCostInputHeader, "gateway_cost", "input cost", &w),
+		CacheReadNanoUSD:  headerUSD(hdr, litellmCostCacheReadHeader, "gateway_cost", "cache read cost", &w),
+		CacheWriteNanoUSD: headerUSD(hdr, litellmCostCacheWriteHeader, "gateway_cost", "cache write cost", &w),
+		OutputNanoUSD:     headerUSD(hdr, litellmCostOutputHeader, "gateway_cost", "output cost", &w),
+		ReasoningNanoUSD:  headerUSD(hdr, litellmCostReasoningHeader, "gateway_cost", "reasoning cost", &w),
+		ToolUsageNanoUSD:  headerUSD(hdr, litellmCostToolUsageHeader, "gateway_cost", "tool usage cost", &w),
+		Original:          hdr.Get(litellmCostOriginalHeader),
+		DiscountAmount:    hdr.Get(litellmCostDiscountHeader),
+		MarginAmount:      hdr.Get(litellmCostMarginHeader),
+		MarginPercent:     hdr.Get(litellmCostMarginPercentHeader),
+	}, w
+}
+
+// adjustmentWarning flags a Reported total the operator's discount or margin
+// moved off the list rate. Kept as reported, since it is what the key is
+// charged, but every other figure here is list rate, so it says so. The text
+// is fixed, so a multi-batch call names it once. Callers pass it only when
+// the cost really came from the gateway.
+func adjustmentWarning(c GatewayCost) []Warning {
+	if !nonzero(c.DiscountAmount) && !nonzero(c.MarginAmount) && !nonzero(c.MarginPercent) {
+		return nil
+	}
+	return []Warning{{Kind: WarnOther, Feature: "gateway_cost",
+		Details: "gateway cost includes an operator discount or margin, so it is not the list rate; " +
+			"Gateway.Cost.Original is the figure before them"}}
+}
+
+// headerUSD parses one nano-USD header: nil when absent or "None", nil and a
+// warning when unusable.
+func headerUSD(hdr http.Header, header, feature, what string, warnings *[]Warning) *int64 {
+	raw := hdr.Get(header)
+	if raw == "" || isNoneLiteral(raw) {
+		return nil
+	}
 	nano, err := parseReportedCost(raw)
+	if err != nil {
+		*warnings = append(*warnings, Warning{Kind: WarnOther, Feature: feature,
+			Details: fmt.Sprintf("gateway reported an unusable %s %q: %v", what, raw, err)})
+		return nil
+	}
+	return &nano
+}
+
+// nonzero says whether a raw decimal header is a usable number other than
+// zero, either sign: a discount spelled as a negative margin is an
+// adjustment too.
+func nonzero(raw string) bool {
+	nano, err := parseReportedCost(strings.TrimPrefix(strings.TrimSpace(raw), "-"))
 	return err == nil && nano > 0
 }
 

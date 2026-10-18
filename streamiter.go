@@ -111,7 +111,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	if err != nil {
 		// The proxy's call id is worth most on a rejection: it is what
 		// matches this failure to the gateway's own log.
-		sum.gateway, _ = parseGatewayHeaders(hdr, true)
+		sum.gateway, _ = parseGatewayHeaders(hdr)
 		sum.err, sum.timing = err, timing
 		c.finish(sum)
 		return nil, warnings, err
@@ -155,7 +155,7 @@ func (s *Stream) read(pl *wirePlan, at time.Time) {
 	// is filled whichever way the stream ended: a call that timed out or was
 	// cut is exactly the one whose call id has to reach the log.
 	var gwWarnings []Warning
-	res.Gateway, gwWarnings = parseGatewayHeaders(resp.Header, true)
+	res.Gateway, gwWarnings = parseGatewayHeaders(resp.Header)
 	switch {
 	case stopped:
 		err = nil

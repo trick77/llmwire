@@ -305,8 +305,9 @@ func (s Stats) LogValue() slog.Value {
 	return slog.GroupValue(attrs...)
 }
 
-// usdString is the one log rendering of a nano-USD figure: six decimals, so a
-// sub-micro-dollar figure reads 0.000000. Log only; every total stays nano.
+// usdString is the one log rendering of a nano-USD figure: six decimals,
+// rounded to nearest, so a figure under 500 nano reads 0.000000. Log only;
+// every total stays nano.
 func usdString(nano int64) string {
 	return fmt.Sprintf("%.6f", float64(nano)/1e9)
 }
