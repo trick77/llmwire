@@ -98,6 +98,11 @@ means unknown, not free. What else the proxy said rides on `ChatResponse.Gateway
 / `StreamResult.Gateway` / `EmbedResponse.Gateway`: the call id it logged under, the deployment that
 really ran, the key's cumulative spend (a gauge, never summed) and the cost
 header verbatim, so an unpriced call can be matched to the gateway's own log.
+`Gateway.Cost` is the proxy's split of a non-streamed call's cost: uncached
+input, cache read, cache write, output and tool usage add up to the total;
+reasoning is a part of output, never added. On a non-streamed call, a discount
+or margin the operator configured is flagged with a warning, since that total
+is not the list rate.
 
 **Recovers tool calls a model wrote as markup.** Some deployments answer with
 `<tool_call>…</tool_call>` blocks (or an invented `<tool_invocation …/>`) in the

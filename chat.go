@@ -92,7 +92,13 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	cost, priceWarnings := priceCall(pl.profile, resp.Usage, hdr, 200, at)
 	resp.Usage.Cost = cost
 	warnings = append(warnings, priceWarnings...)
-	resp.Gateway = gateway
+	split, splitWarnings := parseGatewayCost(hdr)
+	gateway.Cost = split
+	gwWarnings = append(gwWarnings, splitWarnings...)
+	if cost.Provenance == Reported {
+		gwWarnings = append(gwWarnings, adjustmentWarning(split)...)
+	}
+	resp.Gateway, sum.gateway = gateway, gateway
 	warnings = append(warnings, gwWarnings...)
 	sum.content, sum.reasoning, sum.toolCalls = len(resp.Content), len(resp.Reasoning), len(resp.ToolCalls)
 	sum.finishReason, sum.usage = resp.FinishReason, resp.Usage

@@ -125,6 +125,16 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (_ *EmbedResponse,
 		out.Usage.Cost.NanoUSD += cost.NanoUSD
 		out.Usage.Cost.Provenance = mergeProvenance(out.Usage.Cost.Provenance, cost.Provenance, start == 0)
 		out.Usage.Cost.AppliedAt = cost.AppliedAt
+		split, splitWarnings := parseGatewayCost(hdr)
+		if len(req.Inputs) <= embedBatchSize {
+			// Single batch only: one batch's split beside a total summed over
+			// every batch would read as a fraction of the cost.
+			out.Gateway.Cost, sum.gateway.Cost = split, split
+			warnOnce(splitWarnings)
+		}
+		if cost.Provenance == Reported {
+			warnOnce(adjustmentWarning(split))
+		}
 		if out.Usage.Cost.Provenance == Unpriced {
 			// A partial sum is not a smaller price, it is an unknown one — and
 			// Cost's own contract is that Unpriced carries 0, because a caller

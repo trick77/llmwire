@@ -360,6 +360,7 @@ type EmbedResponse struct {
 	Timing Timing
 	// Gateway is the last batch's proxy headers, as on ChatResponse: its call
 	// id, and the key spend as of the end of the call. Empty on a direct route.
+	// Its Cost split is empty when the inputs took more than one batch.
 	Gateway Gateway
 }
 

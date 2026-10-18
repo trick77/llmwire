@@ -88,7 +88,7 @@ func (c *Client) logCall(s callSummary) {
 		"cache_write_tokens", Tokens(u.Input.CacheWrite),
 		"output_tokens", Tokens(u.Output.Total),
 		"reasoning_tokens", Tokens(u.Output.Reasoning),
-		"cost_usd", fmt.Sprintf("%.6f", float64(u.Cost.NanoUSD)/1e9),
+		"cost_usd", usdString(u.Cost.NanoUSD),
 		"cost_provenance", u.Cost.Provenance.String(),
 	)
 	if u.Cost.Window != "" {
@@ -101,8 +101,19 @@ func (c *Client) logCall(s callSummary) {
 		// The call id is how a figure here is matched to the proxy's own log;
 		// the deployment is what the body's alias hides.
 		attrs = append(attrs, "gateway_call_id", g.CallID, "gateway_model", g.ModelName)
+		if g.Version != "" {
+			attrs = append(attrs, "gateway_version", g.Version)
+		}
 		if g.KeySpendNanoUSD != nil {
-			attrs = append(attrs, "key_spend_usd", fmt.Sprintf("%.6f", float64(*g.KeySpendNanoUSD)/1e9))
+			attrs = append(attrs, "key_spend_usd", usdString(*g.KeySpendNanoUSD))
+		}
+		// The cache lanes are what the token counts alone cannot price:
+		// whether a cache write cost a premium on this deployment.
+		if v := g.Cost.CacheReadNanoUSD; v != nil {
+			attrs = append(attrs, "gateway_cache_read_usd", usdString(*v))
+		}
+		if v := g.Cost.CacheWriteNanoUSD; v != nil {
+			attrs = append(attrs, "gateway_cache_write_usd", usdString(*v))
 		}
 	}
 	t := s.timing
@@ -287,9 +298,16 @@ func (s Stats) LogValue() slog.Value {
 			"input_tokens", m.InputTokens, "cache_read_tokens", m.CacheReadTokens,
 			"cache_write_tokens", m.CacheWriteTokens,
 			"output_tokens", m.OutputTokens, "reasoning_tokens", m.ReasoningTokens,
-			"cost_usd", fmt.Sprintf("%.6f", float64(m.CostNanoUSD)/1e9),
+			"cost_usd", usdString(m.CostNanoUSD),
 			"unpriced_calls", m.UnpricedCalls, "unreported_calls", m.UnreportedCalls,
 		))
 	}
 	return slog.GroupValue(attrs...)
+}
+
+// usdString is the one log rendering of a nano-USD figure: six decimals,
+// rounded to nearest, so a figure under 500 nano reads 0.000000. Log only;
+// every total stays nano.
+func usdString(nano int64) string {
+	return fmt.Sprintf("%.6f", float64(nano)/1e9)
 }
