@@ -93,7 +93,12 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (_ *EmbedResponse,
 		// Read before the error check, as on Chat: on a failure the failing
 		// batch's call id is the one that matches the gateway's own log.
 		var gwWarnings []Warning
-		out.Gateway, gwWarnings = parseGatewayHeaders(hdr)
+		out.Gateway, gwWarnings = parseGatewayHeaders(hdr, false)
+		if start > 0 {
+			// One batch's split beside a total summed over every batch would
+			// read as a fraction of the cost: a multi-batch call carries none.
+			out.Gateway.Cost = GatewayCost{}
+		}
 		sum.gateway = out.Gateway
 		warnOnce(gwWarnings)
 		if err != nil {

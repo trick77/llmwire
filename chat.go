@@ -57,7 +57,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	// Read before the error checks: a proxy 429/5xx returns its headers, and
 	// its call id is what matches the failure to the gateway's own log. A
 	// nil header map (dial failure) reads as empty.
-	gateway, gwWarnings := parseGatewayHeaders(hdr)
+	gateway, gwWarnings := parseGatewayHeaders(hdr, false)
 	sum.gateway = gateway
 	if err != nil {
 		sum.err = err

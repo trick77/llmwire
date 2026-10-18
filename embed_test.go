@@ -273,6 +273,7 @@ func TestEmbed_CarriesTheGatewayBlock(t *testing.T) {
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(litellmCallIDHeader, "call-7")
 		w.Header().Set(litellmKeySpendHeader, "lots")
+		w.Header().Set(litellmCostInputHeader, "0.00001")
 		srv.Config.Handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(proxy.Close)
@@ -283,6 +284,17 @@ func TestEmbed_CarriesTheGatewayBlock(t *testing.T) {
 	}
 	if resp.Gateway.CallID != "call-7" {
 		t.Errorf("gateway = %+v, want call id call-7", resp.Gateway)
+	}
+	// One batch's split would read as a third of the summed total.
+	if resp.Gateway.Cost.Reported() {
+		t.Errorf("cost split = %+v, want none on a multi-batch call", resp.Gateway.Cost)
+	}
+	single, _, err := clientOn(t, proxy.URL).Embed(context.Background(), EmbedRequest{Model: "text-embedding-3-small", Inputs: inputs(3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := single.Gateway.Cost.InputNanoUSD; v == nil || *v != 10_000 {
+		t.Errorf("single-batch input cost = %v, want 10000 nano", v)
 	}
 	// The unusable key spend arrives on every batch and is named once.
 	var spend int

@@ -117,7 +117,8 @@ gofmt, build, golangci-lint (ship's config, no repo copy), secret scan, `go test
   `Reported 0`, because nothing distinguishes it from a genuinely free call.
   Literal `None`/`null` = not reported (LiteLLM sets headers via `str()`), never
   corrupt. Other proxy headers → `Gateway` block on the response
-  (`gatewayresp.go`): call id, deployment, key spend (**gauge**, never summed).
+  (`gatewayresp.go`): call id, deployment, key spend (**gauge**, never summed),
+  cost split (never on a stream, never re-summed into the total).
 - A `cost` block needs `source_url` + `verified_on` and all four chat lanes.
 - **No off-peak window ships attached**: vendors document them against credit burn,
   not USD. Round **up**, once, on the total.
