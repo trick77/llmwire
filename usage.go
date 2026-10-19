@@ -198,19 +198,11 @@ func (u *wireUsage) normalize() {
 	if u.CompletionTokens == nil {
 		u.CompletionTokens = u.OutputTokens
 	}
-	if u.PromptTokensDetails == nil && u.InputTokensDetails != nil {
-		d := *u.InputTokensDetails
-		u.PromptTokensDetails = &struct {
-			CachedTokens     *int64 `json:"cached_tokens"`
-			CacheWriteTokens *int64 `json:"cache_write_tokens"`
-		}{d.CachedTokens, d.CacheWriteTokens}
+	if u.PromptTokensDetails == nil {
+		u.PromptTokensDetails = u.InputTokensDetails
 	}
-	if u.CompletionTokensDetails == nil && u.OutputTokensDetails != nil {
-		d := *u.OutputTokensDetails
-		u.CompletionTokensDetails = &struct {
-			ReasoningTokens *int64 `json:"reasoning_tokens"`
-			TextTokens      *int64 `json:"text_tokens"`
-		}{d.ReasoningTokens, d.TextTokens}
+	if u.CompletionTokensDetails == nil {
+		u.CompletionTokensDetails = u.OutputTokensDetails
 	}
 }
 

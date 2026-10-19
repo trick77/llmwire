@@ -2,9 +2,7 @@ package llmwire
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -151,11 +149,11 @@ func renderInput(ms []Message) []any {
 			out = append(out, map[string]any{
 				"type":    "function_call_output",
 				"call_id": m.ToolCallID,
-				"output":  m.Text,
+				"output":  toolOutputText(m),
 			})
 		default:
 			if len(m.Parts) > 0 {
-				out = append(out, map[string]any{"role": string(m.Role), "content": renderResponsesParts(m.Parts)})
+				out = append(out, map[string]any{"role": string(m.Role), "content": renderResponsesParts(m.Role, m.Parts)})
 			} else if m.Text != "" || len(m.ToolCalls) == 0 {
 				out = append(out, map[string]any{"role": string(m.Role), "content": m.Text})
 			}
@@ -180,17 +178,36 @@ func renderInput(ms []Message) []any {
 
 // renderResponsesParts spells a multimodal turn. UNMEASURED for images: the
 // protocol's input_image takes image_url as a bare STRING, where Chat
-// Completions nests it in an object.
-func renderResponsesParts(parts []Part) []any {
+// Completions nests it in an object. An assistant turn takes output_text only
+// (the API refuses input_text there, naming output_text and refusal), so its
+// text parts are spelled that way; plan refuses an image on it.
+func renderResponsesParts(role Role, parts []Part) []any {
+	textType := "input_text"
+	if role == RoleAssistant {
+		textType = "output_text"
+	}
 	out := make([]any, 0, len(parts))
 	for _, p := range parts {
 		if p.Kind == PartImage {
 			out = append(out, map[string]any{"type": "input_image", "image_url": p.URL})
 			continue
 		}
-		out = append(out, map[string]any{"type": "input_text", "text": p.Text})
+		out = append(out, map[string]any{"type": textType, "text": p.Text})
 	}
 	return out
+}
+
+// toolOutputText is a tool result as the protocol's output string: Text, or
+// the text of its parts. plan refuses an image in a tool result here.
+func toolOutputText(m Message) string {
+	if len(m.Parts) == 0 {
+		return m.Text
+	}
+	var b strings.Builder
+	for _, p := range m.Parts {
+		b.WriteString(p.Text)
+	}
+	return b.String()
 }
 
 // renderResponsesTools spells the tools flat: no nested "function" object.
@@ -280,6 +297,9 @@ type wireOutputItem struct {
 	Content   []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
+		// Refusal is the text of a refusal part, the model declining: an
+		// answer, as Chat Completions reports it, never "no output".
+		Refusal string `json:"refusal"`
 	} `json:"content"`
 	Summary          json.RawMessage `json:"summary"`
 	EncryptedContent string          `json:"encrypted_content"`
@@ -327,6 +347,11 @@ func decodeResponse(redact redactor, raw json.RawMessage) (turn, error) {
 
 	t := turn{model: w.Model, usage: parseUsage(w.Usage)}
 	var content, reasoning strings.Builder
+	// unreplayable records a reasoning item that cannot go back. Its calls
+	// must not go back alone either: a function_call without its reasoning
+	// item is what the API documents as refused ("Item 'fc_…' of type
+	// 'function_call' was provided without its required 'reasoning' item").
+	unreplayable := false
 	for _, rawItem := range w.Output {
 		var it wireOutputItem
 		if err := json.Unmarshal(rawItem, &it); err != nil {
@@ -339,15 +364,19 @@ func decodeResponse(redact redactor, raw json.RawMessage) (turn, error) {
 			t.calls = append(t.calls, ToolCall{ID: it.CallID, Type: "function", Name: it.Name,
 				Arguments: argumentsText(it.Arguments)})
 		case "message":
-			for _, c := range it.Content {
-				if c.Type == "output_text" {
-					content.WriteString(c.Text)
-				}
-			}
+			content.WriteString(messageText(it))
 		}
-		if item, ok := replayItem(it); ok {
+		item, ok := replayItem(it)
+		if ok {
 			t.items = append(t.items, item)
+		} else if it.Type == "reasoning" {
+			unreplayable = true
 		}
+	}
+	if unreplayable {
+		// The turn then replays as Text and ToolCalls, like a hand-built one:
+		// the reasoning is lost either way, and nothing contradicts itself.
+		t.items = nil
 	}
 	t.content, t.reasoning = content.String(), reasoning.String()
 
@@ -399,15 +428,31 @@ func summaryText(raw json.RawMessage) string {
 	return b.String()
 }
 
+// messageText is an assistant message item's text: its output_text parts and
+// any refusal, in order.
+func messageText(it wireOutputItem) string {
+	var b strings.Builder
+	for _, c := range it.Content {
+		switch c.Type {
+		case "output_text":
+			b.WriteString(c.Text)
+		case "refusal":
+			b.WriteString(c.Refusal)
+		}
+	}
+	return b.String()
+}
+
 // replayItem is an output item in the shape the next request's input takes,
 // or false for one that cannot go back: a reasoning item without its
-// encrypted content would need the server-side state store:false forgoes, and
-// an item type this package does not model has no known input spelling.
+// encrypted content or its id would need the server-side state store:false
+// forgoes, and an item type this package does not model has no known input
+// spelling.
 func replayItem(it wireOutputItem) (json.RawMessage, bool) {
 	var v any
 	switch it.Type {
 	case "reasoning":
-		if it.EncryptedContent == "" {
+		if it.EncryptedContent == "" || it.ID == "" {
 			return nil, false
 		}
 		summary := it.Summary
@@ -417,18 +462,18 @@ func replayItem(it wireOutputItem) (json.RawMessage, bool) {
 		v = map[string]any{"type": "reasoning", "id": it.ID, "summary": summary,
 			"encrypted_content": it.EncryptedContent}
 	case "function_call":
-		v = map[string]any{"type": "function_call", "id": it.ID, "call_id": it.CallID,
+		call := map[string]any{"type": "function_call", "call_id": it.CallID,
 			"name": it.Name, "arguments": argumentsText(it.Arguments)}
+		// An empty id is refused as input; an absent one is the hand-built
+		// shape.
+		if it.ID != "" {
+			call["id"] = it.ID
+		}
+		v = call
 	case "message":
 		// As the plain role form a hand-built turn uses; the output item's
 		// own shape (phase, annotations) is not measured as input.
-		var b strings.Builder
-		for _, c := range it.Content {
-			if c.Type == "output_text" {
-				b.WriteString(c.Text)
-			}
-		}
-		v = map[string]any{"role": string(RoleAssistant), "content": b.String()}
+		v = map[string]any{"role": string(RoleAssistant), "content": messageText(it)}
 	default:
 		return nil, false
 	}
@@ -445,8 +490,10 @@ func responseItemCallIDs(items []json.RawMessage) ([]string, error) {
 			Type   string `json:"type"`
 			CallID string `json:"call_id"`
 		}
-		if err := json.Unmarshal(raw, &it); err != nil {
-			return nil, fmt.Errorf("ResponseItems[%d] is not a JSON object: %w", i, err)
+		// null decodes into a struct without error, and would go out as a
+		// null input item.
+		if !strings.HasPrefix(strings.TrimSpace(string(raw)), "{") || json.Unmarshal(raw, &it) != nil {
+			return nil, fmt.Errorf("ResponseItems[%d] is not a JSON object; append Assistant() unmodified", i)
 		}
 		if it.Type == "function_call" {
 			ids = append(ids, it.CallID)
@@ -518,7 +565,7 @@ func readResponsesStream(body io.Reader, guard *stallGuard, bounds streamBounds,
 		}
 
 		switch ev.Type {
-		case "response.output_text.delta":
+		case "response.output_text.delta", "response.refusal.delta":
 			if ev.Delta != "" {
 				content.WriteString(ev.Delta)
 				res.Chars += int64(utf8.RuneCountInString(ev.Delta))
@@ -603,10 +650,8 @@ func readResponsesStream(body io.Reader, guard *stallGuard, bounds streamBounds,
 		return res, frameErr
 	case completed:
 		return res, nil
-	case errors.Is(sc.Err(), context.Canceled), errors.Is(sc.Err(), context.DeadlineExceeded):
-		return res, fmt.Errorf("llmwire: reading stream: %w", sc.Err())
 	case sc.Err() != nil:
-		return res, fmt.Errorf("llmwire: %w: reading stream: %w", ErrMalformedResponse, sc.Err())
+		return res, scanEndErr(sc.Err())
 	default:
 		return res, fmt.Errorf("llmwire: %w: stream ended after %d events (%d chars) without response.completed",
 			ErrMalformedResponse, res.Events, res.Chars)

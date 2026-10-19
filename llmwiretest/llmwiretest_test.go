@@ -110,7 +110,7 @@ func TestEmbeddingsAndListing(t *testing.T) {
 		t.Errorf("vectors %v", resp.Vectors)
 	}
 	models, _, err := c.ListModels(context.Background())
-	if err != nil || len(models) != 2 {
+	if err != nil || len(models) != 3 {
 		t.Errorf("models %v, %v", models, err)
 	}
 	if n := len(srv.Requests()); n != 2 {

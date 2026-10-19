@@ -424,16 +424,8 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 	switch {
 	case frameErr != nil:
 		endErr = frameErr
-	case errors.Is(sc.Err(), context.Canceled), errors.Is(sc.Err(), context.DeadlineExceeded):
-		// The read was stopped from this side: the caller, a guard or the
-		// call cap. explain names which; the endpoint did nothing wrong.
-		endErr = fmt.Errorf("llmwire: reading stream: %w", sc.Err())
 	case sc.Err() != nil:
-		// A scanner failure is a stream cut short: a line past the cap, a
-		// body that ended mid-line. Wrapped in the sentinel a caller
-		// dispatches on for "the endpoint did not finish", the same one the
-		// missing-finish case carries.
-		endErr = fmt.Errorf("llmwire: %w: reading stream: %w", ErrMalformedResponse, sc.Err())
+		endErr = scanEndErr(sc.Err())
 	case !res.Done && res.FinishReason == "":
 		endErr = fmt.Errorf("llmwire: %w: stream ended after %d events (%d chars) without finish_reason or %s",
 			ErrMalformedResponse, res.Events, res.Chars, doneMarker)
@@ -473,6 +465,20 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 		res.ToolCalls = append(res.ToolCalls, call)
 	}
 	return res, rec.warnings(), endErr
+}
+
+// scanEndErr classifies a body read that failed, for both stream readers.
+func scanEndErr(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// The read was stopped from this side: the caller, a guard or the
+		// call cap. explain names which; the endpoint did nothing wrong.
+		return fmt.Errorf("llmwire: reading stream: %w", err)
+	}
+	// A scanner failure is a stream cut short: a line past the cap, a body
+	// that ended mid-line. Wrapped in the sentinel a caller dispatches on for
+	// "the endpoint did not finish", the same one the missing-finish case
+	// carries.
+	return fmt.Errorf("llmwire: %w: reading stream: %w", ErrMalformedResponse, err)
 }
 
 // frameMeter records the silences between `data:` frames, shared by both

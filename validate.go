@@ -736,6 +736,9 @@ func (v *validation) checkExtraBody(req ChatRequest) {
 	default:
 		otherCaps = []string{ParamMaxTokens}
 	}
+	if v.profile.WireAPI != WireResponses {
+		otherCaps = append(otherCaps, ParamMaxOutputTokens)
+	}
 	for _, key := range append(keys, otherCaps...) {
 		if _, set := req.ExtraBody[key]; !set {
 			continue
@@ -763,8 +766,21 @@ func (v *validation) checkExtraBody(req ChatRequest) {
 // that contradicts itself.
 func (v *validation) checkProtocol(req ChatRequest) {
 	responses := v.profile.WireAPI == WireResponses
-	dropped := false
+	dropped, droppedThinking := false, false
 	for i, m := range req.Messages {
+		if responses && m.ReasoningContent != "" {
+			// Another vendor's plain-text reasoning has no input spelling
+			// here; only encrypted items replay.
+			v.out.Messages[i].ReasoningContent = ""
+			droppedThinking = true
+		}
+		if responses && (m.Role == RoleAssistant || m.Role == RoleTool) && m.HasImage() {
+			// Structural on this protocol: an assistant turn takes
+			// output_text only, a tool result one output string.
+			v.reject("messages", fmt.Sprintf("message %d has role %q and carries an image, "+
+				"which the Responses protocol cannot send there", i, m.Role))
+			return
+		}
 		if len(m.ResponseItems) == 0 {
 			continue
 		}
@@ -792,6 +808,10 @@ func (v *validation) checkProtocol(req ChatRequest) {
 				"append Assistant() unmodified", i, ids, want))
 			return
 		}
+	}
+	if droppedThinking {
+		v.warn(WarnCompatibility, "messages",
+			"ReasoningContent was dropped: the Responses protocol replays only its own encrypted reasoning")
 	}
 	if dropped {
 		v.warn(WarnCompatibility, "messages",

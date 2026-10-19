@@ -239,7 +239,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		embeddings(w, req)
 	case strings.HasSuffix(req.Path, "/models"):
 		writeJSON(w, map[string]any{"object": "list", "data": []any{
-			map[string]any{"id": ChatModel}, map[string]any{"id": EmbedModel},
+			map[string]any{"id": ChatModel}, map[string]any{"id": ResponsesModel}, map[string]any{"id": EmbedModel},
 		}})
 	default:
 		http.Error(w, `{"error":{"message":"no such route"}}`, http.StatusNotFound)
