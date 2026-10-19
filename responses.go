@@ -160,7 +160,11 @@ func renderInput(ms []Message) []any {
 				out = append(out, map[string]any{"role": string(m.Role), "content": m.Text})
 			}
 			// A turn built by hand, or from a Chat Completions model: its
-			// calls as items, with no reasoning to go before them.
+			// calls as items, with no reasoning to go before them and no fc_
+			// item id. UNMEASURED, and likely REFUSED by a reasoning model
+			// under store:false: OpenAI documents "Item 'fc_…' of type
+			// 'function_call' was provided without its required 'reasoning'
+			// item". Measured accepted is only the Assistant() turn.
 			for _, tc := range m.ToolCalls {
 				out = append(out, map[string]any{
 					"type":      "function_call",
@@ -371,8 +375,9 @@ func decodeResponse(redact redactor, raw json.RawMessage) (turn, error) {
 		return turn{}, fmt.Errorf("llmwire: %w: response status %q (body: %s)",
 			ErrResponseShape, w.Status, bodySnippet(redact, raw))
 	}
-	if len(t.items) == 0 && t.content == "" {
-		return turn{}, fmt.Errorf("llmwire: %w: response carried no output and no error (body: %s)",
+	// A reasoning item alone is no answer: an empty success in all but name.
+	if len(t.calls) == 0 && t.content == "" && t.finish == "stop" {
+		return turn{}, fmt.Errorf("llmwire: %w: response carried no answer and no error (body: %s)",
 			ErrResponseShape, bodySnippet(redact, raw))
 	}
 	return t, nil
@@ -481,6 +486,9 @@ func readResponsesStream(body io.Reader, guard *stallGuard, bounds streamBounds,
 		// calls, which is the Index a consumer sees.
 		calls     = map[int]int{}
 		gotDeltas = map[int]bool{}
+		// partial is the calls as the deltas built them, returned only when
+		// the stream ends without its completed event.
+		partial   []ToolCall
 		completed bool
 		frameErr  error
 	)
@@ -533,6 +541,7 @@ func readResponsesStream(body io.Reader, guard *stallGuard, bounds streamBounds,
 			}
 			ord := len(calls)
 			calls[ev.OutputIndex] = ord
+			partial = append(partial, ToolCall{ID: ev.Item.CallID, Type: "function", Name: ev.Item.Name})
 			var tc toolCallDelta
 			tc.Index, tc.ID, tc.Type, tc.Function.Name = ord, ev.Item.CallID, "function", ev.Item.Name
 			emit(streamEvent{kind: evToolCall, toolCall: tc})
@@ -542,6 +551,7 @@ func readResponsesStream(body io.Reader, guard *stallGuard, bounds streamBounds,
 				continue
 			}
 			gotDeltas[ev.OutputIndex] = true
+			partial[ord].Arguments += ev.Delta
 			emit(streamEvent{kind: evToolCall, toolCall: argsDelta(ord, ev.Delta)})
 		case "response.function_call_arguments.done":
 			// The whole arguments in one piece, for a stream that sent no
@@ -551,6 +561,7 @@ func readResponsesStream(body io.Reader, guard *stallGuard, bounds streamBounds,
 				continue
 			}
 			if args := argumentsText(ev.Arguments); args != "" {
+				partial[ord].Arguments = args
 				emit(streamEvent{kind: evToolCall, toolCall: argsDelta(ord, args)})
 			}
 		case "response.completed", "response.incomplete":
@@ -585,7 +596,7 @@ func readResponsesStream(body io.Reader, guard *stallGuard, bounds streamBounds,
 	if !completed {
 		// What arrived before the failure, as readStream returns it: the
 		// paid-for partial rides beside the error.
-		res.Content, res.Reasoning = content.String(), reasoning.String()
+		res.Content, res.Reasoning, res.ToolCalls = content.String(), reasoning.String(), partial
 	}
 	switch {
 	case frameErr != nil:

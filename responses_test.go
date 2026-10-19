@@ -221,6 +221,12 @@ func TestDecodeResponse_Endings(t *testing.T) {
 		"background status":      {body: `{"status":"queued","output":[]}`, sentinel: ErrResponseShape},
 		"not JSON":               {body: `<html>`, sentinel: ErrMalformedResponse},
 		"unreplayable reasoning": {body: `{"status":"completed","output":[{"type":"reasoning","id":"rs"}]}`, sentinel: ErrResponseShape},
+		"reasoning and no answer": {body: `{"status":"completed","output":[{"type":"reasoning","id":"rs","encrypted_content":"x"}]}`,
+			sentinel: ErrResponseShape},
+		// The cap ran out inside the thinking: an empty answer, cut, is the
+		// same report Chat Completions gives, not an error.
+		"cut while thinking": {body: `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},
+			"output":[{"type":"reasoning","id":"rs","encrypted_content":"x"}]}`, finish: "length"},
 	} {
 		resp, err := parseResponsesResponseWith(Redact, json.RawMessage(tc.body))
 		var apiErr *APIError
@@ -353,6 +359,17 @@ func TestReadResponsesStream_Failures(t *testing.T) {
 		if res.Content != tc.partial {
 			t.Errorf("%s: partial %q, want %q", name, res.Content, tc.partial)
 		}
+	}
+
+	// A call cut mid-arguments comes back as far as it got, as readStream
+	// returns one: Collect promises the paid-for partial.
+	res, _, err := readResponsesSSE(t, []string{
+		`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"c","name":"f"}}`,
+		`data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"a\":"}`,
+	})
+	if !errors.Is(err, ErrMalformedResponse) || len(res.ToolCalls) != 1 ||
+		res.ToolCalls[0] != (ToolCall{ID: "c", Type: "function", Name: "f", Arguments: `{"a":`}) {
+		t.Errorf("cut call: %+v, %v", res.ToolCalls, err)
 	}
 }
 

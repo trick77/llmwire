@@ -31,9 +31,11 @@ func TestProbe_SolResponsesToolLoop(t *testing.T) {
 	ctx := context.Background()
 	req := ChatRequest{
 		Model: model,
-		// Arithmetic, so the model reasons: a trivial prompt reported
-		// reasoning_tokens 0 even at effort high.
-		Messages: []Message{User("Think carefully first: take the number of cantons in Switzerland, " +
+		// A system turn first, as noergler's mention loop opens: the role is
+		// UNMEASURED on /responses until this runs. Then arithmetic, so the
+		// model reasons: a trivial prompt reported reasoning_tokens 0 even at
+		// effort high.
+		Messages: []Message{System("You are a terse assistant. Use tools when asked."), User("Think carefully first: take the number of cantons in Switzerland, " +
 			"multiply by the number of letters in its capital, subtract 70. If the result is even, the city " +
 			"is Bern, otherwise Basel. Then call get_weather for that city. Do not answer in prose.")},
 		Tools: []Tool{{Name: "get_weather", Description: "Current weather for a city",
@@ -80,7 +82,7 @@ func TestProbe_SolResponsesToolLoop(t *testing.T) {
 		t.Errorf("FINDING non-streamed calls unpriced: %v / %v", r1.Usage.Cost.Provenance, r2.Usage.Cost.Provenance)
 	}
 
-	req.Messages = req.Messages[:1]
+	req.Messages = req.Messages[:2]
 	theMeter.reserve(t, model)
 	s, _, err := c.ChatStream(ctx, req)
 	if err != nil {
