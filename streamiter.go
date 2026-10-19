@@ -99,7 +99,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 		return nil, nil, err
 	}
 	sum := callSummary{kind: "chat_stream", model: req.Model, plan: pl, warnings: warnings}
-	body, err := renderChatBody(pl)
+	body, err := pl.render()
 	if err != nil {
 		sum.err = err
 		c.finish(sum)
@@ -107,7 +107,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 	}
 	at := c.now()
 
-	x, timing, hdr, err := c.openStream(ctx, body)
+	x, timing, hdr, err := c.openStream(ctx, pl.route(), body)
 	if err != nil {
 		// The proxy's call id is worth most on a rejection: it is what
 		// matches this failure to the gateway's own log.
@@ -137,9 +137,18 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest) (*Stream, []Wa
 // read consumes the stream on its own goroutine and publishes the result.
 func (s *Stream) read(pl *wirePlan, at time.Time) {
 	resp := s.resp
-	res, inlineWarnings, err := readStream(resp.Body, s.guard,
-		streamBounds{idle: s.client.idle, toolIdle: pl.req.ToolCallIdleTimeout}, s.push, s.client.redact,
-		pl.recoversInline(), s.client.now, s.start)
+	bounds := streamBounds{idle: s.client.idle, toolIdle: pl.req.ToolCallIdleTimeout}
+	var (
+		res            StreamResult
+		inlineWarnings []Warning
+		err            error
+	)
+	if pl.responses() {
+		res, err = readResponsesStream(resp.Body, s.guard, bounds, s.push, s.client.redact, s.client.now, s.start)
+	} else {
+		res, inlineWarnings, err = readStream(resp.Body, s.guard, bounds, s.push, s.client.redact,
+			pl.recoversInline(), s.client.now, s.start)
+	}
 	res.Timing.Headers = s.headers
 	res.ReasoningSent = reasoningLabel(pl.req.Reasoning)
 

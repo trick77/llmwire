@@ -188,6 +188,14 @@ type StreamResult struct {
 	// ReasoningSent is the reasoning knob the request put on the wire, as on
 	// ChatResponse. Empty from RawStream, which sits below the plan.
 	ReasoningSent string
+	// ResponseItems is the turn for replay; see Message.ResponseItems.
+	ResponseItems []json.RawMessage
+}
+
+// Assistant is this turn as the history entry for the next request, as on
+// ChatResponse.
+func (r StreamResult) Assistant() Message {
+	return assistantTurn(r.Content, r.ToolCalls, r.ResponseItems)
 }
 
 // streamBounds are the idle bounds a stream runs under: idle for the whole
@@ -314,12 +322,7 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 64<<10), maxStreamLine)
 
-	// Two clocks for the same silences: lastData starts with the body, so
-	// MaxCommentGap measures the stream itself; lastFrame starts with the
-	// request, so MaxDataGap includes the wait for the first frame, which is a
-	// gap the guard had to tolerate too.
-	lastData := now()
-	lastFrame := start
+	meter := newFrameMeter(now, start)
 	for sc.Scan() {
 		res.Bytes += int64(len(sc.Bytes()))
 		line := strings.TrimRight(sc.Text(), "\r")
@@ -327,27 +330,10 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 			// Deliberately no guard.arm here. See the doc comment.
 			continue
 		}
-
-		// Measure the gap this frame closes before re-arming, so the recorded
-		// figure is the real silence the guard had to tolerate.
-		at := now()
-		if gap := at.Sub(lastData); gap > res.MaxCommentGap {
-			res.MaxCommentGap = gap
-		}
-		if gap := at.Sub(lastFrame); gap > res.MaxDataGap {
-			res.MaxDataGap = gap
-		}
-		lastData = at
-		lastFrame = at
-		if res.Timing.FirstData == 0 {
-			res.Timing.FirstData = at.Sub(start)
-		}
+		// Measured before re-arming, so the recorded gap is the real silence
+		// the guard had to tolerate.
+		meter.frame(&res)
 		guard.arm(idle, stallIdle)
-
-		// Counted per event rather than per line: an event is "data:…" plus a
-		// blank separator, so counting lines reports double, and a log saying
-		// 824 for a 412-chunk stream is one nobody can reconcile.
-		res.Events++
 
 		payload := strings.TrimSpace(strings.TrimPrefix(line, dataPrefix))
 		if payload == doneMarker {
@@ -438,16 +424,8 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 	switch {
 	case frameErr != nil:
 		endErr = frameErr
-	case errors.Is(sc.Err(), context.Canceled), errors.Is(sc.Err(), context.DeadlineExceeded):
-		// The read was stopped from this side: the caller, a guard or the
-		// call cap. explain names which; the endpoint did nothing wrong.
-		endErr = fmt.Errorf("llmwire: reading stream: %w", sc.Err())
 	case sc.Err() != nil:
-		// A scanner failure is a stream cut short: a line past the cap, a
-		// body that ended mid-line. Wrapped in the sentinel a caller
-		// dispatches on for "the endpoint did not finish", the same one the
-		// missing-finish case carries.
-		endErr = fmt.Errorf("llmwire: %w: reading stream: %w", ErrMalformedResponse, sc.Err())
+		endErr = scanEndErr(sc.Err())
 	case !res.Done && res.FinishReason == "":
 		endErr = fmt.Errorf("llmwire: %w: stream ended after %d events (%d chars) without finish_reason or %s",
 			ErrMalformedResponse, res.Events, res.Chars, doneMarker)
@@ -487,6 +465,55 @@ func readStream(body io.Reader, guard *stallGuard, bounds streamBounds, sink fun
 		res.ToolCalls = append(res.ToolCalls, call)
 	}
 	return res, rec.warnings(), endErr
+}
+
+// scanEndErr classifies a body read that failed, for both stream readers.
+func scanEndErr(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// The read was stopped from this side: the caller, a guard or the
+		// call cap. explain names which; the endpoint did nothing wrong.
+		return fmt.Errorf("llmwire: reading stream: %w", err)
+	}
+	// A scanner failure is a stream cut short: a line past the cap, a body
+	// that ended mid-line. Wrapped in the sentinel a caller dispatches on for
+	// "the endpoint did not finish", the same one the missing-finish case
+	// carries.
+	return fmt.Errorf("llmwire: %w: reading stream: %w", ErrMalformedResponse, err)
+}
+
+// frameMeter records the silences between `data:` frames, shared by both
+// stream readers so the two protocols report Timing and gaps alike.
+//
+// Two clocks for the same silences: lastData starts with the body, so
+// MaxCommentGap measures the stream itself; lastFrame starts with the request,
+// so MaxDataGap includes the wait for the first frame, which is a gap the
+// guard had to tolerate too.
+type frameMeter struct {
+	now                        func() time.Time
+	start, lastData, lastFrame time.Time
+}
+
+func newFrameMeter(now func() time.Time, start time.Time) *frameMeter {
+	return &frameMeter{now: now, start: start, lastData: now(), lastFrame: start}
+}
+
+// frame records one `data:` frame on res.
+func (m *frameMeter) frame(res *StreamResult) {
+	at := m.now()
+	if gap := at.Sub(m.lastData); gap > res.MaxCommentGap {
+		res.MaxCommentGap = gap
+	}
+	if gap := at.Sub(m.lastFrame); gap > res.MaxDataGap {
+		res.MaxDataGap = gap
+	}
+	m.lastData, m.lastFrame = at, at
+	if res.Timing.FirstData == 0 {
+		res.Timing.FirstData = at.Sub(m.start)
+	}
+	// Counted per event rather than per line: an event is "data:…" plus a
+	// blank separator, so counting lines reports double, and a log saying 824
+	// for a 412-chunk stream is one nobody can reconcile.
+	res.Events++
 }
 
 // isJSONNull reports whether raw is the literal null, so a `"error": null` field

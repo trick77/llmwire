@@ -53,7 +53,7 @@ func (c *Client) logCall(s callSummary) {
 	attrs = append(attrs, "kind", s.kind, "model", s.model)
 	if pl := s.plan; pl != nil {
 		req := pl.req
-		attrs = append(attrs, "messages", len(req.Messages), "tools", len(req.Tools))
+		attrs = append(attrs, "wire_api", string(pl.profile.WireAPI), "messages", len(req.Messages), "tools", len(req.Tools))
 		if req.MaxTokens != nil {
 			attrs = append(attrs, "max_tokens", *req.MaxTokens, "cap_param", pl.capParam)
 		}

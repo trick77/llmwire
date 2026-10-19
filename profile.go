@@ -32,6 +32,28 @@ const (
 	EndpointEmbeddings Endpoint = "embeddings"
 )
 
+// WireAPI is which OpenAI request protocol a chat profile speaks. Both carry
+// the same intents; only the body, the reply and the stream differ.
+//
+// A profile fact fixed at load, never chosen per request: a conversation that
+// switched protocol between rounds would lose the reasoning state the second
+// protocol carries and the first has no field for.
+type WireAPI string
+
+// The protocols a chat profile can speak.
+const (
+	// WireChatCompletions is POST /chat/completions, the default.
+	WireChatCompletions WireAPI = "chat_completions"
+	// WireResponses is POST /responses. It exists for one measured reason:
+	// gpt-6.1-sol behind Azure refuses tools on Chat Completions while it
+	// reasons ("Function tools with reasoning_effort are not supported for
+	// ai-gateway-gpt-6.1-sol in /v1/chat/completions. To use function tools,
+	// use /v1/responses or set reasoning_effort to 'none'.", 2026-10-19), and
+	// Responses also replays the model's encrypted reasoning across a tool
+	// round, which Chat Completions has no field for.
+	WireResponses WireAPI = "responses"
+)
+
 // ReasoningControl is HOW a model's reasoning depth is expressed on the wire.
 // Models that reason differ in the knob, not just in its values: one takes a
 // nested object, another an effort string, a third a token budget.
@@ -268,6 +290,9 @@ type Profile struct {
 	Gateway string `yaml:"gateway"`
 
 	Endpoint Endpoint `yaml:"endpoint"`
+	// WireAPI is the request protocol, for a chat profile. Defaults to
+	// chat_completions at load.
+	WireAPI WireAPI `yaml:"wire_api"`
 	// WireModelID is what goes in the request body's "model" field, which is not
 	// always the ID a caller uses: behind a gateway it is the proxy's alias.
 	WireModelID string `yaml:"wire_model_id"`
@@ -335,6 +360,8 @@ const (
 const (
 	ParamMaxTokens           = "max_tokens"
 	ParamMaxCompletionTokens = "max_completion_tokens"
+	// ParamMaxOutputTokens is the Responses protocol's cap, its only spelling.
+	ParamMaxOutputTokens = "max_output_tokens"
 )
 
 // Keys a derived (based) profile is allowed to set. Everything else is a
@@ -524,6 +551,8 @@ func (p Profile) validateEmbeddings(bad func(string, ...any) error) error {
 		return bad("an embeddings profile must not declare streaming")
 	case p.MaxTokensParam != "":
 		return bad("an embeddings profile must not declare max_tokens_param; the route takes no output cap")
+	case p.WireAPI != "" && p.WireAPI != WireChatCompletions:
+		return bad("an embeddings profile must not declare wire_api; it names a chat protocol")
 	}
 	// Required, not optional. A caller sizes a vector column and an index to
 	// this number before it ever makes a call, so leaving it absent would push
@@ -532,6 +561,33 @@ func (p Profile) validateEmbeddings(bad func(string, ...any) error) error {
 	if p.Embedding.DefaultDimensions <= 0 {
 		return bad("an embeddings profile needs a positive default_dimensions; " +
 			"a caller sizes its vector storage to it before the first call")
+	}
+	return nil
+}
+
+// validateResponses refuses what the Responses protocol has no spelling for.
+// Each is a profile that would load and then send a key the endpoint does not
+// read, or parse a reply shape it never sends.
+func (p Profile) validateResponses(bad func(string, ...any) error) error {
+	r, t, st := p.Reasoning, p.Tools, p.Streaming
+	switch {
+	case p.MaxTokensParam != ParamMaxOutputTokens:
+		return bad("wire_api %q caps output with %q only, got max_tokens_param %q",
+			WireResponses, ParamMaxOutputTokens, p.MaxTokensParam)
+	case r.Supported && r.Control != ControlEffort:
+		return bad("wire_api %q takes reasoning as reasoning.effort; control %q has no spelling there",
+			WireResponses, r.Control)
+	case r.StreamField != "" || r.LeaksCloseTag:
+		return bad("wire_api %q streams reasoning as typed events; stream_field and leaks_close_tag describe chat deltas",
+			WireResponses)
+	case t.Format == FormatXML || t.RecoverInlineMarkup:
+		return bad("wire_api %q returns tool calls as function_call items; xml format and inline recovery do not apply",
+			WireResponses)
+	case st.NeedsIncludeUsage || st.AcceptsStreamOptions:
+		// Usage rides on response.completed whatever the request says, and
+		// stream_options is a Chat Completions key.
+		return bad("wire_api %q has no stream_options; needs_include_usage and accepts_stream_options must be false",
+			WireResponses)
 	}
 	return nil
 }
@@ -565,9 +621,18 @@ func (p Profile) validateChat(bad func(string, ...any) error) error {
 		return bad("a chat profile must not declare embedding settings")
 	}
 
-	if p.MaxTokensParam != ParamMaxTokens && p.MaxTokensParam != ParamMaxCompletionTokens {
-		return bad("max_tokens_param must be %q or %q, got %q",
-			ParamMaxTokens, ParamMaxCompletionTokens, p.MaxTokensParam)
+	switch p.WireAPI {
+	case WireChatCompletions:
+		if p.MaxTokensParam != ParamMaxTokens && p.MaxTokensParam != ParamMaxCompletionTokens {
+			return bad("max_tokens_param must be %q or %q, got %q",
+				ParamMaxTokens, ParamMaxCompletionTokens, p.MaxTokensParam)
+		}
+	case WireResponses:
+		if err := p.validateResponses(bad); err != nil {
+			return err
+		}
+	default:
+		return bad("wire_api %q is not %q or %q", p.WireAPI, WireChatCompletions, WireResponses)
 	}
 
 	r := p.Reasoning

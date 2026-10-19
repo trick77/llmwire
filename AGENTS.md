@@ -3,9 +3,10 @@
 ## What this is
 
 Dependency-light Go **library**, one package at repo root plus `llmwiretest`
-(synthetic profiles + recording fake, for consumers' tests). **One** wire protocol:
-OpenAI-compatible `/chat/completions` + `/embeddings`. Anthropic, Gemini-native,
-Bedrock: permanently out of scope.
+(synthetic profiles + recording fake, for consumers' tests). OpenAI protocols only:
+`/chat/completions` + `/embeddings`, `/responses` for `wire_api: responses`.
+Protocol is a **profile fact fixed at load**, never per request. Anthropic,
+Gemini-native, Bedrock: permanently out of scope.
 
 ## Commands
 
@@ -54,9 +55,13 @@ gofmt, build, golangci-lint (ship's config, no repo copy), secret scan, `go test
 - A demoted (`BestEffort`) refusal must DROP the knob on the coerced request.
 - `Validate` is exported and read-only → the coerced copy is deep.
 - Streaming is a `plan` parameter, never a request field.
-- `ExtraBody` merges last and **wins**; top level only. Four keys are refused
-  in `plan`: `stream`, `stream_options`, `model`, and the cap spelling the
-  profile does not take.
+- `ExtraBody` merges last and **wins**; top level only. Refused in `plan`:
+  `stream`, `stream_options`, `model`, and the cap spelling the profile does
+  not take; on Responses also `input`, `store`, `include` and both chat caps.
+- Responses is **stateless** (`store:false`, encrypted reasoning replayed via
+  `Message.ResponseItems`). Tool loops append `resp.Assistant()`, never a
+  rebuilt turn. Tools always send `strict`. Read `responses.go`'s head comment
+  first.
 
 ## Transport
 
@@ -64,7 +69,9 @@ gofmt, build, golangci-lint (ship's config, no repo copy), secret scan, `go test
   stream-idle / whole-call; a failure names which fired. Every path arms the guard.
 - **Idle guard re-arms on `data:` frames only**, never blank lines or `: ping`,
   else a heartbeat masks a stalled model.
-- **Completion asserted, never inferred**: only `[DONE]` or `finish_reason`.
+- **Completion asserted, never inferred**: only `[DONE]` or `finish_reason`;
+  on Responses only `response.completed`/`.incomplete`. Tool args from deltas,
+  never also from `output_item.added`.
 - `Stream` reader goroutine **never blocks** (unbounded queue): a blocked sink stops
   re-arming the guard. Caller `Close` is not an error.
 - `Timing` measured with `Config.Now`; set on error paths too.

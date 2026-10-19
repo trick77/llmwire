@@ -3,7 +3,7 @@
 A dependency-light Go library for talking to **OpenAI-compatible** inference
 endpoints — chat, tools, vision and embeddings — with each model's quirks kept as
 data rather than scattered through call sites. It is an adapter over model
-dialects, not over wire protocols: one request contract, one protocol, and the
+dialects, not over vendors: one request contract, OpenAI's protocols, and the
 per-model bends live in `profiles.yaml`.
 
 ```go
@@ -210,10 +210,15 @@ for code that calls `FromEnvModels`). Assert `srv.Last().Reasoning()` against
 
 ## Scope
 
-One wire protocol: `/chat/completions` and `/embeddings`. llmwire adapts models
-within that protocol; it does not abstract over protocols. Anthropic, Gemini-native
-and Bedrock are permanently out of scope — supporting a second protocol would
-require the provider abstraction this library exists to avoid.
+OpenAI's wire protocols: `/chat/completions` and `/embeddings`, plus
+`/responses` for a model whose profile says `wire_api: responses`. That is a
+profile fact, fixed at load: one model, one protocol, and `Chat`/`ChatStream`
+look the same either way. It exists for gpt-6.1-sol, which takes tools while
+it reasons only on `/responses`, and whose encrypted reasoning that protocol
+carries across tool rounds. A tool loop appends `resp.Assistant()`, never a
+turn rebuilt from `Content` and `ToolCalls`, so the reasoning goes back.
+Anthropic, Gemini-native and Bedrock are permanently out of scope: a vendor's
+own protocol would need the provider abstraction this library exists to avoid.
 
 Also out of scope, by design: vector stores, chunking, embedding caches, retry
 policy and prompt content. llmwire never retries; it parses `Retry-After` into a

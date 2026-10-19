@@ -43,6 +43,12 @@ const (
 	// ChatModel reasons by effort level, can be switched off, and takes tools,
 	// images, both JSON formats and streaming.
 	ChatModel = "llmwiretest-chat"
+	// ResponsesModel is ChatModel's capabilities on the Responses protocol:
+	// every answer carries a reasoning item, so a test can check that a tool
+	// loop replays resp.Assistant() rather than a rebuilt turn.
+	ResponsesModel = "llmwiretest-responses"
+	// ReasoningItemID is the id of the reasoning item ResponsesModel returns.
+	ReasoningItemID = "rs_llmwiretest"
 	// BudgetModel takes reasoning as a token budget and can be switched off.
 	BudgetModel = "llmwiretest-budget"
 	// EmbedModel returns EmbedDimensions-long vectors.
@@ -104,7 +110,7 @@ func (r Request) Stream() bool { b, _ := r.Body["stream"].(bool); return b }
 
 // MaxTokens is the output cap the call carried, in whichever spelling.
 func (r Request) MaxTokens() (int, bool) {
-	for _, k := range []string{"max_tokens", "max_completion_tokens"} {
+	for _, k := range []string{"max_tokens", "max_completion_tokens", "max_output_tokens"} {
 		if v, ok := r.Body[k].(float64); ok {
 			return int(v), true
 		}
@@ -121,7 +127,13 @@ func (r Request) Reasoning() string {
 	if t, ok := r.Body["thinking"].(map[string]any); ok && t["type"] == "disabled" {
 		return "off"
 	}
-	if e, ok := r.Body["reasoning_effort"].(string); ok {
+	e, ok := r.Body["reasoning_effort"].(string)
+	if !ok {
+		// The Responses protocol nests the level.
+		rsn, _ := r.Body["reasoning"].(map[string]any)
+		e, ok = rsn["effort"].(string)
+	}
+	if ok {
 		if e == "none" {
 			return "off"
 		}
@@ -138,8 +150,9 @@ func (r Request) Reasoning() string {
 	return ""
 }
 
-// Server is a fake OpenAI-compatible endpoint: /chat/completions (plain and
-// streamed), /embeddings and /models. Every request is recorded.
+// Server is a fake OpenAI-compatible endpoint: /chat/completions and
+// /responses (plain and streamed), /embeddings and /models. Every request is
+// recorded.
 type Server struct {
 	*httptest.Server
 
@@ -220,11 +233,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasSuffix(req.Path, "/chat/completions"):
 		s.chat(w, req, reply)
+	case strings.HasSuffix(req.Path, "/responses"):
+		responses(w, req, reply)
 	case strings.HasSuffix(req.Path, "/embeddings"):
 		embeddings(w, req)
 	case strings.HasSuffix(req.Path, "/models"):
 		writeJSON(w, map[string]any{"object": "list", "data": []any{
-			map[string]any{"id": ChatModel}, map[string]any{"id": EmbedModel},
+			map[string]any{"id": ChatModel}, map[string]any{"id": ResponsesModel}, map[string]any{"id": EmbedModel},
 		}})
 	default:
 		http.Error(w, `{"error":{"message":"no such route"}}`, http.StatusNotFound)
@@ -255,6 +270,41 @@ func (s *Server) chat(w http.ResponseWriter, req Request, reply string) {
 	frame(map[string]any{"model": req.Model(), "choices": []any{map[string]any{"delta": map[string]any{"content": reply}}}})
 	frame(map[string]any{"model": req.Model(), "choices": []any{map[string]any{"delta": map[string]any{}, "finish_reason": "stop"}}, "usage": usage})
 	_, _ = io.WriteString(w, "data: [DONE]\n\n")
+}
+
+// ReplayedReasoning reports whether the call's input carried the reasoning
+// item a previous ResponsesModel answer returned: what a tool loop that
+// appends resp.Assistant() sends, and one that rebuilds the turn does not.
+func (r Request) ReplayedReasoning() bool {
+	input, _ := r.Body["input"].([]any)
+	for _, raw := range input {
+		if item, _ := raw.(map[string]any); item["type"] == "reasoning" && item["id"] == ReasoningItemID {
+			return true
+		}
+	}
+	return false
+}
+
+func responses(w http.ResponseWriter, req Request, reply string) {
+	usage := map[string]any{"input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
+		"output_tokens_details": map[string]any{"reasoning_tokens": 2}}
+	reasoning := map[string]any{"type": "reasoning", "id": ReasoningItemID, "summary": []any{},
+		"encrypted_content": "llmwiretest"}
+	message := map[string]any{"type": "message", "id": "msg_llmwiretest", "role": "assistant",
+		"content": []any{map[string]any{"type": "output_text", "text": reply}}}
+	response := map[string]any{"object": "response", "model": req.Model(), "status": "completed",
+		"output": []any{reasoning, message}, "usage": usage}
+	if !req.Stream() {
+		writeJSON(w, response)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	frame := func(v any) {
+		raw, _ := json.Marshal(v)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", raw)
+	}
+	frame(map[string]any{"type": "response.output_text.delta", "output_index": 1, "delta": reply})
+	frame(map[string]any{"type": "response.completed", "response": response})
 }
 
 func embeddings(w http.ResponseWriter, req Request) {

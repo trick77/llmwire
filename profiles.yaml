@@ -1128,24 +1128,38 @@ profiles:
   # gpt-6.1-sol, from its model page (developers.openai.com/api/docs/models/
   # gpt-6.1-sol, read 2026-10-14) and the pricing page. A new series, so
   # nothing is carried from gpt-5.x without saying so. Two breaks from the
-  # gpt-5.x shape: thinking cannot be switched off, and Chat Completions
-  # takes no tools.
+  # gpt-5.x shape: thinking cannot be switched off, and tools need the
+  # Responses protocol.
+  #
+  # MEASURED 2026-10-19 through LiteLLM 1.105.1 -> Azure Switzerland North
+  # (`gpt-6.1-sol-2026-09-29`, upstream /openai/v1/responses?api-version=
+  # preview), the route via LLMWIRE_LITELLM_MODELS. Chat Completions with a
+  # tool refused: "Function tools with reasoning_effort are not supported for
+  # ai-gateway-gpt-6.1-sol in /v1/chat/completions. To use function tools, use
+  # /v1/responses or set reasoning_effort to 'none'." (param reasoning_effort,
+  # code "400"). So this profile speaks Responses, where tools and reasoning
+  # work together and the encrypted reasoning is replayed across tool rounds
+  # (responses.go head comment). Not probed against api.openai.com directly;
+  # the model page agrees: "Use the Responses API for tool calling."
   # ---------------------------------------------------------------------------
   - id: gpt-6.1-sol
     display_name: GPT-6.1 Sol
     endpoint: chat
+    wire_api: responses
     wire_model_id: gpt-6.1-sol
     provider: openai
     verified: source-derived
 
-    # NOT measured: carried from the gpt-5.x reasoning series, which caps
-    # output with max_completion_tokens. The page does not name the cap.
-    max_tokens_param: max_completion_tokens
+    # The Responses protocol's only cap spelling. MEASURED: echoed back as
+    # max_output_tokens 4000.
+    max_tokens_param: max_output_tokens
 
     # NOT measured, model page 2026-10-14: "`reasoning.effort` supports `low`,
     # `medium` (default), `high`, `xhigh`, and `max`." and "The `none` and
     # `minimal` reasoning efforts are not supported." So it always thinks:
-    # ReasoningMinimal resolves to low, ReasoningOff is refused.
+    # ReasoningMinimal resolves to low, ReasoningOff is refused. MEASURED: high
+    # and low accepted on /responses; a trivial prompt reports
+    # reasoning_tokens 0 even at high, an arithmetic one 34.
     reasoning:
       supported: true
       enabled_by_default: true
@@ -1160,25 +1174,34 @@ profiles:
     # temperature and top_p ABSENT: this page says nothing about either, and
     # gpt-5.x's forced_value 1.0 is not carried across a series boundary. A
     # caller sending either is refused in plan until a probe reads the shape.
+    # (Azure echoes temperature 1.0, top_p 0.98 unasked; not a measurement of
+    # what it accepts.)
 
-    # NOT measured, model page: the features list says function_calling, but
-    # the endpoints table says "Chat Completions is supported without tool
-    # calling." and "Use the Responses API for tool calling." This library
-    # speaks Chat Completions only, so tools are refused in plan.
+    # MEASURED via the route above, each with a prompt that never asked for a
+    # tool where that matters: "Say hello." under tool_choice required and
+    # under the forced {"type":"function","name":"get_weather"} both returned
+    # a get_weather call; none returned prose although the prompt demanded
+    # the tool; two tools in one turn returned two function_call items.
     tools:
-      supported: false
+      supported: true
+      format: native
+      tool_choice_values: [auto, required, none]
+      supports_forced_choice: true
+      supports_parallel: true
 
-    # NOT measured, model page lists structured outputs; API reference.
+    # MEASURED via the route above: text.format json_schema with strict true
+    # accepted and the reply parsed. json_object NOT measured, model page.
     output:
       json_object: true
       json_schema: true
       strict_schema: true
 
-    # NOT measured, API reference, as gpt-5.x.
+    # MEASURED via the route above: streams, usage on response.completed
+    # whatever the request says; Responses has no stream_options.
     streaming:
       supported: true
-      needs_include_usage: true
-      accepts_stream_options: true
+      needs_include_usage: false
+      accepts_stream_options: false
 
     # NOT measured, model page: 1,050,000-token context, 128,000 maximum
     # output, "maximum input: 922,000". Long-context pricing is the tier in
@@ -1215,11 +1238,15 @@ profiles:
       verified_on: 2026-10-14
 
     notes: >-
-      Every bit source-derived. Always thinks (low at the least, medium by
+      Tools, structured output and streaming measured via LiteLLM/Azure;
+      the rest source-derived. Always thinks (low at the least, medium by
       default) and cannot be told not to, so a caller with a tight output cap
       raises the cap. MaxAnswerTokens adds DefaultReasoningOverhead (1024), not
       a measured figure, and at xhigh or max that is likely short: expect
       finish_reason length with an empty answer until an overhead is measured.
-      No tool calling over Chat Completions: a request carrying tools is
-      refused, or under BestEffort sent without them; a history carrying tool
-      calls or results is refused outright.
+      Speaks the Responses protocol (wire_api: responses), the only one on
+      which it takes tools while thinking; a tool loop appends
+      resp.Assistant() so the encrypted reasoning goes back each round. No
+      stop sequences on that protocol. Behind LiteLLM with
+      include_cost_in_streaming_usage the stream is buffered: nothing arrives
+      until the answer is complete, so size the header bound to the call.
