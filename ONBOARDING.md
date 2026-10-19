@@ -88,8 +88,9 @@ table" (`pricing.go` `CostBlock.validate`). `verified` is not inherited
 Everything LiteLLM is **source-derived at v1.100.1 and unverified**
 (FINDINGS.md "Still open"), except what gpt-6.1-sol measured on LiteLLM
 1.105.1 → Azure on 2026-10-19: `/responses` native, cost header on
-non-streamed calls and `usage.cost` on streamed ones, streams buffered under
-`include_cost_in_streaming_usage` (`responses.go` head comment). The rest must
+non-streamed calls and `usage.cost` on streamed ones, `/responses` streams
+faked by LiteLLM for a UI-added Azure deployment until the catalog aliases
+`azure/<deployment>` (`responses.go` head comment). The rest must
 still be measured:
 
 - `x-litellm-response-cost`: scientific notation (`1.23e-05`), absent on

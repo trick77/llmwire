@@ -49,16 +49,25 @@ import (
 //   - Completion is asserted by response.completed (or response.incomplete,
 //     a clean truncation), never inferred. LiteLLM appends `data: [DONE]`,
 //     which the protocol does not define: tolerated, never relied on.
-//   - Behind LiteLLM with include_cost_in_streaming_usage the stream is
-//     BUFFERED: time to first token equalled the whole call (17.0s for 1310
-//     tokens), response.created already carried the final usage, and
-//     output_item.added carried the complete arguments and text before the
-//     deltas replayed them in 5-character pieces. So a call's arguments are
-//     taken from the deltas (or from .done when no delta came), NEVER also
-//     from output_item.added, which would double them; and the header bound
-//     on such a route has to cover the whole call.
+//   - LiteLLM can FAKE the stream: time to first token equalled the whole
+//     call (17.0s for 1310 tokens), response.created already carried the
+//     final usage, and output_item.added carried the complete arguments and
+//     text before the deltas replayed them in 5-character pieces. Cause
+//     (LiteLLM 1.105.1, not include_cost_in_streaming_usage, first blamed
+//     here): a UI-added Azure deployment has custom_llm_provider azure AND
+//     model azure/<name>, Router._backend_cost_map_keys registers it as
+//     azure/azure/<name>, supports_native_streaming misses, and
+//     should_fake_stream buffers. Fixed gateway-side by a catalog alias for
+//     azure/<name>; then native (2026-10-19, call ca34ab9a): first byte
+//     1.6s, response.created with no usage, token-sized deltas, every event
+//     numbered. A gateway without the alias fakes again, so a call's
+//     arguments are taken from the deltas (or from .done when no delta
+//     came), NEVER also from output_item.added, which would double them.
 //   - The assembled result is the response object on response.completed, the
-//     authority; the deltas are what the iterator sees on the way.
+//     authority; the deltas are what the iterator sees on the way. Natively
+//     a reasoning item's encrypted_content on output_item.added differs from
+//     the one on .done (measured, call ca34ab9a); only the completed
+//     response's copy is replayed.
 
 // routeResponses is the Responses route, appended to the configured base URL.
 const routeResponses = "/responses"
@@ -580,7 +589,7 @@ func readResponsesStream(body io.Reader, guard *stallGuard, bounds streamBounds,
 			if ev.Item.Type != "function_call" {
 				continue
 			}
-			// The name and id only. A buffering gateway puts the complete
+			// The name and id only. A faked stream puts the complete
 			// arguments here too, and the deltas then repeat them.
 			if bounds.toolIdle > 0 && idle != bounds.toolIdle {
 				idle = bounds.toolIdle

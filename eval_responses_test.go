@@ -18,9 +18,9 @@ func TestProbe_SolResponsesToolLoop(t *testing.T) {
 	evalGate(t)
 	const model = "gpt-6.1-sol"
 	c, err := FromEnv(model, Config{
-		// Behind LiteLLM with include_cost_in_streaming_usage the stream is
-		// buffered: the first byte is the whole answer, so the header bound
-		// covers the call.
+		// A gateway without the catalog alias fakes the stream (responses.go
+		// head comment): the first byte is the whole answer, so the header
+		// bound covers the call rather than failing the probe on that.
 		HeaderTimeout: 3 * time.Minute,
 		IdleTimeout:   90 * time.Second,
 		CallTimeout:   3 * time.Minute,

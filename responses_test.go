@@ -245,8 +245,8 @@ func TestDecodeResponse_Endings(t *testing.T) {
 	}
 }
 
-// solStream is call 94fcdf8c as LiteLLM sent it with
-// include_cost_in_streaming_usage: buffered, so output_item.added already
+// solStream is call 94fcdf8c as LiteLLM sent it before the gateway's catalog
+// alias: a faked stream, so output_item.added already
 // holds the complete arguments the deltas then repeat, cost on the body of
 // response.completed, and a [DONE] the protocol does not define.
 var solStream = []string{
