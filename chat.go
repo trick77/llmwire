@@ -40,7 +40,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 		sum.warnings = warnings
 		c.finish(sum)
 	}()
-	body, err := renderChatBody(pl)
+	body, err := pl.render()
 	if err != nil {
 		sum.err = err
 		return nil, warnings, err
@@ -52,7 +52,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 	// off-peak boundary to the wrong window.
 	at := c.now()
 
-	raw, hdr, timing, err := c.rawCall(ctx, http.MethodPost, routeChat, body)
+	raw, hdr, timing, err := c.rawCall(ctx, http.MethodPost, pl.route(), body)
 	sum.timing = timing
 	// Read before the error checks: a proxy 429/5xx returns its headers, and
 	// its call id is what matches the failure to the gateway's own log. A
@@ -63,7 +63,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, []Wa
 		sum.err = err
 		return nil, warnings, err
 	}
-	resp, err := parseChatResponseWith(c.redact, raw)
+	resp, err := pl.parse(c.redact, raw)
 	if err != nil {
 		sum.err = err
 		return nil, warnings, err

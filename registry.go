@@ -232,6 +232,9 @@ func applyDefaults(p *Profile) {
 	if p.Endpoint == "" {
 		p.Endpoint = EndpointChat
 	}
+	if p.Endpoint == EndpointChat && p.WireAPI == "" {
+		p.WireAPI = WireChatCompletions
+	}
 	if p.WireModelID == "" {
 		p.WireModelID = p.ID
 	}
@@ -303,8 +306,9 @@ func validateBaseURL(raw string, allowLoopbackHTTP bool) error {
 	case u.RawQuery != "" || u.Fragment != "" || u.User != nil:
 		return fmt.Errorf("base_url %q must be a bare root: no query, fragment or credentials", raw)
 	case strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/chat/completions"),
+		strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/responses"),
 		strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/embeddings"):
-		return fmt.Errorf("base_url %q ends in a route; the client appends /chat/completions and /embeddings itself", raw)
+		return fmt.Errorf("base_url %q ends in a route; the client appends /chat/completions, /responses and /embeddings itself", raw)
 	}
 	return nil
 }

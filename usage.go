@@ -172,6 +172,46 @@ type wireUsage struct {
 		ReasoningTokens *int64 `json:"reasoning_tokens"`
 		TextTokens      *int64 `json:"text_tokens"`
 	} `json:"completion_tokens_details"`
+
+	// The Responses protocol's spelling of the same lanes, with the same
+	// containment, MEASURED on gpt-6.1-sol: input_tokens 97 beside
+	// cached_tokens 0, output_tokens 54 holding reasoning_tokens 34. An object
+	// carries one spelling or the other; Chat Completions' wins if both.
+	InputTokens        *int64 `json:"input_tokens"`
+	OutputTokens       *int64 `json:"output_tokens"`
+	InputTokensDetails *struct {
+		CachedTokens     *int64 `json:"cached_tokens"`
+		CacheWriteTokens *int64 `json:"cache_write_tokens"`
+	} `json:"input_tokens_details"`
+	OutputTokensDetails *struct {
+		ReasoningTokens *int64 `json:"reasoning_tokens"`
+		TextTokens      *int64 `json:"text_tokens"`
+	} `json:"output_tokens_details"`
+}
+
+// normalize folds the Responses spelling into the Chat Completions one, so
+// everything downstream reads a single set of fields.
+func (u *wireUsage) normalize() {
+	if u.PromptTokens == nil {
+		u.PromptTokens = u.InputTokens
+	}
+	if u.CompletionTokens == nil {
+		u.CompletionTokens = u.OutputTokens
+	}
+	if u.PromptTokensDetails == nil && u.InputTokensDetails != nil {
+		d := *u.InputTokensDetails
+		u.PromptTokensDetails = &struct {
+			CachedTokens     *int64 `json:"cached_tokens"`
+			CacheWriteTokens *int64 `json:"cache_write_tokens"`
+		}{d.CachedTokens, d.CacheWriteTokens}
+	}
+	if u.CompletionTokensDetails == nil && u.OutputTokensDetails != nil {
+		d := *u.OutputTokensDetails
+		u.CompletionTokensDetails = &struct {
+			ReasoningTokens *int64 `json:"reasoning_tokens"`
+			TextTokens      *int64 `json:"text_tokens"`
+		}{d.ReasoningTokens, d.TextTokens}
+	}
 }
 
 // reported says the endpoint sent a usage object with something in it, so its
@@ -182,6 +222,7 @@ type wireUsage struct {
 // later chunk. Keeping "the last usage SEEN" would therefore discard the
 // accounting entirely; the parser keeps the last usage that satisfies this.
 func (u wireUsage) reported() bool {
+	u.normalize()
 	return u.PromptTokens != nil || u.CompletionTokens != nil || u.TotalTokens != nil ||
 		u.PromptTokensDetails != nil || u.CompletionTokensDetails != nil
 }
@@ -199,6 +240,7 @@ func parseUsage(raw json.RawMessage) Usage {
 		// endpoint actually sent.
 		return Usage{Raw: raw}
 	}
+	w.normalize()
 
 	u := Usage{Raw: raw}
 	u.Input.Total = nonNegative(w.PromptTokens)

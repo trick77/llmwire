@@ -525,40 +525,46 @@ func TestWarnings_RendersStably(t *testing.T) {
 	}
 }
 
-// gpt-6.1-sol takes no tools over Chat Completions (model page: "Chat
-// Completions is supported without tool calling."), though its features list
-// says function_calling. A request carrying tools is refused before a socket
-// opens; under BestEffort the tools and the choice go together.
-func TestValidate_GPT61SolRefusesTools(t *testing.T) {
+// gpt-6.1-sol takes tools on the Responses protocol, where tools and
+// reasoning work together (measured 2026-10-19; Chat Completions refused the
+// pair). A forced choice and required both plan as sent.
+func TestValidate_GPT61SolTakesToolsOverResponses(t *testing.T) {
 	c := testClient(t, nil)
-	req := ChatRequest{
-		Model:      "gpt-6.1-sol",
-		Messages:   []Message{User("hello")},
-		Tools:      []Tool{{Name: "search"}},
-		ToolChoice: ToolChoice{Mode: ToolChoiceRequired},
-	}
-	var unsup *UnsupportedError
-	if _, err := c.Validate(req); !errors.As(err, &unsup) {
-		t.Fatalf("error is %v, want *UnsupportedError", err)
-	}
-
-	req.BestEffort = true
-	pl := mustPlan(t, c, req, false)
-	if pl.req.Tools != nil || pl.req.ToolChoice.Mode != ToolChoiceUnset {
-		t.Errorf("BestEffort kept tools %v / choice %v; want both dropped", pl.req.Tools, pl.req.ToolChoice)
+	for _, choice := range []ToolChoice{{Mode: ToolChoiceRequired}, {Mode: ToolChoiceFunction, Name: "search"}} {
+		pl := mustPlan(t, c, ChatRequest{
+			Model:      "gpt-6.1-sol",
+			Messages:   []Message{User("hello")},
+			Tools:      []Tool{{Name: "search"}},
+			ToolChoice: choice,
+		}, false)
+		if len(pl.req.Tools) != 1 || pl.req.ToolChoice != choice || pl.route() != routeResponses {
+			t.Errorf("%v: tools %v, choice %v, route %s", choice, pl.req.Tools, pl.req.ToolChoice, pl.route())
+		}
 	}
 }
 
-// A history from a model that did call tools, switched to gpt-6.1-sol by
-// config, is tool calling too. Refused even under BestEffort: dropping the
+// A history from a model that did call tools, switched to one that takes none
+// by config, is tool calling too. Refused even under BestEffort: dropping the
 // turns would rewrite the conversation.
 func TestValidate_ToolHistoryOnANoToolsModel(t *testing.T) {
-	c := testClient(t, nil)
+	c := testClient(t, registryFrom(t, `profiles:
+  - id: notools
+    wire_model_id: notools
+    max_tokens_param: max_completion_tokens
+    verified: measured
+    streaming: {supported: true, accepts_stream_options: true}
+  - id: gpt-5.5
+    wire_model_id: gpt-5.5
+    max_tokens_param: max_completion_tokens
+    verified: measured
+    tools: {supported: true, tool_choice_values: [auto]}
+    streaming: {supported: true, accepts_stream_options: true}
+`))
 	for name, msgs := range map[string][]Message{
 		"assistant tool call": {User("hi"), {Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "search"}}}},
 		"tool result":         {User("hi"), ToolResult("c1", "x")},
 	} {
-		_, err := c.Validate(ChatRequest{Model: "gpt-6.1-sol", Messages: msgs, BestEffort: true})
+		_, err := c.Validate(ChatRequest{Model: "notools", Messages: msgs, BestEffort: true})
 		var unsup *UnsupportedError
 		if !errors.As(err, &unsup) || unsup.Demotable {
 			t.Errorf("%s: err %v, want a non-demotable *UnsupportedError", name, err)

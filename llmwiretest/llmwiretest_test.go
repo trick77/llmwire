@@ -144,3 +144,40 @@ func TestFromEnvModelsAgainstTheFake(t *testing.T) {
 		t.Errorf("ChatModel should fill every role: %v", err)
 	}
 }
+
+// A loop that appends resp.Assistant() replays the reasoning on the Responses
+// protocol; one that rebuilds the turn from Content does not, and the fake
+// tells the two apart.
+func TestResponsesModelReplay(t *testing.T) {
+	srv := llmwiretest.NewServer(t)
+	c := srv.Client()
+	ctx := context.Background()
+	req := llmwire.ChatRequest{Model: llmwiretest.ResponsesModel, Messages: []llmwire.Message{llmwire.User("hi")},
+		Reasoning: llmwire.ReasoningEffort("high")}
+	resp, _, err := c.Chat(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Last().Path != "/responses" || srv.Last().Reasoning() != resp.ReasoningSent || resp.Content != llmwiretest.Reply {
+		t.Fatalf("path %s, reasoning %q vs %q, content %q", srv.Last().Path, srv.Last().Reasoning(), resp.ReasoningSent, resp.Content)
+	}
+
+	req.Messages = append(req.Messages, resp.Assistant(), llmwire.User("again"))
+	if _, _, err := c.Chat(ctx, req); err != nil || !srv.Last().ReplayedReasoning() {
+		t.Fatalf("Assistant() turn: err %v, replayed %v", err, srv.Last().ReplayedReasoning())
+	}
+	req.Messages[1] = llmwire.Message{Role: llmwire.RoleAssistant, Text: resp.Content}
+	if _, _, err := c.Chat(ctx, req); err != nil || srv.Last().ReplayedReasoning() {
+		t.Fatalf("rebuilt turn: err %v, replayed %v", err, srv.Last().ReplayedReasoning())
+	}
+
+	s, _, err := c.ChatStream(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	res, err := s.Collect(nil)
+	if err != nil || res.Content != llmwiretest.Reply || len(res.Assistant().ResponseItems) != 2 {
+		t.Fatalf("stream: %+v, %v", res, err)
+	}
+}

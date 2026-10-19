@@ -489,7 +489,7 @@ func (c *Client) RawStream(ctx context.Context, body []byte, onDelta func(string
 	if c.routes != nil {
 		return StreamResult{}, c.errSeveralHosts("RawStream")
 	}
-	x, timing, _, err := c.openStream(ctx, body)
+	x, timing, _, err := c.openStream(ctx, routeChat, body)
 	if err != nil {
 		return StreamResult{Timing: timing}, err
 	}
@@ -538,13 +538,13 @@ func (x *streamExchange) release() {
 	x.cancelCall()
 }
 
-// openStream is the one streaming exchange: it POSTs body to /chat/completions
-// for an SSE answer and returns once a 2xx has its headers, with the idle guard
+// openStream is the one streaming exchange: it POSTs body to route
+// (/chat/completions or /responses) for an SSE answer and returns once a 2xx has its headers, with the idle guard
 // armed; x carries the start and header time from there. The Timing and Header
 // returned describe a FAILURE only: everything is released, the error is
 // classified, the Timing says how long the headers took, and a non-2xx brings
 // its headers, whose proxy call id matches the failure to the gateway's log.
-func (c *Client) openStream(ctx context.Context, body []byte) (*streamExchange, Timing, http.Header, error) {
+func (c *Client) openStream(ctx context.Context, route string, body []byte) (*streamExchange, Timing, http.Header, error) {
 	// Two nested contexts, because their failures mean different things and the
 	// error has to say which: callCtx is the overall cap, reqCtx is what the
 	// stallGuard cancels. Cancelling reqCtx leaves callCtx's deadline intact so
@@ -553,7 +553,7 @@ func (c *Client) openStream(ctx context.Context, body []byte) (*streamExchange, 
 	reqCtx, cancelReq := context.WithCancel(callCtx)
 	x := &streamExchange{callCtx: callCtx, cancelReq: cancelReq, cancelCall: cancelCall}
 
-	req, err := c.newRequest(reqCtx, http.MethodPost, routeChat, body)
+	req, err := c.newRequest(reqCtx, http.MethodPost, route, body)
 	if err != nil {
 		cancelReq()
 		cancelCall()
@@ -570,7 +570,7 @@ func (c *Client) openStream(ctx context.Context, body []byte) (*streamExchange, 
 	// after 45s against a 60s header bound is the margin the probe suite records.
 	timing := Timing{Headers: x.headers, Total: x.headers}
 	if err != nil {
-		err = c.explain(ctx, callCtx, x.guard, c.dialError(routeChat, err))
+		err = c.explain(ctx, callCtx, x.guard, c.dialError(route, err))
 		x.release()
 		return nil, timing, nil, err
 	}

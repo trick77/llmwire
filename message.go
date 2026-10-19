@@ -52,6 +52,22 @@ type Message struct {
 	// months. The field exists so a deployment that does demand it can be fed,
 	// not because one currently does.
 	ReasoningContent string
+
+	// ResponseItems is an assistant turn exactly as a Responses-protocol model
+	// returned it: its encrypted reasoning, its function calls and its text, in
+	// output order. OPAQUE: set by ChatResponse.Assistant and
+	// StreamResult.Assistant, replayed verbatim, never built by hand.
+	//
+	// It is what carries the model's reasoning across a tool round. MEASURED on
+	// gpt-6.1-sol via LiteLLM/Azure, 2026-10-19: round two replaying the
+	// reasoning item beside the call and its output was accepted, input_tokens
+	// 97 → 177. Rebuilding the turn from Text and ToolCalls alone drops it, and
+	// the model reasons from scratch every round.
+	//
+	// Sent only to a wire_api: responses model, where it replaces Text and
+	// ToolCalls on the wire. Any other model drops it with a warning and sends
+	// Text and ToolCalls as usual.
+	ResponseItems []json.RawMessage
 }
 
 // PartKind distinguishes the content parts a message can carry.
@@ -318,6 +334,7 @@ func (r ChatRequest) clone() ChatRequest {
 		for i := range out.Messages {
 			out.Messages[i].Parts = append([]Part(nil), r.Messages[i].Parts...)
 			out.Messages[i].ToolCalls = append([]ToolCall(nil), r.Messages[i].ToolCalls...)
+			out.Messages[i].ResponseItems = append([]json.RawMessage(nil), r.Messages[i].ResponseItems...)
 		}
 	}
 	out.Tools = append([]Tool(nil), r.Tools...)
@@ -387,4 +404,24 @@ type ChatResponse struct {
 	// was sent and the model ran at its own default. Named by wire meaning:
 	// effort "none" and a zero budget are the off switch and read "off".
 	ReasoningSent string
+	// ResponseItems is the turn for replay; see Message.ResponseItems. Empty
+	// unless the model speaks the Responses protocol.
+	ResponseItems []json.RawMessage
+}
+
+// Assistant is this turn as the history entry for the next request: text,
+// tool calls and, on a Responses-protocol model, the reasoning state. A tool
+// loop appends this, never a Message rebuilt from Content and ToolCalls,
+// which would lose the reasoning.
+func (r *ChatResponse) Assistant() Message {
+	return assistantTurn(r.Content, r.ToolCalls, r.ResponseItems)
+}
+
+func assistantTurn(content string, calls []ToolCall, items []json.RawMessage) Message {
+	return Message{
+		Role:          RoleAssistant,
+		Text:          content,
+		ToolCalls:     append([]ToolCall(nil), calls...),
+		ResponseItems: append([]json.RawMessage(nil), items...),
+	}
 }
