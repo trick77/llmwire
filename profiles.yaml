@@ -1249,4 +1249,5 @@ profiles:
       resp.Assistant() so the encrypted reasoning goes back each round. No
       stop sequences on that protocol. Behind LiteLLM 1.105.1 the stream is
       faked (nothing until the answer is complete) unless the gateway catalog
-      aliases azure/<deployment>; responses.go head comment.
+      aliases azure/<deployment>; there, size the header bound to the call.
+      responses.go head comment.

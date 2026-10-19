@@ -246,9 +246,10 @@ func TestDecodeResponse_Endings(t *testing.T) {
 }
 
 // solStream is call 94fcdf8c as LiteLLM sent it before the gateway's catalog
-// alias: a faked stream, so output_item.added already
-// holds the complete arguments the deltas then repeat, cost on the body of
-// response.completed, and a [DONE] the protocol does not define.
+// alias, trimmed (response.created's early usage dropped, unread): a faked
+// stream, so output_item.added already holds the complete arguments the
+// deltas then repeat, cost on the body of response.completed, and a [DONE]
+// the protocol does not define.
 var solStream = []string{
 	`data: {"type":"response.created","response":{"status":"in_progress","output":[]}}`,
 	`data: {"type":"response.output_item.added","output_index":0,"item":{"arguments":"{\"city\":\"Bern\"}","call_id":"call_IVP6","name":"get_weather","type":"function_call","id":"fc_0dd5","status":"completed"}}`,
@@ -274,7 +275,7 @@ func readResponsesSSE(t *testing.T, lines []string) (StreamResult, []streamEvent
 	return res, events, err
 }
 
-func TestReadResponsesStream_BufferedGatewayStream(t *testing.T) {
+func TestReadResponsesStream_FakedGatewayStream(t *testing.T) {
 	res, events, err := readResponsesSSE(t, solStream)
 	if err != nil {
 		t.Fatal(err)
@@ -303,6 +304,27 @@ func TestReadResponsesStream_BufferedGatewayStream(t *testing.T) {
 	}
 	if len(res.ResponseItems) != 1 || Tokens(res.Usage.Input.Total) != 53 {
 		t.Errorf("items %d, usage %+v", len(res.ResponseItems), res.Usage)
+	}
+}
+
+// Natively the reasoning item's encrypted_content on output_item.added differs
+// from .done (call ca34ab9a); the completed response's copy is the one replayed.
+func TestReadResponsesStream_ReasoningItemFromCompleted(t *testing.T) {
+	res, _, err := readResponsesSSE(t, []string{
+		`data: {"type":"response.created","response":{"status":"in_progress","output":[]}}`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning","content":[],"encrypted_content":"ADDED","summary":[]}}`,
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_1","type":"reasoning","content":[],"encrypted_content":"DONE","summary":[]}}`,
+		`data: {"type":"response.output_text.delta","output_index":1,"delta":"ok"}`,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[` +
+			`{"id":"rs_1","type":"reasoning","content":[],"encrypted_content":"DONE","summary":[]},` +
+			`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.ResponseItems) != 2 || !strings.Contains(string(res.ResponseItems[0]), `"DONE"`) ||
+		strings.Contains(string(res.ResponseItems[0]), `"ADDED"`) {
+		t.Errorf("items %s", res.ResponseItems)
 	}
 }
 
