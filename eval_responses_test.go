@@ -18,9 +18,9 @@ func TestProbe_SolResponsesToolLoop(t *testing.T) {
 	evalGate(t)
 	const model = "gpt-6.1-sol"
 	c, err := FromEnv(model, Config{
-		// Behind LiteLLM with include_cost_in_streaming_usage the stream is
-		// buffered: the first byte is the whole answer, so the header bound
-		// covers the call.
+		// A gateway without the catalog alias fakes the stream (responses.go
+		// head comment): the first byte is the whole answer, so the header
+		// bound covers the call rather than failing the probe on that.
 		HeaderTimeout: 3 * time.Minute,
 		IdleTimeout:   90 * time.Second,
 		CallTimeout:   3 * time.Minute,
@@ -94,8 +94,10 @@ func TestProbe_SolResponsesToolLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FINDING stream failed: %v", err)
 	}
-	// FirstData close to Total is the buffered gateway; far below it is a
-	// stream passed through.
+	// FirstData close to Total on a long answer is LiteLLM faking the stream
+	// (catalog alias missing, responses.go head comment); far below it is
+	// native. Logged, not asserted: a short tool-call answer is close on a
+	// native stream too.
 	t.Logf("stream: calls %+v, items %d, first data %s of %s total, events %d, cost %+v",
 		res.ToolCalls, len(res.ResponseItems), res.Timing.FirstData, res.Timing.Total, res.Events, res.Usage.Cost)
 	var args map[string]any

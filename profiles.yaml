@@ -1247,6 +1247,7 @@ profiles:
       Speaks the Responses protocol (wire_api: responses), the only one on
       which it takes tools while thinking; a tool loop appends
       resp.Assistant() so the encrypted reasoning goes back each round. No
-      stop sequences on that protocol. Behind LiteLLM with
-      include_cost_in_streaming_usage the stream is buffered: nothing arrives
-      until the answer is complete, so size the header bound to the call.
+      stop sequences on that protocol. Behind LiteLLM 1.105.1 the stream is
+      faked (nothing until the answer is complete) unless the gateway catalog
+      aliases azure/<deployment>; there, size the header bound to the call.
+      responses.go head comment.
