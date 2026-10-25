@@ -729,8 +729,22 @@ profiles:
       # model, so medium is the family's value and costs nothing to send.
       # ReasoningMinimal resolves to OFF here, and off answers one-step
       # arithmetic wrong (notes); a caller that needs the answer right uses
-      # Balanced. overhead ABSENT: DefaultReasoningOverhead applies.
+      # Balanced.
       balanced: medium
+      # OBSERVED 2026-10-25 in a consumer's production (peeq, long-form
+      # summaries with no knob sent), not reproduced by a probe: with
+      # DefaultReasoningOverhead the wire cap was 5120 (4096 answer + 1024),
+      # and two calls in ten ended finish_reason "length" with output_tokens
+      # 5120, reasoning_tokens 5089 and 5126 (the vendor's reasoning count
+      # runs a few tokens past its own output count) and 119 and 0 chars of
+      # content. The deep pass the table above samples is real on long inputs
+      # and outlasts 1024 by 5x. Both were cut, so ~5.1k is a floor, not a
+      # depth: 8192 is a budget above it, not a measurement. Not higher: at
+      # the slowest output recorded below (18 tok/s) a 4096 answer + 8192
+      # finishes in ~11 minutes, inside DefaultCallTimeout; + 16384 would not.
+      # Only "default" is keyed, the case the cuts were seen in; the levels'
+      # probe samples stayed under 1024, so they keep the package default.
+      overhead: {default: 8192}
       # NOT measured, for the same reason as -pro: the delta key cannot be read
       # back out of a StreamResult. The family's spelling, recorded.
       stream_field: reasoning_content
@@ -812,7 +826,10 @@ profiles:
       inside prompt_tokens. reasoning_effort is accepted but buys nothing
       measurable: at five samples per level, twice, every range overlaps every
       other. Use the thinking toggle, which is honoured cleanly and wins over
-      an effort level sent in the same request.
+      an effort level sent in the same request. A call with no knob can take a
+      deep pass past 5k reasoning tokens on a long input, so MaxAnswerTokens
+      adds 8192 there, not the package default; expect a wire cap well above
+      the answer asked for.
       DISABLING THINKING COSTS CORRECTNESS HERE. The same one-step arithmetic
       prompt (answer 205) came back wrong on seven of seven thinking-off calls
       across two days, a different number each time (155, 145, 195, 105,
