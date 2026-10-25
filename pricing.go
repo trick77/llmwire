@@ -19,7 +19,7 @@ import (
 	// one-dependency rule is untouched; the cost is roughly 450KB of binary.
 	_ "time/tzdata"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // Pricing.
