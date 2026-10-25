@@ -261,6 +261,13 @@ silently.
 **Fastest endpoint in this file**: 0.9-2.6 seconds per call, longest
 comment-only gap 522ms over 353 frames.
 
+**A deep pass outlasts the default reasoning allowance.** Observed in
+production on 2026-10-25, long-form summaries with no knob sent and a 4096-token
+answer: the wire cap was 5120 (`DefaultReasoningOverhead` 1024 added), and two
+calls in ten ended `finish_reason: length` with 5089 and 5126 reasoning tokens
+and 119 and 0 chars of content. Both were cut, so the true depth is unknown.
+`reasoning.overhead.default` is 8192 from here: a budget above that floor, kept inside the 15-minute call bound at 18 tok/s.
+
 **A stray `</think>` in content, with thinking disabled.** Observed once in
 production on 2026-09-22, never by a probe: a tool-free call after a
 multi-turn tool history, `thinking: disabled`, 0 reasoning tokens, came back

@@ -194,6 +194,33 @@ func TestReasoningIntents_ShippedProfiles(t *testing.T) {
 	}
 }
 
+// mimo-v2.6-flash takes deep passes with no knob sent: a 5120 wire cap
+// (4096 answer + DefaultReasoningOverhead) was spent whole on reasoning in
+// production, content empty. The no-knob allowance has room for one.
+func TestMaxAnswerTokens_MimoFlashNoKnobFitsADeepPass(t *testing.T) {
+	c := testClient(t, Default())
+	pl := mustPlan(t, c, ChatRequest{Model: "mimo-v2.6-flash", Messages: []Message{User("hi")}, MaxAnswerTokens: ptr(4096)}, false)
+	if pl.req.MaxTokens == nil || *pl.req.MaxTokens != 4096+8192 {
+		t.Errorf("wire cap = %v, want 4096 + 8192", pl.req.MaxTokens)
+	}
+	// Off still costs nothing, and a named level keeps the package default on
+	// purpose: no cut was seen with one sent, and the probes stayed under it.
+	for _, tc := range []struct {
+		name string
+		r    ReasoningRequest
+		want int
+	}{
+		{"off", ReasoningOff(), 4096},
+		{"balanced (medium)", ReasoningBalanced(), 4096 + DefaultReasoningOverhead},
+		{"high", ReasoningEffort("high"), 4096 + DefaultReasoningOverhead},
+	} {
+		pl = mustPlan(t, c, ChatRequest{Model: "mimo-v2.6-flash", Messages: []Message{User("hi")}, Reasoning: tc.r, MaxAnswerTokens: ptr(4096)}, false)
+		if pl.req.MaxTokens == nil || *pl.req.MaxTokens != tc.want {
+			t.Errorf("%s: wire cap = %v, want %d", tc.name, pl.req.MaxTokens, tc.want)
+		}
+	}
+}
+
 // The resolved request is what a caller persists and logs, so it rides back on
 // both results.
 func TestReasoningSent_OnChatAndStream(t *testing.T) {
