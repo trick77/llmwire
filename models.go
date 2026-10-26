@@ -79,7 +79,11 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error
 	}
 	// Anthropic's listing is paged (has_more, last_id; 20 rows unless asked).
 	// Followed only when the first page says so, so the OpenAI-shaped listings,
-	// which send neither, see the one plain GET they always did.
+	// which send neither, see the one plain GET they always did. One call cap
+	// bounds the whole listing, not each page.
+	ctx, cancel := context.WithTimeout(ctx, c.cap)
+	defer cancel()
+	cursor := ""
 	for route := routeModels; route != ""; {
 		raw, _, t, err := c.rawCall(ctx, http.MethodGet, route, nil)
 		pages++
@@ -88,19 +92,27 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error
 		if err != nil {
 			return failed(err)
 		}
-		page, w, next, err := parseModelsPage(c.redact, raw)
+		page, w, more, next, err := parseModelsPage(c.redact, raw)
 		if err != nil {
 			return failed(err)
 		}
 		entries, warnings = append(entries, page...), append(warnings, w...)
 		route = ""
-		switch {
-		case next == "":
-		case pages == maxModelPages:
+		cut := func(why string) {
 			warnings = append(warnings, Warning{Kind: WarnOther, Feature: "models",
-				Details: fmt.Sprintf("the listing has more than %d pages; only the first %d entries were read",
-					maxModelPages, len(entries))})
+				Details: fmt.Sprintf("the listing says it has more pages, but %s; only %d entries were read", why, len(entries))})
+		}
+		switch {
+		case !more:
+		case next == "":
+			cut("names no id to continue after")
+		case next == cursor:
+			// A server that ignores after_id answers the same page again.
+			cut("did not move past " + next)
+		case pages == maxModelPages:
+			cut(fmt.Sprintf("this package reads %d at most", maxModelPages))
 		default:
+			cursor = next
 			route = routeModels + "?limit=1000&after_id=" + url.QueryEscape(next)
 		}
 	}
@@ -116,9 +128,9 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error
 // forever must not hold a boot check for good.
 const maxModelPages = 20
 
-// parseModelsPage decodes one page of the listing, and the id to continue
-// after when the page says there is more: its last_id, or its last row's id.
-func parseModelsPage(redact redactor, raw json.RawMessage) ([]ModelEntry, []Warning, string, error) {
+// parseModelsPage decodes one page of the listing, whether it says there is
+// more, and the id to continue after: its last_id, or its last row's id.
+func parseModelsPage(redact redactor, raw json.RawMessage) (_ []ModelEntry, _ []Warning, more bool, next string, _ error) {
 	var w struct {
 		Data    json.RawMessage `json:"data"`
 		Error   json.RawMessage `json:"error"`
@@ -126,30 +138,29 @@ func parseModelsPage(redact redactor, raw json.RawMessage) ([]ModelEntry, []Warn
 		LastID  string          `json:"last_id"`
 	}
 	if err := json.Unmarshal(raw, &w); err != nil {
-		return nil, nil, "", fmt.Errorf("llmwire: %w: decoding models listing: %w (body: %s)",
+		return nil, nil, false, "", fmt.Errorf("llmwire: %w: decoding models listing: %w (body: %s)",
 			ErrMalformedResponse, err, bodySnippet(redact, raw))
 	}
 	if len(w.Error) > 0 && !isJSONNull(w.Error) {
-		return nil, nil, "", parseAPIErrorWith(redact, 0, raw)
+		return nil, nil, false, "", parseAPIErrorWith(redact, 0, raw)
 	}
 	var rows []json.RawMessage
 	if len(w.Data) == 0 || isJSONNull(w.Data) {
-		return nil, nil, "", fmt.Errorf("llmwire: %w: models listing carries no data list (body: %s)",
+		return nil, nil, false, "", fmt.Errorf("llmwire: %w: models listing carries no data list (body: %s)",
 			ErrResponseShape, bodySnippet(redact, raw))
 	}
 	if err := json.Unmarshal(w.Data, &rows); err != nil {
-		return nil, nil, "", fmt.Errorf("llmwire: %w: models listing data is not a list (body: %s)",
+		return nil, nil, false, "", fmt.Errorf("llmwire: %w: models listing data is not a list (body: %s)",
 			ErrResponseShape, bodySnippet(redact, raw))
 	}
 	entries, warnings := parseModelRows(rows)
-	next := ""
 	if w.HasMore {
 		next = w.LastID
 		if next == "" && len(entries) > 0 {
 			next = entries[len(entries)-1].ID
 		}
 	}
-	return entries, warnings, next, nil
+	return entries, warnings, w.HasMore, next, nil
 }
 
 // parseModelRows decodes the rows of one page.

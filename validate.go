@@ -814,6 +814,14 @@ func (v *validation) checkProtocol(req ChatRequest) {
 				"which the %s protocol cannot send there", i, wire))
 			return
 		}
+		if messages && m.Role == RoleUser && len(contentBlocks(m)) == 0 {
+			// The protocol refuses an empty text block, and leaving the turn
+			// out could end the conversation on an assistant turn, which is a
+			// prefill this model refuses or, worse, continues.
+			v.reject("messages", fmt.Sprintf("message %d is a user turn with no text or image, "+
+				"which the %s protocol cannot send", i, wire))
+			return
+		}
 		if len(m.ResponseItems) == 0 {
 			if messages && !v.toolArgsAreObjects(i, m) {
 				return

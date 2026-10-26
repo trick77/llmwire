@@ -63,9 +63,11 @@ type Provider struct {
 // so one header is never written two ways.
 var headerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-// credentialHeader is a header name that carries a credential by any common
-// spelling: authorization, x-api-key, api-key, x-auth-token, a session cookie.
-var credentialHeader = regexp.MustCompile(`auth|key|token|secret|cookie|session`)
+// credentialHeader is a header name that carries a credential by a common
+// spelling: authorization, a cookie, api-key, or a name ending in -key,
+// -token, -secret or -auth (x-api-key, x-auth-token). Whole names and
+// suffixes only, so x-session-affinity or x-max-tokens-hint stay shippable.
+var credentialHeader = regexp.MustCompile(`^(authorization|proxy-authorization|cookie|api-key)$|-(key|token|secret|auth)$`)
 
 var (
 	defaultOnce sync.Once

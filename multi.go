@@ -120,6 +120,12 @@ func FromEnvModels(cfg Config, models ...string) (*Client, error) {
 			return nil, fmt.Errorf("llmwire: Config.APIKey is set, but models %v span providers %v; "+
 				"leave it empty so each provider's LLMWIRE_<PROVIDER>_API_KEY is read", ids, sortedKeys(providers))
 		}
+		if cfg.APIKeyHeader != "" && len(providers) > 1 {
+			// One header for every host would put a bearer host's key in
+			// x-api-key, or the reverse: a 401 on every call that says only auth.
+			return nil, fmt.Errorf("llmwire: Config.APIKeyHeader is set, but models %v span providers %v; "+
+				"leave it empty so each provider's own api_key_header applies", ids, sortedKeys(providers))
+		}
 	}
 	if len(missing) > 0 {
 		return nil, errors.Join(missing...)

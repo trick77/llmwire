@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -505,6 +506,10 @@ func TestProvider_HeaderValidation(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+	ok := Provider{Headers: map[string]string{"x-session-affinity": "a", "x-max-tokens-hint": "1", "anthropic-version": "v"}}
+	if err := ok.validate(); err != nil {
+		t.Errorf("plain headers refused: %v", err)
+	}
 }
 
 func TestProfileMessages_Validation(t *testing.T) {
@@ -554,12 +559,27 @@ func TestListModels_AnthropicPages(t *testing.T) {
 
 	// A server that never stops paging is cut off, with a warning; last_id
 	// absent continues after the page's last row.
+	n := 0
 	endless := serve(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":[{"id":"m"}],"has_more":true}`))
+		n++
+		_, _ = fmt.Fprintf(w, `{"data":[{"id":"m%d"}],"has_more":true}`, n)
 	})
 	entries, warnings, err = clientOn(t, endless.URL).ListModels(context.Background())
 	if err != nil || len(entries) != maxModelPages || len(warnings) != 1 || len(endless.requests()) != maxModelPages {
 		t.Errorf("endless: %d entries, warnings %v, %d requests, err %v", len(entries), warnings, len(endless.requests()), err)
+	}
+
+	// One that ignores after_id answers the same page: stopped at the second,
+	// not read twenty times; one with has_more and no cursor stops at once.
+	for name, body := range map[string]string{
+		"stuck":     `{"data":[{"id":"m"}],"has_more":true,"last_id":"m"}`,
+		"no cursor": `{"data":[{"bad":1}],"has_more":true}`,
+	} {
+		srv := jsonServer(t, http.StatusOK, body)
+		entries, warnings, err := clientOn(t, srv.URL).ListModels(context.Background())
+		if err != nil || len(entries) > 2 || len(warnings) == 0 || len(srv.requests()) > 2 {
+			t.Errorf("%s: %d entries, warnings %v, %d requests, err %v", name, len(entries), warnings, len(srv.requests()), err)
+		}
 	}
 }
 
@@ -579,11 +599,23 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	if _, _, err := c.plan(opusRequest(sysImage, User("x")), false); err == nil {
 		t.Error("a system image was planned")
 	}
-	pl := mustPlan(t, c, opusRequest(User(""), Assistant("a"),
+	pl := mustPlan(t, c, opusRequest(User("q"), Assistant("a"),
 		Message{Role: RoleUser, Parts: []Part{{Kind: PartText}, {Kind: PartText, Text: "b"}}}), false)
-	got, _ := json.Marshal(renderedBody(t, pl)["messages"])
-	if want := `[{"content":[{"text":"a","type":"text"}],"role":"assistant"},{"content":[{"text":"b","type":"text"}],"role":"user"}]`; string(got) != want {
-		t.Errorf("messages = %s, want %s", got, want)
+	got, _ := json.Marshal(renderedBody(t, pl)["messages"].([]any)[2])
+	if want := `{"content":[{"text":"b","type":"text"}],"role":"user"}`; string(got) != want {
+		t.Errorf("last turn = %s, want %s", got, want)
+	}
+	// An empty user turn is refused, never dropped: dropped, the request
+	// would end on the assistant turn, a prefill.
+	if _, _, err := c.plan(opusRequest(User("q"), Assistant("a"), User("")), false); err == nil ||
+		!strings.Contains(err.Error(), "no text or image") {
+		t.Errorf("empty user turn: err = %v", err)
+	}
+	// An empty text block in a reply is not replayed.
+	r, err := parseMessagesResponseWith(Redact, json.RawMessage(
+		`{"content":[{"type":"text","text":""},{"type":"tool_use","id":"t","name":"f","input":{}}],"stop_reason":"tool_use"}`))
+	if err != nil || len(r.ResponseItems) != 1 {
+		t.Errorf("empty reply text replayed: %s %v", r.ResponseItems, err)
 	}
 	for _, body := range []string{`{}`, `{"type":"message","content":[]}`} {
 		if _, err := parseMessagesResponseWith(Redact, json.RawMessage(body)); !errors.Is(err, ErrResponseShape) {
@@ -622,6 +654,12 @@ func TestMergeHeaders_CaseInsensitive(t *testing.T) {
 		envGetter(mapLookup(map[string]string{"LLMWIRE_ANTHROPIC_API_KEY": "k"})), false)
 	if err != nil || ep.cfg.APIKeyHeader != "authorization-token" {
 		t.Errorf("caller key header lost: %q %v", ep.cfg.APIKeyHeader, err)
+	}
+	// Across providers one header cannot be right for all of them.
+	_, err = FromEnvModels(Config{APIKeyHeader: "x-api-key", Lookup: mapLookup(map[string]string{
+		"LLMWIRE_ANTHROPIC_API_KEY": "a", "LLMWIRE_OPENAI_API_KEY": "o"})}, "claude-opus-5-5", "gpt-5.5")
+	if err == nil || !strings.Contains(err.Error(), "APIKeyHeader") {
+		t.Errorf("FromEnvModels across providers: err = %v", err)
 	}
 }
 

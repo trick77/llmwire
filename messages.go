@@ -53,6 +53,11 @@ import (
 //   - `ping` arrives as a DATA frame ({"type":"ping"}). It never re-arms the
 //     idle guard and is not counted as an event: a heartbeat must not mask a
 //     stalled model (AGENTS.md).
+//   - A streamed block of a type not spelled here (server_tool_use and its
+//     result, reachable only through tools in ExtraBody) is its start frame
+//     alone, so the whole turn is left unreplayable: it goes back as Text
+//     and ToolCalls, its thinking with it. Unmodelled, not unsupported by
+//     accident.
 //   - Completion is asserted by message_stop, never inferred. A tool call's
 //     input comes from its input_json_delta fragments only; the input on
 //     content_block_start is the empty placeholder and is never also read.
@@ -218,7 +223,7 @@ func toolResultBlock(m Message) map[string]any {
 // contentBlocks spells a user turn's content. An empty text block is left
 // out: the protocol refuses one ("text content blocks must be non-empty"),
 // where Chat Completions takes "" without a word, so an OpenAI history carries
-// them. A turn left with nothing is dropped by the merge.
+// them. plan refuses a user turn left with nothing.
 func contentBlocks(m Message) []any {
 	if len(m.Parts) == 0 {
 		if m.Text == "" {
@@ -370,6 +375,10 @@ func (a *assembler) block(blk wireBlock, raw json.RawMessage) {
 	var item any
 	switch blk.Type {
 	case "text":
+		if blk.Text == "" {
+			// Replayed, an empty text block is a 400.
+			return
+		}
 		a.content.WriteString(blk.Text)
 		item = map[string]any{"type": "text", "text": blk.Text}
 	case "thinking":

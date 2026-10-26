@@ -65,7 +65,10 @@ gofmt, build, golangci-lint (ship's config, no repo copy), secret scan, `go test
   first.
 - Messages: same replay rule for **signed thinking blocks**; cache lanes sit
   **beside** `input_tokens` (added, never subtracted); `ping` is a `data:`
-  frame and never re-arms the guard. Read `messages.go`'s head comment first.
+  frame and never re-arms the guard; `max_tokens` required (uncapped =
+  `limits.max_output`); `speed`/`inference_geo` refused (bill off list).
+  Key header + `anthropic-version` are provider facts. Read `messages.go`'s
+  head comment first.
 
 ## Transport
 
