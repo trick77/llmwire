@@ -894,22 +894,28 @@ func (v *validation) checkProtocol(req ChatRequest) {
 //     the caller drops it, knowing the history.
 //   - Tool calls must be answered first: MEASURED, user text between a
 //     tool_use turn and its tool_result is a 400, "`tool_use` ids were found
-//     without `tool_result` blocks immediately after", while an assistant
-//     turn there was accepted (the endpoint joins consecutive assistant
-//     turns). So no user content may come between an assistant turn's calls
-//     and their tool turns, and a tool turn must follow calls or another tool
-//     turn. Which ids answer which call is the endpoint's to check.
+//     without `tool_result` blocks immediately after". The endpoint joins
+//     consecutive assistant turns, and a plain text turn there, after a
+//     signed calling turn, was accepted. So between an assistant turn's calls
+//     and their tool turns only a plain assistant turn may stand (no calls of
+//     its own, nothing replayed), a tool turn must follow calls or another
+//     tool turn, and calls left without results are refused. Which ids
+//     answer which call is the endpoint's to check.
+//   - Two replayed assistant turns in a row are refused: joined, the second
+//     turn's signed thinking sits inside the first, MEASURED a 400, "Invalid
+//     `signature` in `thinking` block. The block is bound to a different
+//     conversation." Two plain ones, or opening on an assistant turn, are
+//     fine: MEASURED accepted.
 //   - Ending on an assistant turn is a prefill; refused unless the profile
 //     takes one (assistant_prefill). MEASURED on claude-opus-5-5: "This model
 //     does not support assistant message prefill. The conversation must end
 //     with a user message." That includes a pause_turn resume: server tools
 //     are unmodelled (messages.go head comment).
-//   - Opening on an assistant turn, or two in a row, is fine: MEASURED
-//     accepted, and render never merges assistant turns.
 func (v *validation) checkMessagesTurns() bool {
 	lastAt := -1
 	callsAt := -1      // the assistant turn whose calls await their results
 	answering := false // inside the run of tool turns right after a call
+	replayedAt := -1   // the previous turn, when it was a replayed assistant turn
 	for i, m := range v.out.Messages {
 		if m.Role == RoleSystem {
 			continue
@@ -919,28 +925,35 @@ func (v *validation) checkMessagesTurns() bool {
 				"tool call); the %s protocol refuses an empty turn, so leave it out", i, m.Role, v.profile.WireAPI))
 			return false
 		}
+		replayed := m.Role == RoleAssistant && len(m.ResponseItems) > 0
 		switch {
+		case replayed && replayedAt >= 0:
+			v.reject("messages", fmt.Sprintf("messages %d and %d are replayed assistant turns in a row; the endpoint "+
+				"joins them, and the second's signed thinking is then refused", replayedAt, i))
+			return false
 		case m.Role == RoleTool && callsAt < 0 && !answering:
 			v.reject("messages", fmt.Sprintf("message %d is a tool result with no tool call right before it; "+
 				"the %s protocol takes tool results directly after the assistant turn that called", i, v.profile.WireAPI))
 			return false
 		case m.Role == RoleTool:
 			callsAt, answering = -1, true
-		case m.Role == RoleAssistant && callsAt >= 0 && len(m.ToolCalls) == 0 && len(m.ResponseItems) == 0:
-			// MEASURED accepted, a plain text turn: the endpoint joins
-			// consecutive assistant turns, so the calls still await their
-			// results. A replayed or calling turn there is not measured, and
-			// joined it would edit a signed turn: refused below.
-			answering = false
+		case m.Role == RoleAssistant && callsAt >= 0 && len(m.ToolCalls) == 0 && !replayed:
+			// The plain turn the endpoint joins onto the calls: MEASURED
+			// accepted. The calls still await their results.
 		case callsAt >= 0:
 			v.reject("messages", fmt.Sprintf("message %d comes after the tool calls of message %d before their results; "+
-				"the %s protocol takes the results directly after the calls", i, callsAt, v.profile.WireAPI))
+				"only a plain assistant turn may stand there, never user content, a calling or a replayed turn",
+				i, callsAt))
 			return false
 		default:
 			answering = false
 			if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
 				callsAt = i
 			}
+		}
+		replayedAt = -1
+		if replayed {
+			replayedAt = i
 		}
 		lastAt = i
 	}

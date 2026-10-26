@@ -362,6 +362,37 @@ func TestProbe_OpusConversationShapes(t *testing.T) {
 	}
 }
 
+// TestProbe_OpusSignedJoins: the shapes plan lets through where the endpoint
+// joins consecutive assistant turns, with real signed thinking: a plain note
+// after a replayed calling turn, and two replayed turns in a row.
+func TestProbe_OpusSignedJoins(t *testing.T) {
+	c := opusClient(t)
+	req := ChatRequest{Model: opusModel, Tools: []Tool{weatherTool}, Reasoning: ReasoningEffort("high"), MaxTokens: ptr(4000),
+		Messages: []Message{User("Think step by step about which Swiss city has more cantons around it, then call get_weather for Bern.")}}
+	r1, _, err := opusChat(t, c, req)
+	if err != nil || len(r1.ToolCalls) != 1 {
+		t.Fatalf("round 1: %v %+v", err, r1)
+	}
+	result := ToolResult(r1.ToolCalls[0].ID, `{"temp_c":14}`)
+	r2, _, err := opusChat(t, c, ChatRequest{Model: opusModel, Tools: req.Tools, Reasoning: req.Reasoning, MaxTokens: req.MaxTokens,
+		Messages: append(append([]Message(nil), req.Messages...), r1.Assistant(), result)})
+	if err != nil {
+		t.Fatalf("round 2: %v", err)
+	}
+	for name, ms := range map[string][]Message{
+		"note after signed call": {req.Messages[0], r1.Assistant(), Assistant("Checking the weather now."), result},
+		"two signed in a row":    {req.Messages[0], r1.Assistant(), result, r2.Assistant(), r2.Assistant(), User("Say it again.")},
+	} {
+		resp, _, err := opusChat(t, c, ChatRequest{Model: opusModel, Tools: req.Tools, Reasoning: ReasoningEffort("low"),
+			MaxTokens: ptr(2000), Messages: ms})
+		if err != nil {
+			t.Logf("%s: REFUSED %v", name, err)
+			continue
+		}
+		t.Logf("%s: ACCEPTED content %q", name, resp.Content)
+	}
+}
+
 // TestProbe_OpusStructuredOutput: output_config.format json_schema.
 func TestProbe_OpusStructuredOutput(t *testing.T) {
 	c := opusClient(t)

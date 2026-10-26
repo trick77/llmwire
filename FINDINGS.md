@@ -395,7 +395,11 @@ defined, so tool turns are sent as they are. User text ahead of the
 `tool_result` in one turn is a 400, "`tool_use` ids were found without
 `tool_result` blocks immediately after"; plan refuses user content between a
 call and its results by index. An assistant turn there was accepted: the
-endpoint joins consecutive assistant turns.
+endpoint joins consecutive assistant turns. With real signed thinking
+(`OpusSignedJoins`): a plain note after a replayed calling turn was accepted;
+two replayed turns in a row were a 400, "Invalid `signature` in `thinking`
+block. The block is bound to a different conversation." Plan refuses the
+latter by index.
 
 Not measured: vision, parallel tool calls, a stop sequence.
 

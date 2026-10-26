@@ -648,8 +648,9 @@ func TestMessages_ReviewEdges(t *testing.T) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
-	// Opening on an assistant turn, and two in a row, are fine (measured),
-	// and two assistant turns stay two: a signed one goes back unchanged.
+	// Opening on an assistant turn, and two plain ones in a row, are fine
+	// (measured), and two assistant turns stay two: a signed one goes back
+	// unchanged.
 	r1, _ := parseMessagesResponseWith(Redact, json.RawMessage(opusRound1))
 	pl = mustPlan(t, c, opusRequest(Assistant("hi"), User("q"), r1.Assistant(), ToolResult("toolu_01AM", "r"),
 		Assistant("note"), Assistant("more"), User("and?")), false)
@@ -683,11 +684,15 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	if _, _, err := c.plan(opusRequest(User("q"), r1.Assistant(), Assistant("note"), ToolResult("toolu_01AM", "r")), false); err != nil {
 		t.Errorf("assistant before result: %v", err)
 	}
+	reply2, _ := parseMessagesResponseWith(Redact, json.RawMessage(opusRound2))
+	r2 := reply2.Assistant()
 	for name, tc := range map[string]struct {
 		ms   []Message
 		want string
 	}{
-		"replayed between": {[]Message{User("q"), r1.Assistant(), r1.Assistant(), ToolResult("toolu_01AM", "r")}, "message 2 comes after the tool calls of message 1"},
+		"replayed between": {[]Message{User("q"), r1.Assistant(), r1.Assistant(), ToolResult("toolu_01AM", "r")}, "messages 1 and 2 are replayed assistant turns in a row"},
+		"replayed in a row": {[]Message{User("q"), r1.Assistant(), ToolResult("toolu_01AM", "r"), r2, r2, User("again")},
+			"messages 3 and 4 are replayed assistant turns in a row"},
 		"calls between": {[]Message{User("q"), r1.Assistant(), {Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "t2", Name: "get_weather"}}},
 			ToolResult("toolu_01AM", "r")}, "message 2 comes after the tool calls of message 1"},
 		"unanswered":    {[]Message{User("q"), r1.Assistant()}, "the tool calls of message 1 have no results"},
