@@ -3,10 +3,10 @@
 ## What this is
 
 Dependency-light Go **library**, one package at repo root plus `llmwiretest`
-(synthetic profiles + recording fake, for consumers' tests). OpenAI protocols only:
-`/chat/completions` + `/embeddings`, `/responses` for `wire_api: responses`.
-Protocol is a **profile fact fixed at load**, never per request. Anthropic,
-Gemini-native, Bedrock: permanently out of scope.
+(synthetic profiles + recording fake, for consumers' tests). Protocols:
+`/chat/completions` + `/embeddings`, `/responses` for `wire_api: responses`,
+Anthropic `/messages` for `wire_api: messages`. Protocol is a **profile fact
+fixed at load**, never per request; the consumer API is the same for all.
 
 ## Commands
 
@@ -57,10 +57,19 @@ gofmt, build, golangci-lint (ship's config, no repo copy), secret scan, `go test
 - Streaming is a `plan` parameter, never a request field.
 - `ExtraBody` merges last and **wins**; top level only. Refused in `plan`:
   `stream`, `stream_options`, `model`, and the cap spelling the profile does
-  not take; on Responses also `input`, `store`, `include` and both chat caps.
+  not take; Responses and Messages refuse their own body keys too
+  (`checkExtraBody`).
 - Responses is **stateless** (`store:false`, encrypted reasoning replayed via
   `Message.ResponseItems`). Tool loops append `resp.Assistant()`, never a
   rebuilt turn. Tools always send `strict`. Read `responses.go`'s head comment
+  first.
+- Messages: same replay rule for **signed thinking blocks**; cache lanes sit
+  **beside** `input_tokens` (added, never subtracted); `ping` is a `data:`
+  frame and never re-arms the guard; `max_tokens` required (uncapped =
+  `limits.max_output`); `speed`/`inference_geo` refused (bill off list).
+  Plan never drops or reorders turns (`checkMessagesTurns` refuses by index);
+  only user turns merge. Key header + `anthropic-version` live on the
+  provider entry, never in client code. Read `messages.go`'s head comment
   first.
 
 ## Transport

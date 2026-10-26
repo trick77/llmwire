@@ -183,6 +183,11 @@ type errorObject struct {
 // APIError.Code); decoding it into a string field directly fails on Z.ai, and
 // into a number fails on MiMo.
 type errorEnvelope struct {
+	// Type is "error" on Anthropic's envelope, {"type":"error","error":
+	// {"type":"overloaded_error","message":…}}, which carries no code: its
+	// error.type IS the code, and is copied there so callers dispatch on Code
+	// whichever protocol answered.
+	Type  string      `json:"type"`
 	Error errorObject `json:"error"`
 	// Detail is the FastAPI shape a LiteLLM proxy falls back to for validation
 	// failures and for its catch-all handler. It is a string, an object or an
@@ -228,6 +233,9 @@ func parseAPIErrorWith(redact redactor, status int, body []byte) *APIError {
 	if err := json.Unmarshal(body, &env); err == nil {
 		if env.Error.Message != "" || len(env.Error.Code) > 0 || env.Error.Type != "" {
 			e.fill(clean, env.Error)
+			if env.Type == "error" && e.Code == "" {
+				e.Code = e.Type
+			}
 			return e
 		}
 		if len(env.Detail) > 0 {

@@ -49,6 +49,13 @@ const (
 	ResponsesModel = "llmwiretest-responses"
 	// ReasoningItemID is the id of the reasoning item ResponsesModel returns.
 	ReasoningItemID = "rs_llmwiretest"
+	// MessagesModel is on the Messages protocol (Anthropic's): it always
+	// thinks, and every answer carries a signed thinking block, so a test can
+	// check that a tool loop replays resp.Assistant().
+	MessagesModel = "llmwiretest-messages"
+	// ThinkingSignature is the signature of the thinking block MessagesModel
+	// returns.
+	ThinkingSignature = "sig_llmwiretest"
 	// BudgetModel takes reasoning as a token budget and can be switched off.
 	BudgetModel = "llmwiretest-budget"
 	// EmbedModel returns EmbedDimensions-long vectors.
@@ -133,6 +140,11 @@ func (r Request) Reasoning() string {
 		rsn, _ := r.Body["reasoning"].(map[string]any)
 		e, ok = rsn["effort"].(string)
 	}
+	if !ok {
+		// So does the Messages protocol, elsewhere.
+		oc, _ := r.Body["output_config"].(map[string]any)
+		e, ok = oc["effort"].(string)
+	}
 	if ok {
 		if e == "none" {
 			return "off"
@@ -150,9 +162,8 @@ func (r Request) Reasoning() string {
 	return ""
 }
 
-// Server is a fake OpenAI-compatible endpoint: /chat/completions and
-// /responses (plain and streamed), /embeddings and /models. Every request is
-// recorded.
+// Server is a fake endpoint: /chat/completions, /responses and /messages
+// (plain and streamed), /embeddings and /models. Every request is recorded.
 type Server struct {
 	*httptest.Server
 
@@ -235,11 +246,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.chat(w, req, reply)
 	case strings.HasSuffix(req.Path, "/responses"):
 		responses(w, req, reply)
+	case strings.HasSuffix(req.Path, "/messages"):
+		messages(w, req, reply)
 	case strings.HasSuffix(req.Path, "/embeddings"):
 		embeddings(w, req)
 	case strings.HasSuffix(req.Path, "/models"):
 		writeJSON(w, map[string]any{"object": "list", "data": []any{
-			map[string]any{"id": ChatModel}, map[string]any{"id": ResponsesModel}, map[string]any{"id": EmbedModel},
+			map[string]any{"id": ChatModel}, map[string]any{"id": ResponsesModel}, map[string]any{"id": MessagesModel},
+			map[string]any{"id": EmbedModel},
 		}})
 	default:
 		http.Error(w, `{"error":{"message":"no such route"}}`, http.StatusNotFound)
@@ -305,6 +319,49 @@ func responses(w http.ResponseWriter, req Request, reply string) {
 	}
 	frame(map[string]any{"type": "response.output_text.delta", "output_index": 1, "delta": reply})
 	frame(map[string]any{"type": "response.completed", "response": response})
+}
+
+// ReplayedThinking reports whether the call's messages carried the signed
+// thinking block a previous MessagesModel answer returned: what a tool loop
+// that appends resp.Assistant() sends, and one that rebuilds the turn does not.
+func (r Request) ReplayedThinking() bool {
+	turns, _ := r.Body["messages"].([]any)
+	for _, raw := range turns {
+		turn, _ := raw.(map[string]any)
+		blocks, _ := turn["content"].([]any)
+		for _, b := range blocks {
+			if block, _ := b.(map[string]any); block["type"] == "thinking" && block["signature"] == ThinkingSignature {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func messages(w http.ResponseWriter, req Request, reply string) {
+	usage := map[string]any{"input_tokens": 10, "output_tokens": 5,
+		"output_tokens_details": map[string]any{"thinking_tokens": 2}}
+	thinking := map[string]any{"type": "thinking", "thinking": "thinking", "signature": ThinkingSignature}
+	text := map[string]any{"type": "text", "text": reply}
+	if !req.Stream() {
+		writeJSON(w, map[string]any{"type": "message", "role": "assistant", "model": req.Model(),
+			"content": []any{thinking, text}, "stop_reason": "end_turn", "usage": usage})
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	frame := func(v any) {
+		raw, _ := json.Marshal(v)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", raw)
+	}
+	frame(map[string]any{"type": "message_start", "message": map[string]any{"model": req.Model(),
+		"usage": map[string]any{"input_tokens": 10, "output_tokens": 1}}})
+	frame(map[string]any{"type": "content_block_start", "index": 0, "content_block": thinking})
+	frame(map[string]any{"type": "content_block_stop", "index": 0})
+	frame(map[string]any{"type": "content_block_start", "index": 1, "content_block": map[string]any{"type": "text", "text": ""}})
+	frame(map[string]any{"type": "content_block_delta", "index": 1, "delta": map[string]any{"type": "text_delta", "text": reply}})
+	frame(map[string]any{"type": "content_block_stop", "index": 1})
+	frame(map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn"}, "usage": usage})
+	frame(map[string]any{"type": "message_stop"})
 }
 
 func embeddings(w http.ResponseWriter, req Request) {

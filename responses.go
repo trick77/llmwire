@@ -77,24 +77,33 @@ func (pl *wirePlan) responses() bool { return pl.profile.WireAPI == WireResponse
 
 // route is where this plan's request goes.
 func (pl *wirePlan) route() string {
-	if pl.responses() {
+	switch {
+	case pl.responses():
 		return routeResponses
+	case pl.messages():
+		return routeMessages
 	}
 	return routeChat
 }
 
 // render builds this plan's body in its protocol's spelling.
 func (pl *wirePlan) render() ([]byte, error) {
-	if pl.responses() {
+	switch {
+	case pl.responses():
 		return renderResponsesBody(pl)
+	case pl.messages():
+		return renderMessagesBody(pl)
 	}
 	return renderChatBody(pl)
 }
 
 // parse decodes this plan's non-streaming reply.
 func (pl *wirePlan) parse(redact redactor, raw json.RawMessage) (*ChatResponse, error) {
-	if pl.responses() {
+	switch {
+	case pl.responses():
 		return parseResponsesResponseWith(redact, raw)
+	case pl.messages():
+		return parseMessagesResponseWith(redact, raw)
 	}
 	return parseChatResponseWith(redact, raw)
 }

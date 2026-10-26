@@ -1,15 +1,16 @@
 # llmwire
 
 A dependency-light Go library for talking to **OpenAI-compatible** inference
-endpoints — chat, tools, vision and embeddings — with each model's quirks kept as
-data rather than scattered through call sites. It is an adapter over model
-dialects, not over vendors: one request contract, OpenAI's protocols, and the
-per-model bends live in `profiles.yaml`.
+endpoints, and to Claude over Anthropic's own protocol — chat, tools, vision and
+embeddings — with each model's quirks kept as data rather than scattered through
+call sites. It is an adapter over model dialects, not over vendors: one request
+contract, and the per-model bends, the wire protocol included, live in
+`profiles.yaml`.
 
 ```go
 // The host comes from the model's profile (profiles.yaml carries each
 // vendor's base URL); the key from LLMWIRE_<PROVIDER>_API_KEY, the provider
-// named by the profile (zai here, mimo and openai for the others). An
+// named by the profile (zai here; mimo, openai and anthropic for the others). An
 // application configures a key and nothing else; a LLMWIRE_<PROVIDER>_BASE_URL
 // beside a shipped host is refused as the old contract. New(Config{...}) is
 // there for a custom transport or an explicit URL.
@@ -210,15 +211,18 @@ for code that calls `FromEnvModels`). Assert `srv.Last().Reasoning()` against
 
 ## Scope
 
-OpenAI's wire protocols: `/chat/completions` and `/embeddings`, plus
-`/responses` for a model whose profile says `wire_api: responses`. That is a
-profile fact, fixed at load: one model, one protocol, and `Chat`/`ChatStream`
-look the same either way. It exists for gpt-6.1-sol, which takes tools while
-it reasons only on `/responses`, and whose encrypted reasoning that protocol
-carries across tool rounds. A tool loop appends `resp.Assistant()`, never a
-turn rebuilt from `Content` and `ToolCalls`, so the reasoning goes back.
-Anthropic, Gemini-native and Bedrock are permanently out of scope: a vendor's
-own protocol would need the provider abstraction this library exists to avoid.
+Three wire protocols: OpenAI's `/chat/completions` and `/embeddings`, plus
+`/responses` for a model whose profile says `wire_api: responses`, and
+Anthropic's `/messages` for `wire_api: messages`. That is a profile fact, fixed
+at load: one model, one protocol, and `Chat`/`ChatStream` look the same
+whichever it is. `/responses` exists for gpt-6.1-sol, which takes tools while
+it reasons only there; `/messages` for Claude (claude-opus-5-5), whose own API
+speaks nothing else. Both carry the model's reasoning across tool rounds, as
+encrypted items and as signed thinking blocks. A tool loop appends
+`resp.Assistant()`, never a turn rebuilt from `Content` and `ToolCalls`, so
+the reasoning goes back. An application using Claude sets
+`LLMWIRE_ANTHROPIC_API_KEY` and names the model; caching there is opt-in, with
+`ExtraBody: {"cache_control": {"type": "ephemeral"}}`.
 
 Also out of scope, by design: vector stores, chunking, embedding caches, retry
 policy and prompt content. llmwire never retries; it parses `Retry-After` into a

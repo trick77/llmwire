@@ -116,9 +116,21 @@ func FromEnvModels(cfg Config, models ...string) (*Client, error) {
 			providers[ep.profile.Provider] = true
 			add(key, ep.cfg, m, ep)
 		}
-		if cfg.APIKey != "" && len(providers) > 1 {
-			return nil, fmt.Errorf("llmwire: Config.APIKey is set, but models %v span providers %v; "+
-				"leave it empty so each provider's LLMWIRE_<PROVIDER>_API_KEY is read", ids, sortedKeys(providers))
+		// A per-host setting given once cannot be right for several hosts:
+		// one key would go to every vendor, one key header would put a bearer
+		// host's key in x-api-key or the reverse, a 401 that says only auth.
+		for _, f := range []struct {
+			name string
+			set  bool
+			fix  string
+		}{
+			{"APIKey", cfg.APIKey != "", "each provider's LLMWIRE_<PROVIDER>_API_KEY is read"},
+			{"APIKeyHeader", cfg.APIKeyHeader != "", "each provider's own api_key_header applies"},
+		} {
+			if f.set && len(providers) > 1 {
+				return nil, fmt.Errorf("llmwire: Config.%s is set, but models %v span providers %v; "+
+					"leave it empty so %s", f.name, ids, sortedKeys(providers), f.fix)
+			}
 		}
 	}
 	if len(missing) > 0 {

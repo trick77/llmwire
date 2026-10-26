@@ -332,6 +332,79 @@ refused, and the toggle wins — reasoning tokens 0 on both. A caller that
 disables thinking while also passing an effort gets what it asked for, so
 `ReasoningOff()` needs no special handling to strip the level.
 
+### `claude-opus-5-5`
+
+Measured on 2026-10-26 against `api.anthropic.com/v1`, `anthropic-version:
+2026-10-21`, through `FromEnv` (`eval_messages_test.go`). The first profile on
+Anthropic's Messages protocol (`wire_api: messages`).
+
+| bit | value | probe |
+|---|---|---|
+| `reasoning.effort_values` | **low, medium, high, xhigh, max**; `none` and `minimal` a 400 | `OpusEffortLadder` |
+| `reasoning.can_be_disabled` | **false**: `thinking.type` `disabled` and `enabled` (budget) a 400 | `OpusRefusals` |
+| `temperature` / `top_p` | **unsupported**: "Extra inputs are not permitted", 400 | `OpusRefusals` |
+| `tool_choice_values` | **auto, none**: `any` and `tool` a 400 | `OpusRefusals` |
+| `json_schema` | **true**, the reply parsed | `OpusStructuredOutput` |
+| usage containment | **cache BESIDE input_tokens** | `OpusCacheContainment` |
+| `limits` | **1,000,000 / 128,000**, from the models listing | `OpusModelsListing` |
+| uncapped call | **accepted** at `max_tokens` 128000, non-streamed | `OpusBasics` |
+
+Every refusal is `400 invalid_request_error`; the error body is
+`{"type":"error","error":{"type":…,"message":…}}`, and `error.type` becomes
+`APIError.Code`. An unknown model is `404 not_found_error`. Verbatim: `"thinking.type.disabled" is not
+supported for this model. Use "thinking.type.adaptive" and
+"output_config.effort" to control thinking behavior.`; `tool_choice: type
+"tool" and "any" are not supported for this model.`
+
+**Cache tokens sit beside `input_tokens`, the reverse of the OpenAI shape.**
+An 11215-token system prompt under top-level `cache_control` reported
+`input_tokens` 4 with `cache_creation_input_tokens` 11215, then `input_tokens`
+4 with `cache_read_input_tokens` 11215 on the identical second call. Priced
+0.056171 and 0.002339 USD: the write lane at the 5-minute rate, the read at
+0.05x. So `Input.Total` is built by adding the three lanes, never by
+subtracting.
+
+**Usage reports thinking.** `output_tokens_details.thinking_tokens`, inside
+`output_tokens`, maps to `Output.Reasoning`. A trivial prompt thinks 0 tokens
+at every level from `low` to `xhigh`, 30 at `max`.
+
+**A deep think fills the cap.** With `display: summarized` at effort `high`, a
+counting problem streamed 1144 `thinking_delta` frames over 2m40s and stopped
+at `max_tokens` 16000 with all 16000 output tokens thinking and no answer. The
+longest gap between non-ping frames was 4.8s, and only ONE `ping` arrived in
+the whole stream, so the idle guard is fed by the thinking summary, never by
+heartbeats (`OpusStreamFrames`). `DefaultReasoningOverhead` is far short at
+`high` and above: `MaxAnswerTokens` with a small answer can return `length` and
+no content until an overhead is measured.
+
+**Thinking replay.** Round 1 of the tool loop returned a signed `thinking`
+block and a `tool_use`; round 2 with `resp.Assistant()` answered. A
+hand-built assistant turn carrying only the `tool_use`, no thinking block, was
+ACCEPTED too, as was the replay of a streamed turn (`OpusToolLoop`).
+
+**Conversation shapes** (`OpusConversationShapes`): ending on an assistant
+turn is a 400, "This model does not support assistant message prefill. The
+conversation must end with a user message." (`assistant_prefill: false`).
+Opening on one, and two assistant turns in a row, were accepted. A
+whitespace-only text block is a 400, "text content blocks must contain
+non-whitespace text", where Chat Completions takes it: plan refuses such a
+turn by index rather than dropping it, since a drop reshapes the history into
+another 400 (a prefill, a tool_use not followed by its result). A
+`tool_result` whose content is whitespace or empty was accepted, tools
+defined, so tool turns are sent as they are. User text ahead of the
+`tool_result` in one turn is a 400, "`tool_use` ids were found without
+`tool_result` blocks immediately after"; plan refuses user content between a
+call and its results by index. An assistant turn there was accepted: the
+endpoint joins consecutive assistant turns. With real signed thinking
+(`OpusSignedJoins`, same effort as the replayed turns): a plain note after a
+replayed calling turn was accepted; a replayed turn sent twice was a 400,
+"Invalid `signature` in `thinking` block. The block is bound to a different
+conversation." Plan does not refuse it: it cannot tell an edited history from
+a genuine one (another model's replies, a turn with no signed block), so the
+endpoint's 400 comes back as that APIError.
+
+Not measured: vision, parallel tool calls, a stop sequence.
+
 ## Where the documentation is wrong
 
 | claim | source | measured |

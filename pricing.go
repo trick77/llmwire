@@ -546,6 +546,12 @@ func priceCall(p *Profile, u Usage, hdr http.Header, status int, at time.Time) (
 	if p.Endpoint == EndpointChat && u.Output.Total == nil {
 		return unpriced("model %q reported no completion tokens, so the call cannot be priced", p.ID)
 	}
+	if Tokens(u.longCacheWrite) > 0 {
+		// Only reachable through ExtraBody cache_control with ttl 1h: llmwire
+		// sends no cache_control of its own.
+		return unpriced("model %q wrote %d tokens to the one-hour cache, which bills above the cache_write rate "+
+			"this table holds", p.ID, *u.longCacheWrite)
+	}
 
 	b := p.Cost
 	// Cache reads are SUBTRACTED, not added: prompt_tokens already includes

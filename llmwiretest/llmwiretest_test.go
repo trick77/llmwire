@@ -110,7 +110,7 @@ func TestEmbeddingsAndListing(t *testing.T) {
 		t.Errorf("vectors %v", resp.Vectors)
 	}
 	models, _, err := c.ListModels(context.Background())
-	if err != nil || len(models) != 3 {
+	if err != nil || len(models) != 4 {
 		t.Errorf("models %v, %v", models, err)
 	}
 	if n := len(srv.Requests()); n != 2 {
@@ -169,6 +169,45 @@ func TestResponsesModelReplay(t *testing.T) {
 	req.Messages[1] = llmwire.Message{Role: llmwire.RoleAssistant, Text: resp.Content}
 	if _, _, err := c.Chat(ctx, req); err != nil || srv.Last().ReplayedReasoning() {
 		t.Fatalf("rebuilt turn: err %v, replayed %v", err, srv.Last().ReplayedReasoning())
+	}
+
+	s, _, err := c.ChatStream(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	res, err := s.Collect(nil)
+	if err != nil || res.Content != llmwiretest.Reply || len(res.Assistant().ResponseItems) != 2 {
+		t.Fatalf("stream: %+v, %v", res, err)
+	}
+}
+
+// The same on the Messages protocol: the signed thinking block goes back with
+// Assistant(), and not with a rebuilt turn.
+func TestMessagesModelReplay(t *testing.T) {
+	srv := llmwiretest.NewServer(t)
+	c := srv.Client()
+	ctx := context.Background()
+	answer := 100
+	req := llmwire.ChatRequest{Model: llmwiretest.MessagesModel, Messages: []llmwire.Message{llmwire.User("hi")},
+		Reasoning: llmwire.ReasoningBalanced(), MaxAnswerTokens: &answer}
+	resp, _, err := c.Chat(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := srv.Last().MaxTokens(); srv.Last().Path != "/messages" || srv.Last().Reasoning() != resp.ReasoningSent ||
+		resp.Content != llmwiretest.Reply || n != 100+llmwiretest.BalancedOverhead {
+		t.Fatalf("path %s, reasoning %q vs %q, content %q, cap %d", srv.Last().Path, srv.Last().Reasoning(),
+			resp.ReasoningSent, resp.Content, n)
+	}
+
+	req.Messages = append(req.Messages, resp.Assistant(), llmwire.User("again"))
+	if _, _, err := c.Chat(ctx, req); err != nil || !srv.Last().ReplayedThinking() {
+		t.Fatalf("Assistant() turn: err %v, replayed %v", err, srv.Last().ReplayedThinking())
+	}
+	req.Messages[1] = llmwire.Message{Role: llmwire.RoleAssistant, Text: resp.Content}
+	if _, _, err := c.Chat(ctx, req); err != nil || srv.Last().ReplayedThinking() {
+		t.Fatalf("rebuilt turn: err %v, replayed %v", err, srv.Last().ReplayedThinking())
 	}
 
 	s, _, err := c.ChatStream(ctx, req)

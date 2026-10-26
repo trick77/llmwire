@@ -101,6 +101,10 @@ var evalRates = map[string]evalRate{
 	// cache write 5.00 (above long-context input 4.00) and output 15.00,
 	// against 2.00/10.00 under the threshold.
 	"gpt-6.1-sol": {5.00, 15.00},
+	// Pricing page 2026-10-26: the dearest input lane is the one-hour cache
+	// write at 8.00 (base input 4.00); output 20.00. Fast mode (2x) is
+	// refused in plan, so its 40.00 is not a lane a probe reaches.
+	"claude-opus-5-5": {8.00, 20.00},
 }
 
 // meter accumulates spend across the whole run. Shared by every probe, because
@@ -262,6 +266,9 @@ type endpoint struct {
 var (
 	mimoEndpoint = endpoint{"mimo", "LLMWIRE_MIMO_BASE_URL", "LLMWIRE_MIMO_API_KEY"}
 	zaiEndpoint  = endpoint{"zai", "LLMWIRE_ZAI_BASE_URL", "LLMWIRE_ZAI_API_KEY"}
+	// anthropicEndpoint is below plan, for RawPost probes of what plan
+	// refuses (thinking disabled, forced tool choice, temperature).
+	anthropicEndpoint = endpoint{"anthropic", "LLMWIRE_ANTHROPIC_BASE_URL", "LLMWIRE_ANTHROPIC_API_KEY"}
 )
 
 // client builds a Client for an endpoint, or skips with a named reason.
@@ -292,6 +299,9 @@ func (e endpoint) client(t *testing.T) *Client {
 	return New(Config{
 		BaseURL: base,
 		APIKey:  key,
+		// The host's own key header and required headers, as FromEnv sends.
+		APIKeyHeader: pv.APIKeyHeader,
+		Headers:      pv.Headers,
 		// Deliberately shorter than production: a probe that hangs should fail
 		// the run quickly, and none of these questions needs a long answer.
 		HeaderTimeout: 60 * time.Second,

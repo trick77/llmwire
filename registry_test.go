@@ -2,6 +2,7 @@ package llmwire
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -158,6 +159,25 @@ func TestDefault_MeasuredFactsMatchFindings(t *testing.T) {
 				t.Errorf("%s: max_output = %d, want 131072 (vendor model card)",
 					id, p.Limits.MaxOutput)
 			}
+		}
+	})
+
+	t.Run("claude-opus-5-5 as OpusRefusals and OpusEffortLadder read it", func(t *testing.T) {
+		p := mustLookup(t, reg, "claude-opus-5-5")
+		if p.Reasoning.CanBeDisabled || !p.Reasoning.EnabledByDefault {
+			t.Error("thinking.type disabled is a 400; the model always thinks")
+		}
+		if got := strings.Join(p.Reasoning.EffortValues, ","); got != "low,medium,high,xhigh,max" {
+			t.Errorf("effort_values = %s; none and minimal were refused", got)
+		}
+		if p.Temperature.Supported || p.TopP.Supported {
+			t.Error("temperature and top_p are a 400")
+		}
+		if p.Tools.SupportsForcedChoice || slices.Contains(p.Tools.ToolChoiceValues, "required") {
+			t.Error("tool_choice any and tool are a 400")
+		}
+		if p.APIKeyHeader != "x-api-key" || p.Headers["anthropic-version"] == "" {
+			t.Errorf("provider: key header %q, headers %v", p.APIKeyHeader, p.Headers)
 		}
 	})
 }
