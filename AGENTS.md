@@ -67,8 +67,9 @@ gofmt, build, golangci-lint (ship's config, no repo copy), secret scan, `go test
   **beside** `input_tokens` (added, never subtracted); `ping` is a `data:`
   frame and never re-arms the guard; `max_tokens` required (uncapped =
   `limits.max_output`); `speed`/`inference_geo` refused (bill off list); key
-  header and `anthropic-version` are provider facts, never an app's. Read
-  `messages.go`'s head comment first.
+  header and `anthropic-version` ship on the provider (`Config` may override).
+  Empty turns leave the coerced request in plan. Read `messages.go`'s head
+  comment first.
 
 ## Transport
 

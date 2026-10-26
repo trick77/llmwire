@@ -75,7 +75,10 @@ func (pl *wirePlan) messages() bool { return pl.profile.WireAPI == WireMessages 
 // render.go invariant holds here too: every capability was decided in plan.
 func renderMessagesBody(pl *wirePlan) ([]byte, error) {
 	req := pl.req
-	turns, _ := renderMessagesTurns(req.Messages)
+	turns, err := renderMessagesTurns(req.Messages)
+	if err != nil {
+		return nil, err
+	}
 	body := map[string]any{
 		"model":    pl.profile.WireModelID,
 		"messages": turns,
@@ -147,17 +150,13 @@ type messagesTurn struct {
 }
 
 // renderMessagesTurns encodes the conversation, system turns excluded, merging
-// consecutive turns of one role, and counts the turns left out for having
-// nothing to send. plan runs it too, and refuses the shapes it cannot send
-// (checkMessagesShape), so render itself never fails.
-func renderMessagesTurns(ms []Message) (_ []messagesTurn, dropped int) {
+// consecutive turns of one role. plan has taken the empty turns out already
+// (dropEmptyTurns); one that reaches here anyway is skipped, never sent as an
+// empty content array.
+func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
 	var out []messagesTurn
 	add := func(role Role, blocks []any) {
 		if len(blocks) == 0 {
-			// An empty content array is refused, and so is an empty text
-			// block, which Chat Completions takes and OpenAI histories carry:
-			// a turn with nothing to say is left out.
-			dropped++
 			return
 		}
 		if n := len(out); n > 0 && out[n-1].Role == string(role) {
@@ -194,7 +193,10 @@ func renderMessagesTurns(ms []Message) (_ []messagesTurn, dropped int) {
 			add(m.Role, contentBlocks(m))
 		}
 	}
-	return out, dropped
+	if len(out) == 0 {
+		return nil, fmt.Errorf("llmwire: the Messages protocol needs a user or assistant turn with content; the request carries none")
+	}
+	return out, nil
 }
 
 // toolInput is a call's arguments as the object tool_use.input takes. plan
@@ -221,7 +223,7 @@ func toolResultBlock(m Message) map[string]any {
 // contentBlocks spells a user turn's content. An empty text block is left
 // out: the protocol refuses one ("text content blocks must be non-empty"),
 // where Chat Completions takes "" without a word, so an OpenAI history carries
-// them. A turn left with nothing is dropped (renderMessagesTurns).
+// them. A turn left with nothing is taken out in plan (dropEmptyTurns).
 func contentBlocks(m Message) []any {
 	if len(m.Parts) == 0 {
 		if m.Text == "" {

@@ -626,29 +626,38 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	if got := renderedBody(t, pl)["messages"].([]any); len(got) != 1 {
 		t.Errorf("empty first turn: %v", got)
 	}
-	if w := pl.req; len(w.Messages) != 2 {
-		t.Errorf("the coerced request lost turns: %v", w.Messages)
+	// The coerced request is what goes out: the empty turn is gone from it,
+	// and the warning names it by index.
+	if w := pl.req; len(w.Messages) != 1 {
+		t.Errorf("the coerced request kept the empty turn: %v", w.Messages)
 	}
 	if _, warnings, _ := c.plan(opusRequest(User(""), User("q")), false); len(warnings) != 1 ||
-		!strings.Contains(warnings[0].Details, "left out") {
-		t.Errorf("dropped turn not warned: %v", warnings)
+		!strings.Contains(warnings[0].Details, "messages [0]") {
+		t.Errorf("dropped turn not warned by index: %v", warnings)
 	}
-	// Judged on the rendered shape: a trailing empty user turn, or an empty
-	// assistant then an empty user, ends on the assistant before them; an
-	// empty first turn before an assistant opens on it.
+	// Refused only where the drop makes the request end on an assistant
+	// turn the caller did not end on.
 	for name, ms := range map[string][]Message{
-		"ends on assistant":       {User("q"), Assistant("a"), User(""), System("s")},
-		"two empty trailing":      {User("q"), Assistant("a"), User(""), Assistant("")},
-		"opens on assistant":      {User(""), Assistant("a"), User("q")},
-		"assistant prefill as-is": {User("q"), Assistant("a")},
+		"ends on assistant":  {User("q"), Assistant("a"), User(""), System("s")},
+		"two empty trailing": {User("q"), Assistant("a"), User(""), Assistant("")},
 	} {
-		if _, _, err := c.plan(opusRequest(ms...), false); err == nil || !strings.Contains(err.Error(), "assistant turn") {
+		if _, _, err := c.plan(opusRequest(ms...), false); err == nil || !strings.Contains(err.Error(), "prefill") {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
-	// Both trailing turns empty after a real user turn: renders as [user q].
-	if _, _, err := c.plan(opusRequest(User("q"), Assistant(""), User("")), false); err != nil {
-		t.Errorf("empty assistant and user after q: %v", err)
+	// What the caller sent stays the caller's: a prefill, an assistant-first
+	// history once the empty turn is out, a pause_turn resume, and two empty
+	// trailing turns after a real user turn.
+	for name, ms := range map[string][]Message{
+		"prefill as sent":    {User("q"), Assistant("{")},
+		"opens on assistant": {User(""), Assistant("a"), User("q")},
+		"pause_turn resume": {User("q"), {Role: RoleAssistant,
+			ResponseItems: []json.RawMessage{json.RawMessage(`{"type":"server_tool_use","id":"s","name":"web_search","input":{}}`)}}},
+		"empty after q": {User("q"), Assistant(""), User("")},
+	} {
+		if _, _, err := c.plan(opusRequest(ms...), false); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 	// An empty text block in a reply is not replayed; a reply of thinking
 	// alone carries no items at all.

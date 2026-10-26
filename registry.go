@@ -67,8 +67,8 @@ var headerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // containing auth, key, token, secret, password, cookie or session
 // (authorization, x-api-key, apikey, x-session-id). Broad on purpose, and it
 // refuses harmless names too (x-session-affinity, x-idempotency-key): a host
-// that needs one gets an explicit allowance here, with its reason. A key
-// shipped in this file does not come back.
+// that needs one would need an allowance added to Provider.validate, with its
+// reason. A key shipped in profiles.yaml does not come back.
 var credentialHeader = regexp.MustCompile(`auth|key|token|secret|password|cookie|session`)
 
 var (

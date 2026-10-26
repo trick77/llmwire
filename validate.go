@@ -860,7 +860,7 @@ func (v *validation) checkProtocol(req ChatRequest) {
 			return
 		}
 	}
-	if messages && !v.checkMessagesShape() {
+	if messages && !v.dropEmptyTurns() {
 		return
 	}
 	if droppedThinking {
@@ -880,33 +880,63 @@ func (v *validation) checkProtocol(req ChatRequest) {
 	}
 }
 
-// checkMessagesShape judges the conversation as it will go on the wire,
-// empty turns left out and same-role turns merged, rather than the caller's
-// list: what the endpoint refuses is the rendered shape. It must open and
-// close on a user turn. Opening on an assistant turn is refused by the
-// protocol; closing on one is a prefill, which these models refuse with a
-// 400 and an older one would continue as if it had written it. A turn left
-// out is said in a warning: the model sees a shorter history than was sent.
-func (v *validation) checkMessagesShape() bool {
-	turns, dropped := renderMessagesTurns(v.out.Messages)
+// dropEmptyTurns takes the turns with nothing to send out of the coerced
+// request, with a warning naming them: the protocol refuses an empty content
+// array and an empty text block, which Chat Completions takes and OpenAI
+// histories carry. Render then encodes what is left as it is.
+//
+// The one drop refused is one that changes how the request ends: the
+// caller's last turn empty, and an assistant turn left last. That is a
+// prefill the caller never sent, which a model refuses or continues as if
+// it had written it. A prefill the caller did send goes out as sent; the
+// model's answer to it is the endpoint's.
+func (v *validation) dropEmptyTurns() bool {
+	var kept []Message
+	var dropped []int
+	lastWasEmpty := false
+	for i, m := range v.out.Messages {
+		if m.Role != RoleSystem {
+			lastWasEmpty = emptyTurn(m)
+		}
+		if emptyTurn(m) {
+			dropped = append(dropped, i)
+			continue
+		}
+		kept = append(kept, m)
+	}
+	last := RoleSystem
+	for _, m := range kept {
+		if m.Role != RoleSystem {
+			last = m.Role
+		}
+	}
 	switch {
-	case len(turns) == 0:
-		v.reject("messages", "no user or assistant turn has text, an image or a tool call to send")
+	case last == RoleSystem:
+		v.reject("messages", fmt.Sprintf("no user or assistant turn has text, an image or a tool call to send "+
+			"(empty: %v)", dropped))
 		return false
-	case turns[0].Role != string(RoleUser):
-		v.reject("messages", "the conversation opens on an assistant turn once empty turns are left out; "+
-			"the Messages protocol opens on a user turn")
-		return false
-	case turns[len(turns)-1].Role != string(RoleUser):
-		v.reject("messages", "the conversation ends on an assistant turn once empty turns are left out: "+
-			"a prefill, which these models refuse")
+	case len(dropped) == 0:
+		return true
+	case lastWasEmpty && last == RoleAssistant:
+		v.reject("messages", fmt.Sprintf("message %d, the last, has no text or image; left out, the request would "+
+			"end on the assistant turn before it, a prefill", dropped[len(dropped)-1]))
 		return false
 	}
-	if dropped > 0 {
-		v.warn(WarnCompatibility, "messages", fmt.Sprintf("%d turn(s) with no text, image or tool call were left out, "+
-			"and the turns around them merged by role: the protocol refuses an empty turn", dropped))
-	}
+	v.out.Messages = kept
+	v.warn(WarnCompatibility, "messages", fmt.Sprintf("messages %v have no text, image or tool call and were left out: "+
+		"the %s protocol refuses an empty turn", dropped, v.profile.WireAPI))
 	return true
+}
+
+// emptyTurn is a user or assistant turn that renders to no content block.
+func emptyTurn(m Message) bool {
+	switch m.Role {
+	case RoleUser:
+		return len(contentBlocks(m)) == 0
+	case RoleAssistant:
+		return len(m.ResponseItems) == 0 && len(m.ToolCalls) == 0 && toolOutputText(m) == ""
+	}
+	return false
 }
 
 // toolArgsAreObjects refuses a turn whose calls go out as tool_use blocks with

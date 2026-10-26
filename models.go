@@ -82,8 +82,10 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error
 	// Followed only when the first page says so, so the OpenAI-shaped listings,
 	// which send neither, see the one plain GET they always did. Each page has
 	// the call cap, as every exchange does; no page starts once the listing has
-	// spent it. An id is kept once and a cursor followed once, so a server that
-	// ignores after_id, or cycles, adds nothing twice.
+	// spent it. A cursor is followed once, and a row whose id an earlier page
+	// carried is not added again, so a server that ignores after_id, or
+	// cycles, adds nothing twice. (An alias split over a page boundary loses
+	// its second row; Anthropic, the one paged listing, has one row per id.)
 	start := c.now()
 	seenID, seenCursor := map[string]bool{}, map[string]bool{}
 	for route := routeModels; route != ""; {
