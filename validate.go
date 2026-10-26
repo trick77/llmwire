@@ -808,17 +808,16 @@ func (v *validation) checkProtocol(req ChatRequest) {
 				"which the %s protocol cannot send there", i, m.Role, wire))
 			return
 		}
-		if messages && len(m.ResponseItems) == 0 {
-			for _, tc := range m.ToolCalls {
-				// tool_use.input is an object; arguments that are not one
-				// have no spelling, and the call would go out as a 400.
-				if a := strings.TrimSpace(tc.Arguments); a != "" && (!strings.HasPrefix(a, "{") || !json.Valid([]byte(a))) {
-					v.reject("messages", fmt.Sprintf("message %d: tool call %q has arguments that are not a JSON object", i, tc.ID))
-					return
-				}
-			}
+		if messages && m.Role == RoleSystem && m.HasImage() {
+			// The system prompt is one top-level string here.
+			v.reject("messages", fmt.Sprintf("message %d is a system turn carrying an image, "+
+				"which the %s protocol cannot send there", i, wire))
+			return
 		}
 		if len(m.ResponseItems) == 0 {
+			if messages && !v.toolArgsAreObjects(i, m) {
+				return
+			}
 			continue
 		}
 		if m.Role != RoleAssistant {
@@ -832,6 +831,11 @@ func (v *validation) checkProtocol(req ChatRequest) {
 			return
 		}
 		if from != wire {
+			// The turn now goes out as its ToolCalls, so they must be
+			// sendable on their own.
+			if messages && !v.toolArgsAreObjects(i, m) {
+				return
+			}
 			v.out.Messages[i].ResponseItems = nil
 			dropped = true
 			continue
@@ -871,6 +875,19 @@ func (v *validation) checkProtocol(req ChatRequest) {
 			v.out.Stop = nil
 		}
 	}
+}
+
+// toolArgsAreObjects refuses a turn whose calls go out as tool_use blocks with
+// arguments that are not a JSON object: tool_use.input has no other spelling,
+// and the call would be a 400, or a body that does not marshal.
+func (v *validation) toolArgsAreObjects(i int, m Message) bool {
+	for _, tc := range m.ToolCalls {
+		if a := strings.TrimSpace(tc.Arguments); a != "" && (!strings.HasPrefix(a, "{") || !json.Valid([]byte(a))) {
+			v.reject("messages", fmt.Sprintf("message %d: tool call %q has arguments that are not a JSON object", i, tc.ID))
+			return false
+		}
+	}
+	return true
 }
 
 // toolChoiceAccepted says whether the profile takes a mode as sent. The

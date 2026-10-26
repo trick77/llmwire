@@ -215,18 +215,25 @@ func toolResultBlock(m Message) map[string]any {
 	return b
 }
 
-// contentBlocks spells a user turn's content.
+// contentBlocks spells a user turn's content. An empty text block is left
+// out: the protocol refuses one ("text content blocks must be non-empty"),
+// where Chat Completions takes "" without a word, so an OpenAI history carries
+// them. A turn left with nothing is dropped by the merge.
 func contentBlocks(m Message) []any {
 	if len(m.Parts) == 0 {
+		if m.Text == "" {
+			return nil
+		}
 		return []any{map[string]any{"type": "text", "text": m.Text}}
 	}
 	out := make([]any, 0, len(m.Parts))
 	for _, p := range m.Parts {
-		if p.Kind == PartImage {
+		switch {
+		case p.Kind == PartImage:
 			out = append(out, imageBlock(p.URL))
-			continue
+		case p.Text != "":
+			out = append(out, map[string]any{"type": "text", "text": p.Text})
 		}
-		out = append(out, map[string]any{"type": "text", "text": p.Text})
 	}
 	return out
 }
@@ -356,7 +363,9 @@ type assembler struct {
 }
 
 // block takes one finished content block. raw is the block as the endpoint
-// sent it, replayed verbatim when its type is not one this package spells.
+// sent it, replayed verbatim when its type is not one this package spells;
+// nil from the stream, where a block of such a type is only its start frame
+// and its deltas were never joined, so the turn cannot go back as blocks.
 func (a *assembler) block(blk wireBlock, raw json.RawMessage) {
 	var item any
 	switch blk.Type {
@@ -379,9 +388,11 @@ func (a *assembler) block(blk wireBlock, raw json.RawMessage) {
 		}
 		item = map[string]any{"type": "tool_use", "id": blk.ID, "name": blk.Name, "input": json.RawMessage(args)}
 	default:
-		if len(raw) > 0 {
-			a.items = append(a.items, raw)
+		if len(raw) == 0 {
+			a.unreplayable = true
+			return
 		}
+		a.items = append(a.items, raw)
 		return
 	}
 	if enc, err := json.Marshal(item); err == nil {
@@ -432,9 +443,14 @@ func messagesFinish(reason string, calls int) string {
 	}
 }
 
-// checkAnswered refuses a turn with no text, no call and a clean stop: an empty
-// success in all but name.
+// checkAnswered refuses a turn with no stop_reason, which no finished message
+// lacks (a proxy's bare {} under a 200 reads exactly so), and one with no
+// text, no call and a clean stop: an empty success in all but name.
 func checkAnswered(redact redactor, t turn, raw []byte) error {
+	if t.finish == "" {
+		return fmt.Errorf("llmwire: %w: message carried no stop_reason (body: %s)",
+			ErrResponseShape, bodySnippet(redact, raw))
+	}
 	if len(t.calls) == 0 && t.content == "" && t.finish == "stop" {
 		return fmt.Errorf("llmwire: %w: message carried no answer and no error (body: %s)",
 			ErrResponseShape, bodySnippet(redact, raw))
@@ -597,7 +613,6 @@ type messagesEvent struct {
 // streamBlock is one content block being assembled from its deltas.
 type streamBlock struct {
 	blk                             wireBlock
-	raw                             json.RawMessage
 	text, thinking, signature, args strings.Builder
 	// ord is a tool_use block's ordinal among calls, the Index a consumer sees.
 	ord int
@@ -658,7 +673,7 @@ func readMessagesStream(body io.Reader, guard *stallGuard, bounds streamBounds, 
 				}
 			}
 		case "content_block_start":
-			sb := &streamBlock{raw: ev.ContentBlock}
+			sb := &streamBlock{}
 			if json.Unmarshal(ev.ContentBlock, &sb.blk) != nil {
 				continue
 			}
@@ -736,7 +751,7 @@ func readMessagesStream(body io.Reader, guard *stallGuard, bounds streamBounds, 
 		if sb.blk.Type == "tool_use" {
 			sb.blk.Input = json.RawMessage(sb.args.String())
 		}
-		a.block(sb.blk, sb.raw)
+		a.block(sb.blk, nil)
 	}
 	a.into(&t)
 	res.Content, res.Reasoning, res.ToolCalls = t.content, t.reasoning, t.calls

@@ -498,6 +498,8 @@ func TestProvider_HeaderValidation(t *testing.T) {
 		"empty value":      {Headers: map[string]string{"anthropic-version": ""}},
 		"key in headers":   {Headers: map[string]string{"authorization": "Bearer x"}},
 		"key header twice": {APIKeyHeader: "x-api-key", Headers: map[string]string{"x-api-key": "x"}},
+		"undeclared key":   {Headers: map[string]string{"x-api-key": "x"}},
+		"token header":     {Headers: map[string]string{"x-auth-token": "x"}},
 	} {
 		if pv.validate() == nil {
 			t.Errorf("%s: accepted", name)
@@ -527,17 +529,99 @@ func TestProfileMessages_Validation(t *testing.T) {
 	}
 }
 
-func TestListModels_AnthropicShape(t *testing.T) {
-	entries, warnings, err := parseModelsResponseWith(Redact, json.RawMessage(
-		`{"data":[{"type":"model","id":"claude-opus-5-5","max_input_tokens":1000000,"max_tokens":128000}],"has_more":true}`))
-	if err != nil {
-		t.Fatal(err)
+// The listing is paged on Anthropic: followed by last_id while has_more, and
+// max_tokens read as the output cap.
+func TestListModels_AnthropicPages(t *testing.T) {
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("after_id") == "" {
+			_, _ = w.Write([]byte(`{"data":[{"type":"model","id":"claude-opus-5-5","max_input_tokens":1000000,` +
+				`"max_tokens":128000}],"has_more":true,"last_id":"claude-opus-5-5"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"type":"model","id":"claude-haiku-5-5"}],"has_more":false}`))
+	})
+	entries, warnings, err := clientOn(t, srv.URL).ListModels(context.Background())
+	if err != nil || len(warnings) != 0 || len(entries) != 2 {
+		t.Fatalf("entries %+v warnings %v err %v", entries, warnings, err)
 	}
 	if Tokens(entries[0].MaxOutputTokens) != 128000 || Tokens(entries[0].MaxInputTokens) != 1000000 {
 		t.Errorf("entry = %+v", entries[0])
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0].Details, "paged") {
-		t.Errorf("warnings = %v", warnings)
+	if q := srv.last().URL.Query(); q.Get("after_id") != "claude-opus-5-5" || q.Get("limit") != "1000" {
+		t.Errorf("second page query = %v", q)
+	}
+
+	// A server that never stops paging is cut off, with a warning; last_id
+	// absent continues after the page's last row.
+	endless := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}],"has_more":true}`))
+	})
+	entries, warnings, err = clientOn(t, endless.URL).ListModels(context.Background())
+	if err != nil || len(entries) != maxModelPages || len(warnings) != 1 || len(endless.requests()) != maxModelPages {
+		t.Errorf("endless: %d entries, warnings %v, %d requests, err %v", len(entries), warnings, len(endless.requests()), err)
+	}
+}
+
+// What the review found: arguments that go out as tool_use only because the
+// foreign items were dropped are checked too; a system image is refused; an
+// empty text block is left out; a reply with no stop_reason is no success.
+func TestMessages_ReviewEdges(t *testing.T) {
+	c := testClient(t, nil)
+	sol, _ := parseResponsesResponseWith(Redact, json.RawMessage(solRound1))
+	turn := sol.Assistant()
+	turn.ToolCalls[0].Arguments = `[1]`
+	if _, _, err := c.plan(opusRequest(User("x"), turn, ToolResult("call_FaRG", "14")), false); err == nil ||
+		!strings.Contains(err.Error(), "not a JSON object") {
+		t.Errorf("foreign turn with array arguments: err = %v", err)
+	}
+	sysImage := Message{Role: RoleSystem, Parts: []Part{{Kind: PartImage, URL: "https://example.com/a.png"}}}
+	if _, _, err := c.plan(opusRequest(sysImage, User("x")), false); err == nil {
+		t.Error("a system image was planned")
+	}
+	pl := mustPlan(t, c, opusRequest(User(""), Assistant("a"),
+		Message{Role: RoleUser, Parts: []Part{{Kind: PartText}, {Kind: PartText, Text: "b"}}}), false)
+	got, _ := json.Marshal(renderedBody(t, pl)["messages"])
+	if want := `[{"content":[{"text":"a","type":"text"}],"role":"assistant"},{"content":[{"text":"b","type":"text"}],"role":"user"}]`; string(got) != want {
+		t.Errorf("messages = %s, want %s", got, want)
+	}
+	for _, body := range []string{`{}`, `{"type":"message","content":[]}`} {
+		if _, err := parseMessagesResponseWith(Redact, json.RawMessage(body)); !errors.Is(err, ErrResponseShape) {
+			t.Errorf("%s: err = %v", body, err)
+		}
+	}
+	// A streamed block of a type this package does not spell cannot replay.
+	res, err := readMessagesFixture(t, []string{opusStream[0],
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"s1","input":{}}}`,
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":"a"}}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}`, `data: {"type":"message_stop"}`})
+	if err != nil || res.Content != "a" || res.ResponseItems != nil {
+		t.Errorf("unknown streamed block: %+v %v", res, err)
+	}
+}
+
+func readMessagesFixture(t *testing.T, lines []string) (StreamResult, error) {
+	t.Helper()
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	guard := newStallGuard(cancel, time.Hour, stallHeaders)
+	defer guard.stop()
+	return readMessagesStream(strings.NewReader(strings.Join(lines, "\n\n")+"\n\n"), guard,
+		streamBounds{idle: time.Hour}, nil, Redact, time.Now, time.Now())
+}
+
+// The caller's header wins over the provider's whatever its case, and a
+// caller's own key header over the provider's.
+func TestMergeHeaders_CaseInsensitive(t *testing.T) {
+	got := mergeHeaders(map[string]string{"anthropic-version": "2026-10-21", "x-other": "p"},
+		map[string]string{"Anthropic-Version": "2023-06-01"})
+	if len(got) != 2 || got["Anthropic-Version"] != "2023-06-01" || got["x-other"] != "p" {
+		t.Errorf("merged = %v", got)
+	}
+	ep, err := envEndpoint("claude-opus-5-5", Config{Registry: Default(), APIKeyHeader: "authorization-token"},
+		envGetter(mapLookup(map[string]string{"LLMWIRE_ANTHROPIC_API_KEY": "k"})), false)
+	if err != nil || ep.cfg.APIKeyHeader != "authorization-token" {
+		t.Errorf("caller key header lost: %q %v", ep.cfg.APIKeyHeader, err)
 	}
 }
 

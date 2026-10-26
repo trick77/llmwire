@@ -70,7 +70,7 @@ type Config struct {
 	APIKey string
 	// APIKeyHeader, when set, sends APIKey bare in that header instead of as
 	// a bearer token: x-api-key on Anthropic. FromEnv sets it from the
-	// provider (profiles.yaml api_key_header).
+	// provider (profiles.yaml api_key_header) when the caller left it empty.
 	APIKeyHeader string
 	// UserAgent overrides the default. Go's own "Go-http-client/1.1" names the
 	// HTTP library and says nothing about the protocol being spoken; several
@@ -400,14 +400,12 @@ func envEndpoint(model string, cfg Config, get func(string) string, routed bool)
 			cfg.EmulateOpenCode = true
 		}
 		// How the host takes its key and what it requires on every request
-		// follow the host the same way. The caller's own Headers win on a
+		// follow the host the same way. The caller's own settings win on a
 		// clash: they are the escape hatch for what the profile does not model.
-		cfg.APIKeyHeader = p.APIKeyHeader
-		if len(p.Headers) > 0 {
-			headers := maps.Clone(p.Headers)
-			maps.Copy(headers, cfg.Headers)
-			cfg.Headers = headers
+		if cfg.APIKeyHeader == "" {
+			cfg.APIKeyHeader = p.APIKeyHeader
 		}
+		cfg.Headers = mergeHeaders(p.Headers, cfg.Headers)
 		if v := get(EmulateOpenCodeEnv); v != "" {
 			on, err := strconv.ParseBool(v)
 			if err != nil {
@@ -428,6 +426,25 @@ func envEndpoint(model string, cfg Config, get func(string) string, routed bool)
 	}
 	out.cfg = cfg
 	return out, nil
+}
+
+// mergeHeaders lays the caller's headers over the provider's. Names compare
+// as HTTP does, case-insensitively: two spellings of one header in one map
+// would both be Set per request, in map order, so either could win.
+func mergeHeaders(provider, caller map[string]string) map[string]string {
+	if len(provider) == 0 {
+		return caller
+	}
+	out := maps.Clone(provider)
+	for k, v := range caller {
+		for pk := range out {
+			if http.CanonicalHeaderKey(pk) == http.CanonicalHeaderKey(k) {
+				delete(out, pk)
+			}
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // logSettings is the one line FromEnv writes: everything an operator asks

@@ -63,6 +63,10 @@ type Provider struct {
 // so one header is never written two ways.
 var headerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
+// credentialHeader is a header name that carries a credential by any common
+// spelling: authorization, x-api-key, api-key, x-auth-token, a session cookie.
+var credentialHeader = regexp.MustCompile(`auth|key|token|secret|cookie|session`)
+
 var (
 	defaultOnce sync.Once
 	defaultReg  *Registry
@@ -303,9 +307,10 @@ func (pv Provider) validate() error {
 			return fmt.Errorf("headers: %q is not a lowercase header name", name)
 		case pv.Headers[name] == "":
 			return fmt.Errorf("headers: %q is empty; a header nothing reads is not shipped", name)
-		case name == "authorization" || name == pv.APIKeyHeader:
-			// The key comes from the environment only, never this file.
-			return fmt.Errorf("headers: %q carries the key, which comes from the environment only", name)
+		case name == pv.APIKeyHeader || credentialHeader.MatchString(name):
+			// The key comes from the environment only, never this file. By
+			// name, since a host's key header need not be the one declared.
+			return fmt.Errorf("headers: %q names a credential, which comes from the environment only", name)
 		}
 	}
 	if pv.BaseURL == "" {

@@ -57,20 +57,15 @@ gofmt, build, golangci-lint (ship's config, no repo copy), secret scan, `go test
 - Streaming is a `plan` parameter, never a request field.
 - `ExtraBody` merges last and **wins**; top level only. Refused in `plan`:
   `stream`, `stream_options`, `model`, and the cap spelling the profile does
-  not take; on Responses also `input`, `store`, `include` and both chat caps;
-  on Messages also `messages`, `system`, `thinking`, `output_config`, and
-  `speed`/`inference_geo` (bill off list rate).
+  not take; Responses and Messages refuse their own body keys too
+  (`checkExtraBody`).
 - Responses is **stateless** (`store:false`, encrypted reasoning replayed via
   `Message.ResponseItems`). Tool loops append `resp.Assistant()`, never a
   rebuilt turn. Tools always send `strict`. Read `responses.go`'s head comment
   first.
-- Messages replays **signed thinking blocks** the same way (`ResponseItems`);
-  items from the other protocol are dropped with a warning. `max_tokens` is
-  required: uncapped sends `limits.max_output`. Key in `x-api-key` +
-  `anthropic-version`, provider facts (`api_key_header`, `headers`). Usage:
-  cache lanes sit **beside** `input_tokens`, so Total is added there. `ping` is
-  a `data:` frame and never re-arms the guard. Read `messages.go`'s head
-  comment first.
+- Messages: same replay rule for **signed thinking blocks**; cache lanes sit
+  **beside** `input_tokens` (added, never subtracted); `ping` is a `data:`
+  frame and never re-arms the guard. Read `messages.go`'s head comment first.
 
 ## Transport
 

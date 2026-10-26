@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
 )
 
 // The models listing.
@@ -65,57 +66,95 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error
 	if c.routes != nil {
 		return nil, nil, c.errSeveralHosts("ListModels")
 	}
-	raw, _, timing, err := c.rawCall(ctx, http.MethodGet, routeModels, nil)
+	var (
+		entries  []ModelEntry
+		warnings []Warning
+		timing   Timing
+		pages    int
+	)
 	failed := func(err error) ([]ModelEntry, []Warning, error) {
 		c.log.Warn("llmwire models listing failed", "error", Truncate(c.redact(err.Error()), maxLoggedError),
-			"headers_ms", timing.Headers.Milliseconds(), "total_ms", timing.Total.Milliseconds())
+			"pages", pages, "headers_ms", timing.Headers.Milliseconds(), "total_ms", timing.Total.Milliseconds())
 		return nil, nil, err
 	}
-	if err != nil {
-		return failed(err)
-	}
-	entries, warnings, err := parseModelsResponseWith(c.redact, raw)
-	if err != nil {
-		return failed(err)
+	// Anthropic's listing is paged (has_more, last_id; 20 rows unless asked).
+	// Followed only when the first page says so, so the OpenAI-shaped listings,
+	// which send neither, see the one plain GET they always did.
+	for route := routeModels; route != ""; {
+		raw, _, t, err := c.rawCall(ctx, http.MethodGet, route, nil)
+		pages++
+		timing.Headers += t.Headers
+		timing.Total += t.Total
+		if err != nil {
+			return failed(err)
+		}
+		page, w, next, err := parseModelsPage(c.redact, raw)
+		if err != nil {
+			return failed(err)
+		}
+		entries, warnings = append(entries, page...), append(warnings, w...)
+		route = ""
+		switch {
+		case next == "":
+		case pages == maxModelPages:
+			warnings = append(warnings, Warning{Kind: WarnOther, Feature: "models",
+				Details: fmt.Sprintf("the listing has more than %d pages; only the first %d entries were read",
+					maxModelPages, len(entries))})
+		default:
+			route = routeModels + "?limit=1000&after_id=" + url.QueryEscape(next)
+		}
 	}
 	// Not a model call: it goes through no plan, carries no usage and would
 	// only pollute the per-model stats, so it reports on its own line rather
 	// than through finish.
-	c.log.Debug("llmwire models listed", "models", len(entries), "warnings", len(warnings),
+	c.log.Debug("llmwire models listed", "models", len(entries), "warnings", len(warnings), "pages", pages,
 		"headers_ms", timing.Headers.Milliseconds(), "total_ms", timing.Total.Milliseconds())
 	return entries, warnings, nil
 }
 
-func parseModelsResponseWith(redact redactor, raw json.RawMessage) ([]ModelEntry, []Warning, error) {
+// maxModelPages bounds a paged listing: a server that answers has_more
+// forever must not hold a boot check for good.
+const maxModelPages = 20
+
+// parseModelsPage decodes one page of the listing, and the id to continue
+// after when the page says there is more: its last_id, or its last row's id.
+func parseModelsPage(redact redactor, raw json.RawMessage) ([]ModelEntry, []Warning, string, error) {
 	var w struct {
-		Data  json.RawMessage `json:"data"`
-		Error json.RawMessage `json:"error"`
-		// HasMore is Anthropic's pagination flag: its listing is paged, 20
-		// rows by default, and this package reads the first page only.
-		HasMore bool `json:"has_more"`
+		Data    json.RawMessage `json:"data"`
+		Error   json.RawMessage `json:"error"`
+		HasMore bool            `json:"has_more"`
+		LastID  string          `json:"last_id"`
 	}
 	if err := json.Unmarshal(raw, &w); err != nil {
-		return nil, nil, fmt.Errorf("llmwire: %w: decoding models listing: %w (body: %s)",
+		return nil, nil, "", fmt.Errorf("llmwire: %w: decoding models listing: %w (body: %s)",
 			ErrMalformedResponse, err, bodySnippet(redact, raw))
 	}
 	if len(w.Error) > 0 && !isJSONNull(w.Error) {
-		return nil, nil, parseAPIErrorWith(redact, 0, raw)
+		return nil, nil, "", parseAPIErrorWith(redact, 0, raw)
 	}
 	var rows []json.RawMessage
 	if len(w.Data) == 0 || isJSONNull(w.Data) {
-		return nil, nil, fmt.Errorf("llmwire: %w: models listing carries no data list (body: %s)",
+		return nil, nil, "", fmt.Errorf("llmwire: %w: models listing carries no data list (body: %s)",
 			ErrResponseShape, bodySnippet(redact, raw))
 	}
 	if err := json.Unmarshal(w.Data, &rows); err != nil {
-		return nil, nil, fmt.Errorf("llmwire: %w: models listing data is not a list (body: %s)",
+		return nil, nil, "", fmt.Errorf("llmwire: %w: models listing data is not a list (body: %s)",
 			ErrResponseShape, bodySnippet(redact, raw))
 	}
-
-	var warnings []Warning
+	entries, warnings := parseModelRows(rows)
+	next := ""
 	if w.HasMore {
-		warnings = append(warnings, Warning{Kind: WarnOther, Feature: "models",
-			Details: fmt.Sprintf("the listing is paged and only its first %d entries were read", len(rows))})
+		next = w.LastID
+		if next == "" && len(entries) > 0 {
+			next = entries[len(entries)-1].ID
+		}
 	}
+	return entries, warnings, next, nil
+}
+
+// parseModelRows decodes the rows of one page.
+func parseModelRows(rows []json.RawMessage) ([]ModelEntry, []Warning) {
+	var warnings []Warning
 	out := make([]ModelEntry, 0, len(rows))
 	for i, row := range rows {
 		var e wireModelEntry
@@ -142,7 +181,7 @@ func parseModelsResponseWith(redact redactor, raw json.RawMessage) ([]ModelEntry
 		}
 		out = append(out, entry)
 	}
-	return out, warnings, nil
+	return out, warnings
 }
 
 // limitField reads one of the gateway's token limits.
