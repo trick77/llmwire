@@ -881,18 +881,21 @@ func (v *validation) checkProtocol(req ChatRequest) {
 }
 
 // checkMessagesTurns refuses the conversations the protocol cannot carry as
-// sent. Nothing is dropped or rearranged, so the coerced request is what goes
-// out: dropping an empty turn reshapes the history around it (a prefill nobody
-// sent, a tool_use no longer followed by its result), and moving a block can
-// change what the turn says.
+// sent. No turn is dropped or moved: dropping an empty turn reshapes the
+// history around it (a prefill nobody sent, a tool_use no longer followed by
+// its result), and moving a block can change what the turn says. Within a
+// turn, render leaves out a whitespace text block beside real content (its
+// MEASURED 400, contentBlocks), and that is all.
 //
 //   - A user or assistant turn with nothing to send is refused, by index. The
 //     protocol refuses an empty content array, and MEASURED an empty or
 //     whitespace text block, which Chat Completions takes and OpenAI histories
 //     carry: the caller drops it, knowing the history.
 //   - Tool results are merged with the user turns around them into one user
-//     turn, and there the protocol takes tool_result blocks first. A tool
-//     result after user text in one such run is refused, by index.
+//     turn, and there the protocol takes tool_result blocks first. MEASURED:
+//     text ahead of the tool_result is a 400, "`tool_use` ids were found
+//     without `tool_result` blocks immediately after". A tool result after
+//     other user content in one such run is refused, by index.
 //   - Ending on an assistant turn is a prefill; refused unless the profile
 //     takes one (assistant_prefill). MEASURED on claude-opus-5-5: "This model
 //     does not support assistant message prefill. The conversation must end
@@ -910,9 +913,9 @@ func (v *validation) checkMessagesTurns() bool {
 			textInRun = -1
 		case RoleTool:
 			if textInRun >= 0 {
-				v.reject("messages", fmt.Sprintf("message %d is a tool result after the user text of message %d "+
-					"in one user turn; the %s protocol takes tool results first, so send the text after them",
-					i, textInRun, v.profile.WireAPI))
+				v.reject("messages", fmt.Sprintf("message %d is a tool result after the user content of message %d, "+
+					"with no assistant turn between; the %s protocol takes a tool result right after its call, "+
+					"ahead of any other user content", i, textInRun, v.profile.WireAPI))
 				return false
 			}
 		default:

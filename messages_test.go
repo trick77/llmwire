@@ -664,7 +664,7 @@ func TestMessages_ReviewEdges(t *testing.T) {
 		t.Errorf("tool_result not first: %s", last)
 	}
 	if _, _, err := c.plan(opusRequest(User("q"), r1.Assistant(), User("also"), ToolResult("toolu_01AM", "r")), false); err == nil ||
-		!strings.Contains(err.Error(), "message 3 is a tool result after the user text of message 2") {
+		!strings.Contains(err.Error(), "message 3 is a tool result after the user content of message 2") {
 		t.Errorf("text ahead of the tool result: %v", err)
 	}
 	// A request with nothing to refuse goes out as the caller wrote it, and
@@ -687,11 +687,16 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	if err != nil || r.ResponseItems != nil {
 		t.Errorf("thinking-only reply replayed: %s %v", r.ResponseItems, err)
 	}
-	// A server-tool turn is an answer: it replays, so pause_turn can resume.
+	// A server-tool turn is an answer and keeps its blocks, but sending it
+	// back last is a pause_turn resume, which plan refuses as a prefill:
+	// server tools are unmodelled.
 	r, err = parseMessagesResponseWith(Redact, json.RawMessage(
 		`{"content":[{"type":"server_tool_use","id":"s","name":"web_search","input":{}}],"stop_reason":"pause_turn"}`))
 	if err != nil || len(r.ResponseItems) != 1 {
 		t.Errorf("server-tool reply not replayed: %s %v", r.ResponseItems, err)
+	}
+	if _, _, err := c.plan(opusRequest(User("q"), r.Assistant()), false); err == nil || !strings.Contains(err.Error(), "prefill") {
+		t.Errorf("pause_turn resume: err = %v", err)
 	}
 	for _, body := range []string{`{}`, `{"type":"message","content":[]}`} {
 		if _, err := parseMessagesResponseWith(Redact, json.RawMessage(body)); !errors.Is(err, ErrResponseShape) {

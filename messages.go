@@ -154,10 +154,10 @@ type messagesTurn struct {
 
 // renderMessagesTurns encodes the conversation, system turns excluded. Only
 // consecutive USER turns are merged: a round of tool results goes back as one
-// user turn, as the protocol asks (plan has refused a tool result after user
-// text in such a run, which would put it second). Assistant turns are never
-// merged, so a
-// replayed turn's signed blocks go back exactly as they came. plan refuses
+// user turn, as the protocol asks (plan has refused a tool result after other
+// user content in such a run, which would put it second). Assistant turns are
+// never merged, so a replayed turn's signed blocks go back exactly as they
+// came. plan refuses
 // every turn turnBlocks leaves empty (checkMessagesTurns); one reaching here
 // is plan's bug and an error, never an empty content array on the wire.
 func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {

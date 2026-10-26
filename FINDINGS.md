@@ -391,7 +391,9 @@ non-whitespace text", where Chat Completions takes it: plan refuses such a
 turn by index rather than dropping it, since a drop reshapes the history into
 another 400 (a prefill, a tool_use not followed by its result). A
 `tool_result` whose content is whitespace or empty was accepted, tools
-defined, so tool turns are sent as they are.
+defined, so tool turns are sent as they are. User text ahead of the
+`tool_result` in one turn is a 400, "`tool_use` ids were found without
+`tool_result` blocks immediately after"; plan refuses that order by index.
 
 Not measured: vision, parallel tool calls, a stop sequence.
 
