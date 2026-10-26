@@ -59,9 +59,10 @@ type wireModelEntry struct {
 // never look at. Only the listing's own shape is an error: `data` must be a
 // list. A bad status is the same typed error a completion would return.
 //
-// Bounded by the caller's context and the whole-call cap, like every other
-// route. A listing is quick, so a caller wanting a tighter bound for a boot
-// check passes a context with one.
+// Bounded by the caller's context and, per page, the whole-call cap, like
+// every other exchange; a paged listing starts no page once it has spent the
+// cap, so it can run to just under twice it. A listing is quick, so a caller
+// wanting a tighter bound for a boot check passes a context with one.
 func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error) {
 	if c.routes != nil {
 		return nil, nil, c.errSeveralHosts("ListModels")
@@ -98,11 +99,15 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error
 			return failed(err)
 		}
 		warnings = append(warnings, w...)
+		// Across pages only: two rows for one id on ONE page are the server's
+		// (a gateway alias over two deployments) and are both kept.
 		for _, e := range page {
 			if !seenID[e.ID] {
-				seenID[e.ID] = true
 				entries = append(entries, e)
 			}
+		}
+		for _, e := range page {
+			seenID[e.ID] = true
 		}
 		route = ""
 		cut := func(why string) {

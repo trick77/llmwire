@@ -75,10 +75,7 @@ func (pl *wirePlan) messages() bool { return pl.profile.WireAPI == WireMessages 
 // render.go invariant holds here too: every capability was decided in plan.
 func renderMessagesBody(pl *wirePlan) ([]byte, error) {
 	req := pl.req
-	turns, err := renderMessagesTurns(req.Messages)
-	if err != nil {
-		return nil, err
-	}
+	turns, _ := renderMessagesTurns(req.Messages)
 	body := map[string]any{
 		"model":    pl.profile.WireModelID,
 		"messages": turns,
@@ -150,13 +147,17 @@ type messagesTurn struct {
 }
 
 // renderMessagesTurns encodes the conversation, system turns excluded, merging
-// consecutive turns of one role.
-func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
+// consecutive turns of one role, and counts the turns left out for having
+// nothing to send. plan runs it too, and refuses the shapes it cannot send
+// (checkMessagesShape), so render itself never fails.
+func renderMessagesTurns(ms []Message) (_ []messagesTurn, dropped int) {
 	var out []messagesTurn
 	add := func(role Role, blocks []any) {
 		if len(blocks) == 0 {
-			// An empty content array is refused; a turn with nothing to say
-			// (an assistant with no text and no calls) is left out.
+			// An empty content array is refused, and so is an empty text
+			// block, which Chat Completions takes and OpenAI histories carry:
+			// a turn with nothing to say is left out.
+			dropped++
 			return
 		}
 		if n := len(out); n > 0 && out[n-1].Role == string(role) {
@@ -193,10 +194,7 @@ func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
 			add(m.Role, contentBlocks(m))
 		}
 	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("llmwire: the Messages protocol needs a user or assistant turn with content; the request carries none")
-	}
-	return out, nil
+	return out, dropped
 }
 
 // toolInput is a call's arguments as the object tool_use.input takes. plan
@@ -223,8 +221,7 @@ func toolResultBlock(m Message) map[string]any {
 // contentBlocks spells a user turn's content. An empty text block is left
 // out: the protocol refuses one ("text content blocks must be non-empty"),
 // where Chat Completions takes "" without a word, so an OpenAI history carries
-// them. A turn left with nothing is dropped by the merge; plan refuses it
-// where that would end the request on an assistant turn.
+// them. A turn left with nothing is dropped (renderMessagesTurns).
 func contentBlocks(m Message) []any {
 	if len(m.Parts) == 0 {
 		if m.Text == "" {
@@ -366,6 +363,9 @@ type assembler struct {
 	calls              []ToolCall
 	items              []json.RawMessage
 	unreplayable       bool
+	// answered is set by any block that is not thinking: a turn of thinking
+	// alone (a reply cut at max_tokens mid-think) has nothing to replay.
+	answered bool
 }
 
 // block takes one finished content block. raw is the block as the endpoint
@@ -402,21 +402,25 @@ func (a *assembler) block(blk wireBlock, raw json.RawMessage) {
 			a.unreplayable = true
 			return
 		}
+		a.answered = true
 		a.items = append(a.items, raw)
 		return
+	}
+	if blk.Type == "text" || blk.Type == "tool_use" {
+		a.answered = true
 	}
 	if enc, err := json.Marshal(item); err == nil {
 		a.items = append(a.items, enc)
 	}
 }
 
-// into writes the assembled turn. One with no text and no call (a reply cut
-// at max_tokens mid-think) carries no items either: an assistant turn of
-// thinking alone has nothing to answer from, and replays as the empty turn
-// it is.
+// into writes the assembled turn. One of thinking alone (a reply cut at
+// max_tokens mid-think) carries no items: an assistant turn of nothing but a
+// thinking block has nothing to answer from, and replays as the empty turn it
+// is. Server-tool blocks, unmodelled, still count as an answer and replay.
 func (a *assembler) into(t *turn) {
 	t.content, t.reasoning, t.calls = a.content.String(), a.reasoning.String(), a.calls
-	if !a.unreplayable && (t.content != "" || len(t.calls) > 0) {
+	if !a.unreplayable && a.answered {
 		t.items = a.items
 	}
 }

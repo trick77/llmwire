@@ -246,10 +246,12 @@ func TestPlanMessages_Refusals(t *testing.T) {
 	if renderedBody(t, pl)["cache_control"] == nil {
 		t.Error("cache_control dropped")
 	}
-	// A conversation of system turns only has nothing to send.
-	pl = mustPlan(t, c, ChatRequest{Model: "claude-opus-5-5", Messages: []Message{System("x")}}, false)
-	if _, err := pl.render(); err == nil {
-		t.Error("a system-only request rendered")
+	// A conversation of system turns only has nothing to send, nor one whose
+	// only turn is empty: refused in plan, so Validate says so.
+	for _, ms := range [][]Message{{System("x")}, {System("x"), User("")}} {
+		if _, err := c.Validate(ChatRequest{Model: "claude-opus-5-5", Messages: ms}); err == nil {
+			t.Errorf("%v validated", ms)
+		}
 	}
 }
 
@@ -624,9 +626,29 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	if got := renderedBody(t, pl)["messages"].([]any); len(got) != 1 {
 		t.Errorf("empty first turn: %v", got)
 	}
-	if _, _, err := c.plan(opusRequest(User("q"), Assistant("a"), User(""), System("s")), false); err == nil ||
-		!strings.Contains(err.Error(), "no text or image") {
-		t.Errorf("empty last user turn: err = %v", err)
+	if w := pl.req; len(w.Messages) != 2 {
+		t.Errorf("the coerced request lost turns: %v", w.Messages)
+	}
+	if _, warnings, _ := c.plan(opusRequest(User(""), User("q")), false); len(warnings) != 1 ||
+		!strings.Contains(warnings[0].Details, "left out") {
+		t.Errorf("dropped turn not warned: %v", warnings)
+	}
+	// Judged on the rendered shape: a trailing empty user turn, or an empty
+	// assistant then an empty user, ends on the assistant before them; an
+	// empty first turn before an assistant opens on it.
+	for name, ms := range map[string][]Message{
+		"ends on assistant":       {User("q"), Assistant("a"), User(""), System("s")},
+		"two empty trailing":      {User("q"), Assistant("a"), User(""), Assistant("")},
+		"opens on assistant":      {User(""), Assistant("a"), User("q")},
+		"assistant prefill as-is": {User("q"), Assistant("a")},
+	} {
+		if _, _, err := c.plan(opusRequest(ms...), false); err == nil || !strings.Contains(err.Error(), "assistant turn") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	// Both trailing turns empty after a real user turn: renders as [user q].
+	if _, _, err := c.plan(opusRequest(User("q"), Assistant(""), User("")), false); err != nil {
+		t.Errorf("empty assistant and user after q: %v", err)
 	}
 	// An empty text block in a reply is not replayed; a reply of thinking
 	// alone carries no items at all.
@@ -639,6 +661,12 @@ func TestMessages_ReviewEdges(t *testing.T) {
 		`{"content":[{"type":"thinking","thinking":"x","signature":"s"},{"type":"text","text":""}],"stop_reason":"max_tokens"}`))
 	if err != nil || r.ResponseItems != nil {
 		t.Errorf("thinking-only reply replayed: %s %v", r.ResponseItems, err)
+	}
+	// A server-tool turn is an answer: it replays, so pause_turn can resume.
+	r, err = parseMessagesResponseWith(Redact, json.RawMessage(
+		`{"content":[{"type":"server_tool_use","id":"s","name":"web_search","input":{}}],"stop_reason":"pause_turn"}`))
+	if err != nil || len(r.ResponseItems) != 1 {
+		t.Errorf("server-tool reply not replayed: %s %v", r.ResponseItems, err)
 	}
 	for _, body := range []string{`{}`, `{"type":"message","content":[]}`} {
 		if _, err := parseMessagesResponseWith(Redact, json.RawMessage(body)); !errors.Is(err, ErrResponseShape) {
