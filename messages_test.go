@@ -501,12 +501,14 @@ func TestProvider_HeaderValidation(t *testing.T) {
 		"key header twice": {APIKeyHeader: "x-api-key", Headers: map[string]string{"x-api-key": "x"}},
 		"undeclared key":   {Headers: map[string]string{"x-api-key": "x"}},
 		"token header":     {Headers: map[string]string{"x-auth-token": "x"}},
+		"kong apikey":      {Headers: map[string]string{"apikey": "x"}},
+		"session id":       {Headers: map[string]string{"x-session-id": "x"}},
 	} {
 		if pv.validate() == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	ok := Provider{Headers: map[string]string{"x-session-affinity": "a", "x-max-tokens-hint": "1", "anthropic-version": "v"}}
+	ok := Provider{Headers: map[string]string{"anthropic-version": "v", "anthropic-beta": "b"}}
 	if err := ok.validate(); err != nil {
 		t.Errorf("plain headers refused: %v", err)
 	}
@@ -569,15 +571,26 @@ func TestListModels_AnthropicPages(t *testing.T) {
 		t.Errorf("endless: %d entries, warnings %v, %d requests, err %v", len(entries), warnings, len(endless.requests()), err)
 	}
 
-	// One that ignores after_id answers the same page: stopped at the second,
-	// not read twenty times; one with has_more and no cursor stops at once.
-	for name, body := range map[string]string{
-		"stuck":     `{"data":[{"id":"m"}],"has_more":true,"last_id":"m"}`,
-		"no cursor": `{"data":[{"bad":1}],"has_more":true}`,
+	// One that ignores after_id answers the same page, one cycles between two:
+	// each id kept once, each cursor followed once. One with has_more and no
+	// cursor stops at once.
+	for name, tc := range map[string]struct {
+		pages    []string
+		entries  int
+		requests int
+	}{
+		"stuck": {[]string{`{"data":[{"id":"m"}],"has_more":true,"last_id":"m"}`}, 1, 2},
+		"cycle": {[]string{`{"data":[{"id":"a"}],"has_more":true,"last_id":"a"}`,
+			`{"data":[{"id":"b"}],"has_more":true,"last_id":"b"}`}, 2, 3},
+		"no cursor": {[]string{`{"data":[{"bad":1}],"has_more":true}`}, 0, 1},
 	} {
-		srv := jsonServer(t, http.StatusOK, body)
+		i := 0
+		srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(tc.pages[i%len(tc.pages)]))
+			i++
+		})
 		entries, warnings, err := clientOn(t, srv.URL).ListModels(context.Background())
-		if err != nil || len(entries) > 2 || len(warnings) == 0 || len(srv.requests()) > 2 {
+		if err != nil || len(entries) != tc.entries || len(warnings) == 0 || len(srv.requests()) != tc.requests {
 			t.Errorf("%s: %d entries, warnings %v, %d requests, err %v", name, len(entries), warnings, len(srv.requests()), err)
 		}
 	}
@@ -605,17 +618,27 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	if want := `{"content":[{"text":"b","type":"text"}],"role":"user"}`; string(got) != want {
 		t.Errorf("last turn = %s, want %s", got, want)
 	}
-	// An empty user turn is refused, never dropped: dropped, the request
-	// would end on the assistant turn, a prefill.
-	if _, _, err := c.plan(opusRequest(User("q"), Assistant("a"), User("")), false); err == nil ||
-		!strings.Contains(err.Error(), "no text or image") {
-		t.Errorf("empty user turn: err = %v", err)
+	// An empty user turn is dropped mid-conversation, and refused where
+	// dropping it would end the request on the assistant turn, a prefill.
+	pl = mustPlan(t, c, opusRequest(User(""), User("q")), false)
+	if got := renderedBody(t, pl)["messages"].([]any); len(got) != 1 {
+		t.Errorf("empty first turn: %v", got)
 	}
-	// An empty text block in a reply is not replayed.
+	if _, _, err := c.plan(opusRequest(User("q"), Assistant("a"), User(""), System("s")), false); err == nil ||
+		!strings.Contains(err.Error(), "no text or image") {
+		t.Errorf("empty last user turn: err = %v", err)
+	}
+	// An empty text block in a reply is not replayed; a reply of thinking
+	// alone carries no items at all.
 	r, err := parseMessagesResponseWith(Redact, json.RawMessage(
 		`{"content":[{"type":"text","text":""},{"type":"tool_use","id":"t","name":"f","input":{}}],"stop_reason":"tool_use"}`))
 	if err != nil || len(r.ResponseItems) != 1 {
 		t.Errorf("empty reply text replayed: %s %v", r.ResponseItems, err)
+	}
+	r, err = parseMessagesResponseWith(Redact, json.RawMessage(
+		`{"content":[{"type":"thinking","thinking":"x","signature":"s"},{"type":"text","text":""}],"stop_reason":"max_tokens"}`))
+	if err != nil || r.ResponseItems != nil {
+		t.Errorf("thinking-only reply replayed: %s %v", r.ResponseItems, err)
 	}
 	for _, body := range []string{`{}`, `{"type":"message","content":[]}`} {
 		if _, err := parseMessagesResponseWith(Redact, json.RawMessage(body)); !errors.Is(err, ErrResponseShape) {

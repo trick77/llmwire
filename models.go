@@ -79,11 +79,12 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error
 	}
 	// Anthropic's listing is paged (has_more, last_id; 20 rows unless asked).
 	// Followed only when the first page says so, so the OpenAI-shaped listings,
-	// which send neither, see the one plain GET they always did. One call cap
-	// bounds the whole listing, not each page.
-	ctx, cancel := context.WithTimeout(ctx, c.cap)
-	defer cancel()
-	cursor := ""
+	// which send neither, see the one plain GET they always did. Each page has
+	// the call cap, as every exchange does; no page starts once the listing has
+	// spent it. An id is kept once and a cursor followed once, so a server that
+	// ignores after_id, or cycles, adds nothing twice.
+	start := c.now()
+	seenID, seenCursor := map[string]bool{}, map[string]bool{}
 	for route := routeModels; route != ""; {
 		raw, _, t, err := c.rawCall(ctx, http.MethodGet, route, nil)
 		pages++
@@ -96,7 +97,13 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error
 		if err != nil {
 			return failed(err)
 		}
-		entries, warnings = append(entries, page...), append(warnings, w...)
+		warnings = append(warnings, w...)
+		for _, e := range page {
+			if !seenID[e.ID] {
+				seenID[e.ID] = true
+				entries = append(entries, e)
+			}
+		}
 		route = ""
 		cut := func(why string) {
 			warnings = append(warnings, Warning{Kind: WarnOther, Feature: "models",
@@ -106,13 +113,14 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelEntry, []Warning, error
 		case !more:
 		case next == "":
 			cut("names no id to continue after")
-		case next == cursor:
-			// A server that ignores after_id answers the same page again.
-			cut("did not move past " + next)
+		case seenCursor[next]:
+			cut("came back to " + next)
 		case pages == maxModelPages:
 			cut(fmt.Sprintf("this package reads %d at most", maxModelPages))
+		case c.now().Sub(start) >= c.cap:
+			cut(fmt.Sprintf("the listing has spent the %s call cap", c.cap))
 		default:
-			cursor = next
+			seenCursor[next] = true
 			route = routeModels + "?limit=1000&after_id=" + url.QueryEscape(next)
 		}
 	}

@@ -814,14 +814,6 @@ func (v *validation) checkProtocol(req ChatRequest) {
 				"which the %s protocol cannot send there", i, wire))
 			return
 		}
-		if messages && m.Role == RoleUser && len(contentBlocks(m)) == 0 {
-			// The protocol refuses an empty text block, and leaving the turn
-			// out could end the conversation on an assistant turn, which is a
-			// prefill this model refuses or, worse, continues.
-			v.reject("messages", fmt.Sprintf("message %d is a user turn with no text or image, "+
-				"which the %s protocol cannot send", i, wire))
-			return
-		}
 		if len(m.ResponseItems) == 0 {
 			if messages && !v.toolArgsAreObjects(i, m) {
 				return
@@ -868,6 +860,15 @@ func (v *validation) checkProtocol(req ChatRequest) {
 			return
 		}
 	}
+	if messages && endsOnDroppedTurn(req.Messages) {
+		// An empty user turn is left out (the protocol refuses an empty text
+		// block), which is harmless mid-conversation. At the end it would
+		// leave the request ending on an assistant turn: a prefill, which
+		// this model refuses or, worse, continues.
+		v.reject("messages", fmt.Sprintf("the last user turn has no text or image, so the %s request "+
+			"would end on the assistant turn before it", wire))
+		return
+	}
 	if droppedThinking {
 		v.warn(WarnCompatibility, "messages",
 			fmt.Sprintf("ReasoningContent was dropped: the %s protocol replays only its own reasoning", wire))
@@ -883,6 +884,35 @@ func (v *validation) checkProtocol(req ChatRequest) {
 			v.out.Stop = nil
 		}
 	}
+}
+
+// endsOnDroppedTurn says the trailing user turns are all empty and an
+// assistant turn sits right before them, system turns aside.
+func endsOnDroppedTurn(ms []Message) bool {
+	dropped := false
+	for j := len(ms) - 1; j >= 0; j-- {
+		switch m := ms[j]; {
+		case m.Role == RoleSystem:
+		case m.Role == RoleUser && !hasContent(m):
+			dropped = true
+		default:
+			return dropped && m.Role == RoleAssistant
+		}
+	}
+	return false
+}
+
+// hasContent says a turn has text or an image to send.
+func hasContent(m Message) bool {
+	if len(m.Parts) == 0 {
+		return m.Text != ""
+	}
+	for _, p := range m.Parts {
+		if p.Kind == PartImage || p.Text != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // toolArgsAreObjects refuses a turn whose calls go out as tool_use blocks with

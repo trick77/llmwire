@@ -67,8 +67,7 @@ gofmt, build, golangci-lint (ship's config, no repo copy), secret scan, `go test
   **beside** `input_tokens` (added, never subtracted); `ping` is a `data:`
   frame and never re-arms the guard; `max_tokens` required (uncapped =
   `limits.max_output`); `speed`/`inference_geo` refused (bill off list).
-  Key header + `anthropic-version` are provider facts. Read `messages.go`'s
-  head comment first.
+  Read `messages.go`'s head comment first.
 
 ## Transport
 

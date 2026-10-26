@@ -194,7 +194,7 @@ func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("llmwire: the Messages protocol needs a user or assistant turn; the request carries system turns only")
+		return nil, fmt.Errorf("llmwire: the Messages protocol needs a user or assistant turn with content; the request carries none")
 	}
 	return out, nil
 }
@@ -223,7 +223,8 @@ func toolResultBlock(m Message) map[string]any {
 // contentBlocks spells a user turn's content. An empty text block is left
 // out: the protocol refuses one ("text content blocks must be non-empty"),
 // where Chat Completions takes "" without a word, so an OpenAI history carries
-// them. plan refuses a user turn left with nothing.
+// them. A turn left with nothing is dropped by the merge; plan refuses it
+// where that would end the request on an assistant turn.
 func contentBlocks(m Message) []any {
 	if len(m.Parts) == 0 {
 		if m.Text == "" {
@@ -409,10 +410,13 @@ func (a *assembler) block(blk wireBlock, raw json.RawMessage) {
 	}
 }
 
-// into writes the assembled turn.
+// into writes the assembled turn. One with no text and no call (a reply cut
+// at max_tokens mid-think) carries no items either: an assistant turn of
+// thinking alone has nothing to answer from, and replays as the empty turn
+// it is.
 func (a *assembler) into(t *turn) {
 	t.content, t.reasoning, t.calls = a.content.String(), a.reasoning.String(), a.calls
-	if !a.unreplayable {
+	if !a.unreplayable && (t.content != "" || len(t.calls) > 0) {
 		t.items = a.items
 	}
 }
