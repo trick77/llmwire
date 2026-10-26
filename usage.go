@@ -24,10 +24,14 @@ import (
 //     makes, which is all of them on the models this library targets.
 //
 // ASSUMED, not measured: cache_write_tokens is billed as its own lane on top
-// of the full-rate input lane, so it is never subtracted. No endpoint in the
-// registry reports it and every shipped cache_write rate is 0, so the
-// assumption has no effect today; the first vendor to report the field gets a
-// containment probe before its rate is anything but 0.
+// of the full-rate input lane, so it is never subtracted. No OpenAI-shaped
+// endpoint in the registry reports it and every one of their cache_write rates
+// is 0, so the assumption has no effect there; the first to report the field
+// gets a containment probe before its rate is anything but 0.
+//
+// The Messages protocol is the other shape, and MEASURED: input_tokens is the
+// uncached remainder, cache reads and writes sit beside it, and its usage is
+// decoded by parseMessagesUsage (messages.go), which adds the lanes up.
 //
 // A NEGATIVE count is treated as not reported. Nothing on the wire means it,
 // and carrying it into pricing would credit the caller: Unpriced with a
@@ -83,6 +87,11 @@ type Usage struct {
 	// The tags above exist for logging and fixtures, not for reconstruction;
 	// a Usage rebuilt from JSON answers Reported() false whatever it carries.
 	reported bool
+	// longCacheWrite is the part of CacheWrite written with Anthropic's
+	// one-hour TTL, billed at 2x input where the five-minute write the
+	// cache_write rate holds is 1.25x. Pricing refuses a call carrying any:
+	// the table has no lane for it, and the 5m rate would under-report.
+	longCacheWrite *int64
 }
 
 // Reported says the endpoint sent a usage object with something in it, so a

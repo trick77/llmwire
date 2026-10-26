@@ -7,8 +7,8 @@
 # fallback table.
 #
 # Every entry marked `verified: measured` was probed in eval_probe_test.go
-# against the live endpoint, and FINDINGS.md records what each probe saw. The
-# flag is per profile; each bit's comment says MEASURED or NOT measured, and a
+# (eval_messages_test.go for the Messages protocol) against the live endpoint,
+# and FINDINGS.md records what each probe saw. The flag is per profile; each bit's comment says MEASURED or NOT measured, and a
 # NOT measured bit is the vendor's documentation carried until a probe reads it.
 # Six of the measurements contradict a vendor doc. Where they disagree, this
 # file follows the measurement.
@@ -42,6 +42,16 @@ providers:
     emulate_opencode: true
   openai:
     base_url: https://api.openai.com/v1
+  # Anthropic's own API, which speaks Messages only (wire_api: messages). The
+  # key goes in x-api-key: a bearer API key is refused. anthropic-version is
+  # required on every request and fixes what the body means; 2026-10-21 is the
+  # version whose Messages requests refuse temperature/top_p/top_k on every
+  # model (claude-api skill, api-version migration).
+  anthropic:
+    base_url: https://api.anthropic.com/v1
+    api_key_header: x-api-key
+    headers:
+      anthropic-version: "2026-10-21"
   # A self-hosted gateway has no public host: LLMWIRE_LITELLM_BASE_URL is
   # required.
   litellm: {}
@@ -1268,3 +1278,115 @@ profiles:
       faked (nothing until the answer is complete) unless the gateway catalog
       aliases azure/<deployment>; there, size the header bound to the call.
       responses.go head comment.
+
+  # ---------------------------------------------------------------------------
+  # Anthropic, its own API (provider anthropic, wire_api messages). Sources:
+  # the API reference and the claude-api skill reference for claude-opus-5-5
+  # (cached 2026-10-06), and the pricing page read 2026-10-26. MEASURED
+  # 2026-10-26 on api.anthropic.com (eval_messages_test.go, FINDINGS.md).
+  # ---------------------------------------------------------------------------
+  - id: claude-opus-5-5
+    display_name: Claude Opus 5.5
+    endpoint: chat
+    wire_api: messages
+    wire_model_id: claude-opus-5-5
+    provider: anthropic
+    verified: measured
+
+    # The protocol's only cap spelling, and required on every request: an
+    # uncapped request goes out at limits.max_output. MEASURED: a
+    # non-streamed call at 128000 accepted.
+    max_tokens_param: max_tokens
+
+    # MEASURED: low, medium, high, xhigh and max accepted; none and minimal a
+    # 400 ("Input should be 'low', 'medium', 'high', 'xhigh' or 'max'");
+    # thinking.type disabled and enabled (budget_tokens) both a 400: "Use
+    # \"thinking.type.adaptive\" and \"output_config.effort\" to control
+    # thinking behavior." ReasoningMinimal resolves to low. default_effort NOT
+    # measured, skill reference.
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: false
+      control: effort
+      effort_values: [low, medium, high, xhigh, max]
+      default_effort: medium
+      # NOT measured, a choice: the documented default.
+      balanced: medium
+      # overhead ABSENT, and DefaultReasoningOverhead (1024) is far short at
+      # high and above: MEASURED, a counting problem at high thought through
+      # the whole 16000-token cap and returned no answer.
+
+    # MEASURED: temperature and top_p each a 400, "Extra inputs are not
+    # permitted"; refused on every model under anthropic-version 2026-10-21.
+    temperature:
+      supported: false
+    top_p:
+      supported: false
+
+    # MEASURED: tool_choice any and tool a 400, "tool_choice: type \"tool\"
+    # and \"any\" are not supported for this model.", so required and a named
+    # function relax to auto with a warning. The tool loop with a thinking
+    # replay measured accepted, so was a hand-built tool turn with no thinking
+    # block. Parallel calls NOT measured.
+    tools:
+      supported: true
+      format: native
+      tool_choice_values: [auto, none]
+      supports_forced_choice: false
+      supports_parallel: true
+
+    # MEASURED: output_config.format json_schema, the reply parsed. Constrained
+    # decoding, enforced whatever strict says (skill reference). No
+    # json_object mode.
+    output:
+      json_object: false
+      json_schema: true
+      strict_schema: true
+
+    # MEASURED: usage on message_start and message_delta unasked; no
+    # stream_options on this protocol. A long think streams summarized
+    # thinking_delta frames at most 4.8s apart, with one ping in 2m40s.
+    streaming:
+      supported: true
+      needs_include_usage: false
+      accepts_stream_options: false
+
+    # MEASURED, the models listing: max_input_tokens 1000000, max_tokens 128000.
+    limits:
+      context: 1000000
+      max_output: 128000
+
+    # NOT measured, model overview: text and image in, text out.
+    vision: true
+
+    # Pricing page 2026-10-26: base input 4, 5-minute cache write 5 (1.25x),
+    # 1-hour cache write 8 (2x), cache read 0.20 (0.05x), output 20. The full
+    # 1M window at these rates, no long-context tier. MEASURED containment:
+    # cache writes and reads sit beside input_tokens (FINDINGS.md), so the
+    # write lane is priced on top, never subtracted. cache_write is the
+    # 5-minute rate: llmwire sends no cache_control, and a call that wrote to
+    # the 1-hour cache through ExtraBody is Unpriced rather than under-priced
+    # (pricing.go). speed "fast" (2x) and inference_geo "us" (1.1x) are
+    # refused in ExtraBody for the same reason.
+    cost:
+      input: 4.00
+      cache_read: 0.20
+      cache_write: 5.00
+      output: 20.00
+      source_url: https://platform.claude.com/docs/en/about-claude/pricing
+      verified_on: 2026-10-26
+
+    finish_reasons_extra: [content_filter, pause_turn, model_context_window_exceeded]
+
+    notes: >-
+      Speaks Anthropic's Messages protocol (wire_api: messages); the caller's
+      API is unchanged. Always thinks, medium by default, and cannot be told
+      not to; thinking is requested as a summary so Reasoning carries text and
+      a long think streams. At high and above a think can fill the whole cap:
+      MaxAnswerTokens adds only DefaultReasoningOverhead, so expect
+      finish_reason length with no answer on a hard prompt until an overhead
+      is measured. A tool loop appends resp.Assistant() so the signed
+      thinking blocks go back each round. No forced tool choice, no
+      temperature or top_p, no json_object. Caching is opt-in through
+      ExtraBody cache_control. messages.go head comment.

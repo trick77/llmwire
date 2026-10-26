@@ -332,6 +332,58 @@ refused, and the toggle wins — reasoning tokens 0 on both. A caller that
 disables thinking while also passing an effort gets what it asked for, so
 `ReasoningOff()` needs no special handling to strip the level.
 
+### `claude-opus-5-5`
+
+Measured on 2026-10-26 against `api.anthropic.com/v1`, `anthropic-version:
+2026-10-21`, through `FromEnv` (`eval_messages_test.go`). The first profile on
+Anthropic's Messages protocol (`wire_api: messages`).
+
+| bit | value | probe |
+|---|---|---|
+| `reasoning.effort_values` | **low, medium, high, xhigh, max**; `none` and `minimal` a 400 | `OpusEffortLadder` |
+| `reasoning.can_be_disabled` | **false**: `thinking.type` `disabled` and `enabled` (budget) a 400 | `OpusRefusals` |
+| `temperature` / `top_p` | **unsupported**: "Extra inputs are not permitted", 400 | `OpusRefusals` |
+| `tool_choice_values` | **auto, none**: `any` and `tool` a 400 | `OpusRefusals` |
+| `json_schema` | **true**, the reply parsed | `OpusStructuredOutput` |
+| usage containment | **cache BESIDE input_tokens** | `OpusCacheContainment` |
+| `limits` | **1,000,000 / 128,000**, from the models listing | `OpusModelsListing` |
+| uncapped call | **accepted** at `max_tokens` 128000, non-streamed | `OpusBasics` |
+
+Every refusal is `400 invalid_request_error`; the error body is
+`{"type":"error","error":{"type":…,"message":…}}`, and `error.type` becomes
+`APIError.Code`. An unknown model is `404 not_found_error`. Verbatim: `"thinking.type.disabled" is not
+supported for this model. Use "thinking.type.adaptive" and
+"output_config.effort" to control thinking behavior.`; `tool_choice: type
+"tool" and "any" are not supported for this model.`
+
+**Cache tokens sit beside `input_tokens`, the reverse of the OpenAI shape.**
+An 11215-token system prompt under top-level `cache_control` reported
+`input_tokens` 4 with `cache_creation_input_tokens` 11215, then `input_tokens`
+4 with `cache_read_input_tokens` 11215 on the identical second call. Priced
+0.056171 and 0.002339 USD: the write lane at the 5-minute rate, the read at
+0.05x. So `Input.Total` is built by adding the three lanes, never by
+subtracting.
+
+**Usage reports thinking.** `output_tokens_details.thinking_tokens`, inside
+`output_tokens`, maps to `Output.Reasoning`. A trivial prompt thinks 0 tokens
+at every level from `low` to `xhigh`, 30 at `max`.
+
+**A deep think fills the cap.** With `display: summarized` at effort `high`, a
+counting problem streamed 1144 `thinking_delta` frames over 2m40s and stopped
+at `max_tokens` 16000 with all 16000 output tokens thinking and no answer. The
+longest gap between non-ping frames was 4.8s, and only ONE `ping` arrived in
+the whole stream, so the idle guard is fed by the thinking summary, never by
+heartbeats (`OpusStreamFrames`). `DefaultReasoningOverhead` is far short at
+`high` and above: `MaxAnswerTokens` with a small answer can return `length` and
+no content until an overhead is measured.
+
+**Thinking replay.** Round 1 of the tool loop returned a signed `thinking`
+block and a `tool_use`; round 2 with `resp.Assistant()` answered. A
+hand-built assistant turn carrying only the `tool_use`, no thinking block, was
+ACCEPTED too, as was the replay of a streamed turn (`OpusToolLoop`).
+
+Not measured: vision, parallel tool calls, a stop sequence.
+
 ## Where the documentation is wrong
 
 | claim | source | measured |

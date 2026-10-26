@@ -143,9 +143,12 @@ func (s *Stream) read(pl *wirePlan, at time.Time) {
 		inlineWarnings []Warning
 		err            error
 	)
-	if pl.responses() {
+	switch {
+	case pl.responses():
 		res, err = readResponsesStream(resp.Body, s.guard, bounds, s.push, s.client.redact, s.client.now, s.start)
-	} else {
+	case pl.messages():
+		res, err = readMessagesStream(resp.Body, s.guard, bounds, s.push, s.client.redact, s.client.now, s.start)
+	default:
 		res, inlineWarnings, err = readStream(resp.Body, s.guard, bounds, s.push, s.client.redact,
 			pl.recoversInline(), s.client.now, s.start)
 	}

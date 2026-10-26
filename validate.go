@@ -1,6 +1,7 @@
 package llmwire
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -160,6 +161,9 @@ type wirePlan struct {
 	// an encrypted item: without it a stateless call gets reasoning it cannot
 	// replay.
 	encryptedReasoning bool
+	// summarizedThinking says to ask a Messages model for its thinking as a
+	// streamed summary (messages.go head comment).
+	summarizedThinking bool
 }
 
 // plan resolves a request against its profile and returns it coerced, ready to
@@ -226,6 +230,12 @@ func (c *Client) plan(req ChatRequest, stream bool) (*wirePlan, []Warning, error
 	if v.err != nil {
 		return nil, nil, v.err
 	}
+	if p.WireAPI == WireMessages && v.out.MaxTokens == nil {
+		// Required on the wire. Silent, and lossless: an uncapped request
+		// on the other protocols already runs to the model's output limit.
+		n := int(p.Limits.MaxOutput)
+		v.out.MaxTokens = &n
+	}
 	return &wirePlan{
 		profile:  p,
 		req:      v.out,
@@ -237,6 +247,7 @@ func (c *Client) plan(req ChatRequest, stream bool) (*wirePlan, []Warning, error
 		// tighten-only profile key exists for.
 		includeUsage:       stream && p.Streaming.NeedsIncludeUsage && p.Streaming.AcceptsStreamOptions,
 		encryptedReasoning: p.WireAPI == WireResponses && p.Reasoning.Supported,
+		summarizedThinking: p.WireAPI == WireMessages && p.Reasoning.Supported,
 	}, v.warnings, nil
 }
 
@@ -723,7 +734,7 @@ func (v *validation) checkExtraBody(req ChatRequest) {
 	}
 	// The cap spellings this profile does NOT take: on Chat Completions the
 	// other of the two, on Responses both, since neither is a Responses key.
-	var otherCaps []string
+	var otherCaps, unpriceable []string
 	keys := []string{"stream", "stream_options", "model"}
 	switch {
 	case v.profile.WireAPI == WireResponses:
@@ -731,6 +742,16 @@ func (v *validation) checkExtraBody(req ChatRequest) {
 		// store and include carry the stateless reasoning replay; overriding
 		// either is how a replay starts depending on server-side state.
 		keys = append(keys, "input", "store", "include")
+	case v.profile.WireAPI == WireMessages:
+		otherCaps = []string{ParamMaxCompletionTokens}
+		// messages and system carry the converted conversation; thinking and
+		// output_config carry the reasoning and format decisions, and would
+		// replace them whole (ExtraBody is top level only).
+		keys = append(keys, "messages", "system", "thinking", "output_config")
+		// Billed off the list rate (pricing page, 2026-10-26): speed "fast"
+		// at 2x, inference_geo "us" at 1.1x. The table would price either at
+		// list, an under-report.
+		unpriceable = []string{"speed", "inference_geo"}
 	case v.profile.MaxTokensParam == ParamMaxTokens:
 		otherCaps = []string{ParamMaxCompletionTokens}
 	default:
@@ -739,7 +760,7 @@ func (v *validation) checkExtraBody(req ChatRequest) {
 	if v.profile.WireAPI != WireResponses {
 		otherCaps = append(otherCaps, ParamMaxOutputTokens)
 	}
-	for _, key := range append(keys, otherCaps...) {
+	for _, key := range slices.Concat(keys, otherCaps, unpriceable) {
 		if _, set := req.ExtraBody[key]; !set {
 			continue
 		}
@@ -749,37 +770,53 @@ func (v *validation) checkExtraBody(req ChatRequest) {
 			why = "the route decides what goes on the wire"
 		case slices.Contains(otherCaps, key):
 			why = fmt.Sprintf("this model takes %q; set MaxTokens instead", v.profile.MaxTokensParam)
+		case slices.Contains(unpriceable, key):
+			why = "it bills off the list rate, which pricing cannot see"
 		}
 		v.reject("extra_body", fmt.Sprintf("ExtraBody must not set %q: %s", key, why))
 		return
 	}
 }
 
-// checkProtocol covers what one wire protocol can carry and the other cannot.
+// checkProtocol covers what one wire protocol can carry and another cannot.
 //
-// ResponseItems is reasoning state from a Responses model. A Chat Completions
-// model has no field for it, so it is dropped there, with a warning: the
-// history still makes sense from Text and ToolCalls, but the model on the other
-// end will not see the earlier reasoning. On a Responses model the items
-// REPLACE Text and ToolCalls on the wire, so the two must still describe the
-// same calls; a caller who edited one and not the other would send a history
-// that contradicts itself.
+// ResponseItems is a turn's replay state in the protocol that answered it:
+// encrypted reasoning items from a Responses model, signed content blocks from
+// a Messages one. A model speaking another protocol has no field for them, so
+// they are dropped there, with a warning: the history still makes sense from
+// Text and ToolCalls, but the model on the other end will not see the earlier
+// reasoning. On the protocol they came from the items REPLACE Text and
+// ToolCalls on the wire, so the two must still describe the same calls; a
+// caller who edited one and not the other would send a history that
+// contradicts itself.
 func (v *validation) checkProtocol(req ChatRequest) {
-	responses := v.profile.WireAPI == WireResponses
+	wire := v.profile.WireAPI
+	responses, messages := wire == WireResponses, wire == WireMessages
 	dropped, droppedThinking := false, false
 	for i, m := range req.Messages {
-		if responses && m.ReasoningContent != "" {
+		if (responses || messages) && m.ReasoningContent != "" {
 			// Another vendor's plain-text reasoning has no input spelling
-			// here; only encrypted items replay.
+			// here; only the protocol's own reasoning replays.
 			v.out.Messages[i].ReasoningContent = ""
 			droppedThinking = true
 		}
-		if responses && (m.Role == RoleAssistant || m.Role == RoleTool) && m.HasImage() {
-			// Structural on this protocol: an assistant turn takes
-			// output_text only, a tool result one output string.
+		if (responses && (m.Role == RoleAssistant || m.Role == RoleTool) ||
+			messages && m.Role == RoleAssistant) && m.HasImage() {
+			// Structural on this protocol: an assistant turn takes text
+			// only, and a Responses tool result one output string.
 			v.reject("messages", fmt.Sprintf("message %d has role %q and carries an image, "+
-				"which the Responses protocol cannot send there", i, m.Role))
+				"which the %s protocol cannot send there", i, m.Role, wire))
 			return
+		}
+		if messages && len(m.ResponseItems) == 0 {
+			for _, tc := range m.ToolCalls {
+				// tool_use.input is an object; arguments that are not one
+				// have no spelling, and the call would go out as a 400.
+				if a := strings.TrimSpace(tc.Arguments); a != "" && (!strings.HasPrefix(a, "{") || !json.Valid([]byte(a))) {
+					v.reject("messages", fmt.Sprintf("message %d: tool call %q has arguments that are not a JSON object", i, tc.ID))
+					return
+				}
+			}
 		}
 		if len(m.ResponseItems) == 0 {
 			continue
@@ -789,12 +826,22 @@ func (v *validation) checkProtocol(req ChatRequest) {
 				"only an assistant turn from Assistant() carries them", i, m.Role))
 			return
 		}
-		if !responses {
+		from, err := itemsWire(m.ResponseItems)
+		if err != nil {
+			v.reject("messages", fmt.Sprintf("message %d: %v", i, err))
+			return
+		}
+		if from != wire {
 			v.out.Messages[i].ResponseItems = nil
 			dropped = true
 			continue
 		}
-		ids, err := responseItemCallIDs(m.ResponseItems)
+		var ids []string
+		if messages {
+			ids, err = messagesItemCallIDs(m.ResponseItems)
+		} else {
+			ids, err = responseItemCallIDs(m.ResponseItems)
+		}
 		if err != nil {
 			v.reject("messages", fmt.Sprintf("message %d: %v", i, err))
 			return
@@ -811,12 +858,12 @@ func (v *validation) checkProtocol(req ChatRequest) {
 	}
 	if droppedThinking {
 		v.warn(WarnCompatibility, "messages",
-			"ReasoningContent was dropped: the Responses protocol replays only its own encrypted reasoning")
+			fmt.Sprintf("ReasoningContent was dropped: the %s protocol replays only its own reasoning", wire))
 	}
 	if dropped {
 		v.warn(WarnCompatibility, "messages",
-			"ResponseItems were dropped: this model speaks Chat Completions, which has no field for "+
-				"another model's reasoning state; the turns went out as text and tool calls")
+			fmt.Sprintf("ResponseItems were dropped: this model speaks %s, which has no field for "+
+				"another protocol's reasoning state; the turns went out as text and tool calls", wire))
 	}
 	if responses && len(req.Stop) > 0 {
 		// The Responses protocol has no stop parameter at all.

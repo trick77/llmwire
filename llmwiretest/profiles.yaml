@@ -89,6 +89,37 @@ profiles:
       source_url: https://llmwiretest.invalid/pricing
       verified_on: 2026-01-01
 
+  - id: llmwiretest-messages
+    display_name: llmwiretest Messages
+    provider: llmwiretest
+    wire_api: messages
+    verified: source-derived
+    max_tokens_param: max_tokens
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: false
+      control: effort
+      effort_values: [low, medium, high]
+      balanced: medium
+      overhead: {low: 128, medium: 256, high: 512}
+    tools:
+      supported: true
+      format: native
+      tool_choice_values: [auto, none]
+      supports_parallel: true
+    output: {json_schema: true, strict_schema: true}
+    streaming: {supported: true}
+    limits: {context: 128000, max_output: 16384}
+    vision: true
+    cost:
+      input: 1
+      cache_read: 0.1
+      cache_write: 1.25
+      output: 2
+      source_url: https://llmwiretest.invalid/pricing
+      verified_on: 2026-01-01
+
   - id: llmwiretest-embed
     display_name: llmwiretest Embed
     endpoint: embeddings

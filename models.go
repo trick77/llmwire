@@ -45,6 +45,9 @@ type wireModelEntry struct {
 	ID              json.RawMessage `json:"id"`
 	MaxInputTokens  json.RawMessage `json:"max_input_tokens"`
 	MaxOutputTokens json.RawMessage `json:"max_output_tokens"`
+	// MaxTokens is Anthropic's spelling of the output cap on its listing,
+	// read only where max_output_tokens is absent.
+	MaxTokens json.RawMessage `json:"max_tokens"`
 }
 
 // ListModels fetches the listing behind the client's base URL and key.
@@ -87,6 +90,9 @@ func parseModelsResponseWith(redact redactor, raw json.RawMessage) ([]ModelEntry
 	var w struct {
 		Data  json.RawMessage `json:"data"`
 		Error json.RawMessage `json:"error"`
+		// HasMore is Anthropic's pagination flag: its listing is paged, 20
+		// rows by default, and this package reads the first page only.
+		HasMore bool `json:"has_more"`
 	}
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return nil, nil, fmt.Errorf("llmwire: %w: decoding models listing: %w (body: %s)",
@@ -106,6 +112,10 @@ func parseModelsResponseWith(redact redactor, raw json.RawMessage) ([]ModelEntry
 	}
 
 	var warnings []Warning
+	if w.HasMore {
+		warnings = append(warnings, Warning{Kind: WarnOther, Feature: "models",
+			Details: fmt.Sprintf("the listing is paged and only its first %d entries were read", len(rows))})
+	}
 	out := make([]ModelEntry, 0, len(rows))
 	for i, row := range rows {
 		var e wireModelEntry
@@ -125,7 +135,11 @@ func parseModelsResponseWith(redact redactor, raw json.RawMessage) ([]ModelEntry
 		}
 		entry := ModelEntry{ID: id, Raw: row}
 		entry.MaxInputTokens = limitField(id, "max_input_tokens", e.MaxInputTokens, &warnings)
-		entry.MaxOutputTokens = limitField(id, "max_output_tokens", e.MaxOutputTokens, &warnings)
+		if len(e.MaxOutputTokens) == 0 && len(e.MaxTokens) > 0 {
+			entry.MaxOutputTokens = limitField(id, "max_tokens", e.MaxTokens, &warnings)
+		} else {
+			entry.MaxOutputTokens = limitField(id, "max_output_tokens", e.MaxOutputTokens, &warnings)
+		}
 		out = append(out, entry)
 	}
 	return out, warnings, nil

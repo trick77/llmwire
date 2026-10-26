@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -48,7 +49,19 @@ type Provider struct {
 	// property of the host, which is why it is here and not in every
 	// application's configuration. See Config.EmulateOpenCode.
 	EmulateOpenCode bool `yaml:"emulate_opencode"`
+	// APIKeyHeader names the header the key goes in, bare. Empty is
+	// `Authorization: Bearer <key>`, which every OpenAI-shaped host takes;
+	// Anthropic's takes `x-api-key` and answers a bearer API key with a 401.
+	APIKeyHeader string `yaml:"api_key_header"`
+	// Headers go on every request to this host. Anthropic refuses a request
+	// without anthropic-version, the API version that fixes the body's
+	// meaning; it is the host's contract, not an application's choice.
+	Headers map[string]string `yaml:"headers"`
 }
+
+// headerName is an HTTP field name as RFC 9110 spells a token, lowercase only
+// so one header is never written two ways.
+var headerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 var (
 	defaultOnce sync.Once
@@ -195,8 +208,7 @@ func NewRegistry(doc []byte) (*Registry, error) {
 					p.ID, p.Provider, sortedKeys(providers))
 			}
 		}
-		p.BaseURL = providers[p.Provider].BaseURL
-		p.EmulateOpenCode = providers[p.Provider].EmulateOpenCode
+		providers[p.Provider].apply(&p)
 		stored := p
 		reg.byID[p.ID] = &stored
 	}
@@ -267,11 +279,35 @@ func sortedKeys[V any](m map[string]V) []string {
 	return slices.Sorted(maps.Keys(m))
 }
 
+// apply copies what follows the provider onto a resolved profile: the host,
+// the identity, and how the host takes its key. One place, so a gateway route
+// that swaps provider swaps every one of them.
+func (pv Provider) apply(p *Profile) {
+	p.BaseURL = pv.BaseURL
+	p.EmulateOpenCode = pv.EmulateOpenCode
+	p.APIKeyHeader = pv.APIKeyHeader
+	p.Headers = maps.Clone(pv.Headers)
+}
+
 // validate checks a provider's host. A trailing slash is trimmed at use, so
 // the check is on things that would go wrong silently: a scheme other than
 // https sends the key in clear, and a query string is where a key ends up
 // echoed in every error body (see the redaction notes in errors.go).
 func (pv Provider) validate() error {
+	if pv.APIKeyHeader != "" && !headerName.MatchString(pv.APIKeyHeader) {
+		return fmt.Errorf("api_key_header %q is not a lowercase header name", pv.APIKeyHeader)
+	}
+	for _, name := range sortedKeys(pv.Headers) {
+		switch {
+		case !headerName.MatchString(name):
+			return fmt.Errorf("headers: %q is not a lowercase header name", name)
+		case pv.Headers[name] == "":
+			return fmt.Errorf("headers: %q is empty; a header nothing reads is not shipped", name)
+		case name == "authorization" || name == pv.APIKeyHeader:
+			// The key comes from the environment only, never this file.
+			return fmt.Errorf("headers: %q carries the key, which comes from the environment only", name)
+		}
+	}
 	if pv.BaseURL == "" {
 		return nil
 	}

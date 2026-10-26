@@ -48,6 +48,15 @@ truth, comment standard) and the head comment of `profiles.yaml`.
 - Add the `_API_KEY` line to `.env.example` (name only, empty value). A host
   that authenticates nothing gets `no_api_key: true` and no `_API_KEY`
   variable: an empty bearer is not sent, some gateways reject it.
+- **Key not a bearer?** `api_key_header: <name>` on the provider sends it bare
+  in that header (Anthropic: `x-api-key`). A header the host requires on every
+  request goes in its `headers:` (Anthropic: `anthropic-version`); never the
+  key. Both follow the provider into `FromEnv`, and are dropped on a gateway
+  route.
+- **Not an OpenAI protocol?** A protocol is `wire_api`, with its renderer,
+  parser and stream reader beside `responses.go` and `messages.go`; the
+  consumer API does not change. Probes for it go in their own
+  `eval_<protocol>_test.go` through `FromEnv`, raw refusals through `RawPost`.
 - Add an `endpoint` var next to `mimoEndpoint` / `zaiEndpoint` in
   `eval_harness_test.go`; it reads the shipped host and fails the run if the
   URL variable is set beside it. A missing key skips that provider's probes

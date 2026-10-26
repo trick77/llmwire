@@ -113,16 +113,15 @@ func (r *Registry) viaGateway(routes map[string]string) (*Registry, error) {
 		// refuses the pair otherwise, and a base that rejects stream_options
 		// cannot be helped from here.
 		route.Streaming.NeedsIncludeUsage = base.Streaming.AcceptsStreamOptions
-		// The stored base already carries its defaults, BaseURL and
-		// EmulateOpenCode; resolve replaces provider and clears cost, and the
+		// The stored base already carries its defaults and its provider's
+		// host fields; resolve replaces provider and clears cost, and the
 		// host fields are re-read from the gateway's provider below.
 		p := route.resolve(*base)
 		applyDefaults(&p)
 		if err := p.validate(); err != nil {
 			return nil, fmt.Errorf("llmwire: %s route for %q: %w", GatewayModelsEnv, id, err)
 		}
-		p.BaseURL = pv.BaseURL
-		p.EmulateOpenCode = pv.EmulateOpenCode
+		pv.apply(&p)
 		out.byID[id] = &p
 	}
 	return out, nil

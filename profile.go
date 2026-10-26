@@ -2,6 +2,7 @@ package llmwire
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -32,7 +33,7 @@ const (
 	EndpointEmbeddings Endpoint = "embeddings"
 )
 
-// WireAPI is which OpenAI request protocol a chat profile speaks. Both carry
+// WireAPI is which request protocol a chat profile speaks. All of them carry
 // the same intents; only the body, the reply and the stream differ.
 //
 // A profile fact fixed at load, never chosen per request: a conversation that
@@ -52,6 +53,10 @@ const (
 	// Responses also replays the model's encrypted reasoning across a tool
 	// round, which Chat Completions has no field for.
 	WireResponses WireAPI = "responses"
+	// WireMessages is Anthropic's POST /messages. The only protocol Claude
+	// speaks natively; its thinking is replayed as signed content blocks
+	// across a tool round, which neither OpenAI protocol has a field for.
+	WireMessages WireAPI = "messages"
 )
 
 // ReasoningControl is HOW a model's reasoning depth is expressed on the wire.
@@ -313,6 +318,10 @@ type Profile struct {
 	BaseURL string `yaml:"-"`
 	// EmulateOpenCode follows the provider the same way BaseURL does.
 	EmulateOpenCode bool `yaml:"-"`
+	// APIKeyHeader and Headers follow the provider too: how the host takes
+	// its key, and what it requires on every request. See Provider.
+	APIKeyHeader string            `yaml:"-"`
+	Headers      map[string]string `yaml:"-"`
 
 	// MaxTokensParam is which output-cap parameter this endpoint honours.
 	// Getting it wrong is not always an error: one endpoint accepts the wrong
@@ -592,6 +601,46 @@ func (p Profile) validateResponses(bad func(string, ...any) error) error {
 	return nil
 }
 
+// validateMessages refuses what the Messages protocol has no spelling for, and
+// requires the one fact its renderer cannot do without: max_tokens is a
+// REQUIRED field there, so a request with no cap goes out at the model's
+// output limit, and a profile without one has nothing to send.
+func (p Profile) validateMessages(bad func(string, ...any) error) error {
+	r, t, st, o := p.Reasoning, p.Tools, p.Streaming, p.Output
+	switch {
+	case p.MaxTokensParam != ParamMaxTokens:
+		return bad("wire_api %q caps output with %q only, got max_tokens_param %q",
+			WireMessages, ParamMaxTokens, p.MaxTokensParam)
+	case p.Limits.MaxOutput <= 0:
+		return bad("wire_api %q requires max_tokens on every request; limits.max_output is what an uncapped request sends",
+			WireMessages)
+	case r.Supported && r.Control != ControlEffort:
+		return bad("wire_api %q takes reasoning as output_config.effort; control %q has no spelling there",
+			WireMessages, r.Control)
+	case r.Supported && r.CanBeDisabled:
+		// Disabling is thinking:{type:"disabled"}, a knob of its own that no
+		// profile here measures; an effort "none" is not a Messages level.
+		return bad("wire_api %q has no effort that disables thinking; can_be_disabled must be false", WireMessages)
+	case r.StreamField != "" || r.LeaksCloseTag:
+		return bad("wire_api %q streams thinking as typed blocks; stream_field and leaks_close_tag describe chat deltas",
+			WireMessages)
+	case t.Format == FormatXML || t.RecoverInlineMarkup:
+		return bad("wire_api %q returns tool calls as tool_use blocks; xml format and inline recovery do not apply",
+			WireMessages)
+	case slices.Contains(t.ToolChoiceValues, string(ToolChoiceRequired)) || t.SupportsForcedChoice:
+		// The protocol spells both ({"type":"any"}, {"type":"tool"}), but the
+		// thinking models refuse them with a 400; a model that takes them
+		// gets a renderer case when one is onboarded.
+		return bad("wire_api %q is rendered without forced tool choice; tool_choice_values takes auto and none only",
+			WireMessages)
+	case o.JSONObject:
+		return bad("wire_api %q has no json_object mode; only output_config.format json_schema", WireMessages)
+	case st.NeedsIncludeUsage || st.AcceptsStreamOptions:
+		return bad("wire_api %q has no stream_options; usage rides on message_start and message_delta", WireMessages)
+	}
+	return nil
+}
+
 // declared reports whether any sampling field is set, `supported` included.
 func (s Sampling) declared() bool {
 	return s.Supported || s.ForcedValue != nil || s.RecommendedValue != nil || s.InertWhileReasoning
@@ -631,8 +680,12 @@ func (p Profile) validateChat(bad func(string, ...any) error) error {
 		if err := p.validateResponses(bad); err != nil {
 			return err
 		}
+	case WireMessages:
+		if err := p.validateMessages(bad); err != nil {
+			return err
+		}
 	default:
-		return bad("wire_api %q is not %q or %q", p.WireAPI, WireChatCompletions, WireResponses)
+		return bad("wire_api %q is not %q, %q or %q", p.WireAPI, WireChatCompletions, WireResponses, WireMessages)
 	}
 
 	r := p.Reasoning
@@ -892,6 +945,7 @@ func (p *Profile) clone() *Profile {
 	out.TopP.ForcedValue = copyPtr(p.TopP.ForcedValue)
 	out.TopP.RecommendedValue = copyPtr(p.TopP.RecommendedValue)
 	out.Cost = p.Cost.clone()
+	out.Headers = maps.Clone(p.Headers)
 	return &out
 }
 
