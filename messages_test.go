@@ -684,11 +684,17 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	if _, _, err := c.plan(opusRequest(User("q"), r1.Assistant(), Assistant("note"), ToolResult("toolu_01AM", "r")), false); err != nil {
 		t.Errorf("assistant before result: %v", err)
 	}
+	reply2, _ := parseMessagesResponseWith(Redact, json.RawMessage(opusRound2))
+	r2 := reply2.Assistant()
 	for name, tc := range map[string]struct {
 		ms   []Message
 		want string
 	}{
-		"replayed between": {[]Message{User("q"), r1.Assistant(), r1.Assistant(), ToolResult("toolu_01AM", "r")}, "message 2 comes after the tool calls of message 1"},
+		"replayed between": {[]Message{User("q"), r1.Assistant(), r2, ToolResult("toolu_01AM", "r")}, "messages 1 and 2 are replayed assistant turns in a row"},
+		"replayed in a row": {[]Message{User("q"), r1.Assistant(), ToolResult("toolu_01AM", "r"), r2, r2, User("again")},
+			"messages 3 and 4 are replayed assistant turns in a row"},
+		"replayed after hand-built calls": {[]Message{User("q"), {Role: RoleAssistant, ToolCalls: r1.ToolCalls}, r2,
+			ToolResult("toolu_01AM", "r")}, "message 2 comes after the tool calls of message 1"},
 		"calls between": {[]Message{User("q"), r1.Assistant(), {Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "t2", Name: "get_weather"}}},
 			ToolResult("toolu_01AM", "r")}, "message 2 comes after the tool calls of message 1"},
 		"unanswered":    {[]Message{User("q"), r1.Assistant()}, "the tool calls of message 1 have no results"},

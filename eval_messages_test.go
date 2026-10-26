@@ -362,9 +362,11 @@ func TestProbe_OpusConversationShapes(t *testing.T) {
 	}
 }
 
-// TestProbe_OpusSignedJoins: the shapes plan lets through where the endpoint
-// joins consecutive assistant turns, with real signed thinking: a plain note
-// after a replayed calling turn, and two replayed turns in a row.
+// TestProbe_OpusSignedJoins: where the endpoint joins consecutive assistant
+// turns, with real signed thinking. A plain note after a replayed calling
+// turn goes through plan and must be accepted. A replayed turn sent twice is
+// refused by plan, so it is posted raw, and must come back as the endpoint's
+// APIError.
 func TestProbe_OpusSignedJoins(t *testing.T) {
 	c := opusClient(t)
 	req := ChatRequest{Model: opusModel, Tools: []Tool{weatherTool}, Reasoning: ReasoningEffort("high"), MaxTokens: ptr(4000),
@@ -380,18 +382,36 @@ func TestProbe_OpusSignedJoins(t *testing.T) {
 		t.Fatalf("round 2: %v", err)
 	}
 	// Same thinking settings as the turns being replayed, so only the shape
-	// varies. Plan lets both through; the endpoint decides.
-	for name, ms := range map[string][]Message{
-		"note after signed call": {req.Messages[0], r1.Assistant(), Assistant("Checking the weather now."), result},
-		"signed turn sent twice": {req.Messages[0], r1.Assistant(), result, r2.Assistant(), r2.Assistant(), User("Say it again.")},
-	} {
-		resp, _, err := opusChat(t, c, ChatRequest{Model: opusModel, Tools: req.Tools, Reasoning: req.Reasoning,
-			MaxTokens: req.MaxTokens, Messages: ms})
-		if err != nil {
-			t.Logf("%s: REFUSED %v", name, err)
-			continue
-		}
-		t.Logf("%s: ACCEPTED content %q", name, resp.Content)
+	// varies.
+	note, _, err := opusChat(t, c, ChatRequest{Model: opusModel, Tools: req.Tools, Reasoning: req.Reasoning,
+		MaxTokens: req.MaxTokens, Messages: []Message{req.Messages[0], r1.Assistant(), Assistant("Checking the weather now."), result}})
+	if err != nil {
+		t.Errorf("FINDING note after signed call REFUSED: %v", err)
+	} else {
+		t.Logf("note after signed call: ACCEPTED %q", Truncate(note.Content, 120))
+	}
+
+	twice := []Message{req.Messages[0], r1.Assistant(), result, r2.Assistant(), r2.Assistant(), User("Say it again.")}
+	if _, err := c.Validate(ChatRequest{Model: opusModel, Tools: req.Tools, Messages: twice}); err == nil {
+		t.Errorf("plan let a replayed turn sent twice through")
+	}
+	turn := func(role string, items []json.RawMessage) map[string]any {
+		return map[string]any{"role": role, "content": items}
+	}
+	_, apiErr := opusRaw(t, body{"tools": []any{weatherToolRaw()}, "max_tokens": 4000,
+		"thinking": map[string]any{"type": "adaptive", "display": "summarized"}, "output_config": map[string]any{"effort": "high"},
+		"messages": []any{
+			map[string]any{"role": "user", "content": req.Messages[0].Text},
+			turn("assistant", r1.ResponseItems),
+			map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result",
+				"tool_use_id": r1.ToolCalls[0].ID, "content": `{"temp_c":14}`}}},
+			turn("assistant", r2.ResponseItems), turn("assistant", r2.ResponseItems),
+			map[string]any{"role": "user", "content": "Say it again."},
+		}})
+	if apiErr == nil {
+		t.Errorf("FINDING a replayed turn sent twice was ACCEPTED; plan's refusal is stricter than the endpoint")
+	} else {
+		t.Logf("signed turn sent twice: REFUSED status %d code %q message %q", apiErr.StatusCode, apiErr.Code, apiErr.Message)
 	}
 }
 
