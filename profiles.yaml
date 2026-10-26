@@ -1360,6 +1360,11 @@ profiles:
     # NOT measured, model overview: text and image in, text out.
     vision: true
 
+    # MEASURED: a request ending on an assistant turn is a 400, "This model
+    # does not support assistant message prefill. The conversation must end
+    # with a user message." One opening on an assistant turn was accepted.
+    assistant_prefill: false
+
     # Pricing page 2026-10-26: base input 4, 5-minute cache write 5 (1.25x),
     # 1-hour cache write 8 (2x), cache read 0.20 (0.05x), output 20. The full
     # 1M window at these rates, no long-context tier. MEASURED containment:

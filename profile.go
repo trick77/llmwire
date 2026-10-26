@@ -337,7 +337,12 @@ type Profile struct {
 	Streaming   Streaming `yaml:"streaming"`
 	Limits      Limits    `yaml:"limits"`
 	Vision      bool      `yaml:"vision"`
-	Embedding   Embedding `yaml:"embedding"`
+	// AssistantPrefill: a request may end on an assistant turn, which the
+	// model continues. Messages protocol only, where it is a per-model fact:
+	// claude-opus-5-5 answers it with a 400. False refuses such a request in
+	// plan, however it came to end there.
+	AssistantPrefill bool      `yaml:"assistant_prefill"`
+	Embedding        Embedding `yaml:"embedding"`
 
 	// Cost is the published pay-as-you-go rate, or nil when no rate has been
 	// verified for this model. Nil is not "free": pricing reports Unpriced and
@@ -554,6 +559,8 @@ func (p Profile) validateEmbeddings(bad func(string, ...any) error) error {
 		return bad("an embeddings profile must not declare top_p")
 	case p.Vision:
 		return bad("an embeddings profile must not declare vision")
+	case p.AssistantPrefill:
+		return bad("an embeddings profile must not declare assistant_prefill")
 	case p.Output.JSONObject || p.Output.JSONSchema || p.Output.StrictSchema:
 		return bad("an embeddings profile must not declare structured output")
 	case p.Streaming.Supported || p.Streaming.NeedsIncludeUsage || p.Streaming.AcceptsStreamOptions || p.Streaming.BuffersToolArgs:
@@ -668,6 +675,11 @@ func validateSampling(bad func(string, ...any) error, name string, s Sampling) e
 func (p Profile) validateChat(bad func(string, ...any) error) error {
 	if p.Embedding.Dimensions || p.Embedding.DefaultDimensions != 0 {
 		return bad("a chat profile must not declare embedding settings")
+	}
+	if p.AssistantPrefill && p.WireAPI != WireMessages {
+		// Read by the Messages plan only; elsewhere it would describe a check
+		// nothing runs.
+		return bad("assistant_prefill is a %q fact; wire_api is %q", WireMessages, p.WireAPI)
 	}
 
 	switch p.WireAPI {

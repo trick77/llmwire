@@ -536,6 +536,15 @@ func TestProfileMessages_Validation(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+	// assistant_prefill is read by the Messages plan only.
+	for _, id := range []string{"gpt-5.5", "text-embedding-3-small"} {
+		p, _ := Default().Lookup(id)
+		p = p.clone()
+		p.AssistantPrefill = true
+		if p.validate() == nil {
+			t.Errorf("%s: assistant_prefill accepted", id)
+		}
+	}
 }
 
 // The listing is paged on Anthropic: followed by last_id while has_more, and
@@ -635,29 +644,39 @@ func TestMessages_ReviewEdges(t *testing.T) {
 		!strings.Contains(warnings[0].Details, "messages [0]") {
 		t.Errorf("dropped turn not warned by index: %v", warnings)
 	}
-	// Refused only where the drop makes the request end on an assistant
-	// turn the caller did not end on.
-	for name, ms := range map[string][]Message{
-		"ends on assistant":  {User("q"), Assistant("a"), User(""), System("s")},
-		"two empty trailing": {User("q"), Assistant("a"), User(""), Assistant("")},
+	// A prefill is refused (measured a 400 on this model), and the refusal
+	// says when a drop is what made one.
+	for name, tc := range map[string]struct {
+		ms   []Message
+		drop bool
+	}{
+		"prefill as sent":      {[]Message{User("q"), Assistant("{")}, false},
+		"ends on assistant":    {[]Message{User("q"), Assistant("a"), User(""), System("s")}, true},
+		"two empty trailing":   {[]Message{User("q"), Assistant("a"), User(""), Assistant("")}, true},
+		"whitespace last turn": {[]Message{User("q"), Assistant("a"), User(" \n")}, true},
 	} {
-		if _, _, err := c.plan(opusRequest(ms...), false); err == nil || !strings.Contains(err.Error(), "prefill") {
+		_, _, err := c.plan(opusRequest(tc.ms...), false)
+		if err == nil || !strings.Contains(err.Error(), "prefill") || strings.Contains(err.Error(), "left out") != tc.drop {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
-	// What the caller sent stays the caller's: a prefill, an assistant-first
-	// history once the empty turn is out, a pause_turn resume, and two empty
-	// trailing turns after a real user turn.
+	// Opening on an assistant turn is fine (measured), and so is a trailing
+	// pair of empty turns after a real user turn.
 	for name, ms := range map[string][]Message{
-		"prefill as sent":    {User("q"), Assistant("{")},
 		"opens on assistant": {User(""), Assistant("a"), User("q")},
-		"pause_turn resume": {User("q"), {Role: RoleAssistant,
-			ResponseItems: []json.RawMessage{json.RawMessage(`{"type":"server_tool_use","id":"s","name":"web_search","input":{}}`)}}},
-		"empty after q": {User("q"), Assistant(""), User("")},
+		"empty after q":      {User("q"), Assistant(""), User("")},
 	} {
 		if _, _, err := c.plan(opusRequest(ms...), false); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+	// Two signed assistant turns brought side by side by a drop would merge.
+	r1, _ := parseMessagesResponseWith(Redact, json.RawMessage(opusRound1))
+	r1.ToolCalls = nil
+	signed := Message{Role: RoleAssistant, ResponseItems: r1.ResponseItems[:1]}
+	if _, _, err := c.plan(opusRequest(User("q"), signed, User(""), signed, User("r")), false); err == nil ||
+		!strings.Contains(err.Error(), "signed thinking") {
+		t.Errorf("signed turns side by side: err = %v", err)
 	}
 	// An empty text block in a reply is not replayed; a reply of thinking
 	// alone carries no items at all.

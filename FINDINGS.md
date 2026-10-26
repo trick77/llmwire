@@ -382,6 +382,14 @@ block and a `tool_use`; round 2 with `resp.Assistant()` answered. A
 hand-built assistant turn carrying only the `tool_use`, no thinking block, was
 ACCEPTED too, as was the replay of a streamed turn (`OpusToolLoop`).
 
+**Conversation shapes** (`OpusConversationShapes`): ending on an assistant
+turn is a 400, "This model does not support assistant message prefill. The
+conversation must end with a user message." (`assistant_prefill: false`).
+Opening on one, and two assistant turns in a row, were accepted. A
+whitespace-only text block is a 400, "text content blocks must contain
+non-whitespace text", where Chat Completions takes it: plan leaves such turns
+out.
+
 Not measured: vision, parallel tool calls, a stop sequence.
 
 ## Where the documentation is wrong

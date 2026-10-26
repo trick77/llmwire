@@ -135,7 +135,7 @@ func systemText(ms []Message) string {
 	var parts []string
 	for _, m := range ms {
 		if m.Role == RoleSystem {
-			if t := toolOutputText(m); t != "" {
+			if t := toolOutputText(m); hasText(t) {
 				parts = append(parts, t)
 			}
 		}
@@ -150,54 +150,63 @@ type messagesTurn struct {
 }
 
 // renderMessagesTurns encodes the conversation, system turns excluded, merging
-// consecutive turns of one role. plan has taken the empty turns out already
-// (dropEmptyTurns); one that reaches here anyway is skipped, never sent as an
-// empty content array.
+// consecutive turns of one role. plan has taken out every turn turnBlocks
+// leaves empty (checkMessagesTurns); one reaching here is plan's bug and an
+// error, never an empty content array on the wire.
 func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
 	var out []messagesTurn
-	add := func(role Role, blocks []any) {
+	for i, m := range ms {
+		if m.Role == RoleSystem {
+			continue
+		}
+		role, blocks := turnBlocks(m)
 		if len(blocks) == 0 {
-			return
+			return nil, fmt.Errorf("llmwire: message %d has nothing to send and plan did not take it out", i)
 		}
 		if n := len(out); n > 0 && out[n-1].Role == string(role) {
 			out[n-1].Content = append(out[n-1].Content, blocks...)
-			return
+			continue
 		}
 		out = append(out, messagesTurn{Role: string(role), Content: blocks})
-	}
-	for _, m := range ms {
-		switch m.Role {
-		case RoleSystem:
-			continue
-		case RoleTool:
-			add(RoleUser, []any{toolResultBlock(m)})
-		case RoleAssistant:
-			if len(m.ResponseItems) > 0 {
-				blocks := make([]any, len(m.ResponseItems))
-				for i, item := range m.ResponseItems {
-					blocks[i] = item
-				}
-				add(RoleAssistant, blocks)
-				continue
-			}
-			var blocks []any
-			if t := toolOutputText(m); t != "" {
-				blocks = append(blocks, map[string]any{"type": "text", "text": t})
-			}
-			for _, tc := range m.ToolCalls {
-				blocks = append(blocks, map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Name,
-					"input": toolInput(tc.Arguments)})
-			}
-			add(RoleAssistant, blocks)
-		default:
-			add(m.Role, contentBlocks(m))
-		}
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("llmwire: the Messages protocol needs a user or assistant turn with content; the request carries none")
 	}
 	return out, nil
 }
+
+// turnBlocks is one non-system message as the role it goes out under and its
+// content blocks. The one rule for what a turn sends: plan's emptiness check
+// and render both read it.
+func turnBlocks(m Message) (Role, []any) {
+	switch m.Role {
+	case RoleTool:
+		return RoleUser, []any{toolResultBlock(m)}
+	case RoleAssistant:
+		if len(m.ResponseItems) > 0 {
+			blocks := make([]any, len(m.ResponseItems))
+			for i, item := range m.ResponseItems {
+				blocks[i] = item
+			}
+			return RoleAssistant, blocks
+		}
+		var blocks []any
+		if t := toolOutputText(m); hasText(t) {
+			blocks = append(blocks, map[string]any{"type": "text", "text": t})
+		}
+		for _, tc := range m.ToolCalls {
+			blocks = append(blocks, map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Name,
+				"input": toolInput(tc.Arguments)})
+		}
+		return RoleAssistant, blocks
+	default:
+		return m.Role, contentBlocks(m)
+	}
+}
+
+// hasText says a text block would be accepted. MEASURED: whitespace alone is
+// a 400, "text content blocks must contain non-whitespace text".
+func hasText(s string) bool { return strings.TrimSpace(s) != "" }
 
 // toolInput is a call's arguments as the object tool_use.input takes. plan
 // has checked they are empty or a JSON object.
@@ -220,13 +229,13 @@ func toolResultBlock(m Message) map[string]any {
 	return b
 }
 
-// contentBlocks spells a user turn's content. An empty text block is left
-// out: the protocol refuses one ("text content blocks must be non-empty"),
-// where Chat Completions takes "" without a word, so an OpenAI history carries
-// them. A turn left with nothing is taken out in plan (dropEmptyTurns).
+// contentBlocks spells a user turn's content. An empty or whitespace text
+// block is left out: the protocol refuses one, where Chat Completions takes
+// it without a word, so an OpenAI history carries them. A turn left with
+// nothing is taken out in plan (checkMessagesTurns).
 func contentBlocks(m Message) []any {
 	if len(m.Parts) == 0 {
-		if m.Text == "" {
+		if !hasText(m.Text) {
 			return nil
 		}
 		return []any{map[string]any{"type": "text", "text": m.Text}}
@@ -236,7 +245,7 @@ func contentBlocks(m Message) []any {
 		switch {
 		case p.Kind == PartImage:
 			out = append(out, imageBlock(p.URL))
-		case p.Text != "":
+		case hasText(p.Text):
 			out = append(out, map[string]any{"type": "text", "text": p.Text})
 		}
 	}
@@ -378,11 +387,11 @@ func (a *assembler) block(blk wireBlock, raw json.RawMessage) {
 	var item any
 	switch blk.Type {
 	case "text":
-		if blk.Text == "" {
-			// Replayed, an empty text block is a 400.
+		a.content.WriteString(blk.Text)
+		if !hasText(blk.Text) {
+			// Replayed, an empty or whitespace text block is a 400.
 			return
 		}
-		a.content.WriteString(blk.Text)
 		item = map[string]any{"type": "text", "text": blk.Text}
 	case "thinking":
 		a.reasoning.WriteString(blk.Thinking)

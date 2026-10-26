@@ -860,7 +860,7 @@ func (v *validation) checkProtocol(req ChatRequest) {
 			return
 		}
 	}
-	if messages && !v.dropEmptyTurns() {
+	if messages && !v.checkMessagesTurns() {
 		return
 	}
 	if droppedThinking {
@@ -880,61 +880,86 @@ func (v *validation) checkProtocol(req ChatRequest) {
 	}
 }
 
-// dropEmptyTurns takes the turns with nothing to send out of the coerced
-// request, with a warning naming them: the protocol refuses an empty content
-// array and an empty text block, which Chat Completions takes and OpenAI
-// histories carry. Render then encodes what is left as it is.
+// checkMessagesTurns takes the turns with nothing to send out of the coerced
+// request, with a warning naming them (the protocol refuses an empty content
+// array, and an empty or whitespace text block, which Chat Completions takes
+// and OpenAI histories carry), then judges what is left as it goes out:
 //
-// The one drop refused is one that changes how the request ends: the
-// caller's last turn empty, and an assistant turn left last. That is a
-// prefill the caller never sent, which a model refuses or continues as if
-// it had written it. A prefill the caller did send goes out as sent; the
-// model's answer to it is the endpoint's.
-func (v *validation) dropEmptyTurns() bool {
-	var kept []Message
+//   - Nothing left to send is refused.
+//   - Ending on an assistant turn is a prefill; refused unless the profile
+//     takes one (assistant_prefill). MEASURED on claude-opus-5-5: "This model
+//     does not support assistant message prefill. The conversation must end
+//     with a user message." The refusal names the drop when a drop caused it.
+//   - Two assistant turns that both carry signed thinking, side by side,
+//     would be merged into one turn by render: an edit of replayed thinking,
+//     which preserved thinking invalidates. Refused. Opening on an assistant
+//     turn is fine: MEASURED accepted.
+func (v *validation) checkMessagesTurns() bool {
+	type turn struct {
+		at     int
+		m      Message
+		signed bool
+	}
+	var kept []turn
+	var system []Message
 	var dropped []int
-	lastWasEmpty := false
 	for i, m := range v.out.Messages {
-		if m.Role != RoleSystem {
-			lastWasEmpty = emptyTurn(m)
+		if m.Role == RoleSystem {
+			system = append(system, m)
+			continue
 		}
-		if emptyTurn(m) {
+		if _, blocks := turnBlocks(m); len(blocks) == 0 {
 			dropped = append(dropped, i)
 			continue
 		}
-		kept = append(kept, m)
+		kept = append(kept, turn{at: i, m: m, signed: m.Role == RoleAssistant && carriesThinking(m.ResponseItems)})
 	}
-	last := RoleSystem
-	for _, m := range kept {
-		if m.Role != RoleSystem {
-			last = m.Role
-		}
-	}
-	switch {
-	case last == RoleSystem:
+	if len(kept) == 0 {
 		v.reject("messages", fmt.Sprintf("no user or assistant turn has text, an image or a tool call to send "+
 			"(empty: %v)", dropped))
 		return false
-	case len(dropped) == 0:
-		return true
-	case lastWasEmpty && last == RoleAssistant:
-		v.reject("messages", fmt.Sprintf("message %d, the last, has no text or image; left out, the request would "+
-			"end on the assistant turn before it, a prefill", dropped[len(dropped)-1]))
+	}
+	for j := 1; j < len(kept); j++ {
+		if kept[j-1].signed && kept[j].signed {
+			v.reject("messages", fmt.Sprintf("messages %d and %d are both assistant turns carrying signed thinking, "+
+				"side by side once empty turns are left out; merged into one turn they would be an edit the model refuses",
+				kept[j-1].at, kept[j].at))
+			return false
+		}
+	}
+	if last := kept[len(kept)-1]; last.m.Role == RoleAssistant && !v.profile.AssistantPrefill {
+		why := ""
+		if n := len(dropped); n > 0 && dropped[n-1] > last.at {
+			why = fmt.Sprintf(" once the empty messages %v are left out", dropped)
+		}
+		v.reject("messages", fmt.Sprintf("the request ends on an assistant turn (message %d)%s: a prefill, "+
+			"which this model refuses; the conversation must end on a user turn", last.at, why))
 		return false
 	}
-	v.out.Messages = kept
+	if len(dropped) == 0 {
+		return true
+	}
+	out := system
+	for _, t := range kept {
+		out = append(out, t.m)
+	}
+	// System turns are hoisted to the top-level system string by render, so
+	// their order relative to the rest is not on the wire either way.
+	v.out.Messages = out
 	v.warn(WarnCompatibility, "messages", fmt.Sprintf("messages %v have no text, image or tool call and were left out: "+
 		"the %s protocol refuses an empty turn", dropped, v.profile.WireAPI))
 	return true
 }
 
-// emptyTurn is a user or assistant turn that renders to no content block.
-func emptyTurn(m Message) bool {
-	switch m.Role {
-	case RoleUser:
-		return len(contentBlocks(m)) == 0
-	case RoleAssistant:
-		return len(m.ResponseItems) == 0 && len(m.ToolCalls) == 0 && toolOutputText(m) == ""
+// carriesThinking says replay items include a signed thinking block.
+func carriesThinking(items []json.RawMessage) bool {
+	for _, raw := range items {
+		var it struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &it) == nil && (it.Type == "thinking" || it.Type == "redacted_thinking") {
+			return true
+		}
 	}
 	return false
 }

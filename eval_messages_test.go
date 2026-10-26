@@ -312,6 +312,30 @@ func TestProbe_OpusCacheContainment(t *testing.T) {
 	}
 }
 
+// TestProbe_OpusConversationShapes: the conversation shapes plan has to
+// decide about once it drops empty turns. Each is reported, not asserted:
+// what the endpoint answers is the finding.
+func TestProbe_OpusConversationShapes(t *testing.T) {
+	user := func(s string) map[string]any { return map[string]any{"role": "user", "content": s} }
+	asst := func(s string) map[string]any { return map[string]any{"role": "assistant", "content": s} }
+	for name, msgs := range map[string][]any{
+		"assistant first":     {asst("Hello, I am ready."), user("Reply with ok")},
+		"prefill":             {user("Give a JSON object with key a=1"), asst("{")},
+		"whitespace user":     {user(" "), asst("ok"), user("Reply with ok")},
+		"trailing whitespace": {user("Reply with ok"), asst("ok ")},
+		"two assistants":      {user("Reply with ok"), asst("ok"), asst("ok again"), user("Reply with ok")},
+	} {
+		raw, apiErr := opusRaw(t, body{"messages": msgs})
+		if apiErr != nil {
+			t.Logf("%s: REFUSED status %d code %q message %q", name, apiErr.StatusCode, apiErr.Code, apiErr.Message)
+			continue
+		}
+		var w wireMessage
+		_ = json.Unmarshal(raw, &w)
+		t.Logf("%s: ACCEPTED stop %q content %s", name, w.StopReason, Truncate(string(raw), 300))
+	}
+}
+
 // TestProbe_OpusStructuredOutput: output_config.format json_schema.
 func TestProbe_OpusStructuredOutput(t *testing.T) {
 	c := opusClient(t)
