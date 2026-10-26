@@ -881,21 +881,24 @@ func (v *validation) checkProtocol(req ChatRequest) {
 }
 
 // checkMessagesTurns refuses the conversations the protocol cannot carry as
-// sent. No turn is dropped or moved: dropping an empty turn reshapes the
-// history around it (a prefill nobody sent, a tool_use no longer followed by
-// its result), and moving a block can change what the turn says. Within a
-// turn, render leaves out a whitespace text block beside real content (its
-// MEASURED 400, contentBlocks), and that is all.
+// sent, by index, rather than reshaping them: dropping an empty turn reshapes
+// the history around it (a prefill nobody sent, a tool_use no longer followed
+// by its result), and moving a block can change what a turn says. What render
+// does rewrite is fixed and said where it happens: system turns go to the
+// top-level system string, a replayed turn goes as its ResponseItems, a
+// whitespace text block beside real content is left out (turnBlocks).
 //
-//   - A user or assistant turn with nothing to send is refused, by index. The
-//     protocol refuses an empty content array, and MEASURED an empty or
-//     whitespace text block, which Chat Completions takes and OpenAI histories
-//     carry: the caller drops it, knowing the history.
-//   - Tool results are merged with the user turns around them into one user
-//     turn, and there the protocol takes tool_result blocks first. MEASURED:
-//     text ahead of the tool_result is a 400, "`tool_use` ids were found
-//     without `tool_result` blocks immediately after". A tool result after
-//     other user content in one such run is refused, by index.
+//   - A user or assistant turn with nothing to send is refused. The protocol
+//     refuses an empty content array, and MEASURED an empty or whitespace
+//     text block, which Chat Completions takes and OpenAI histories carry:
+//     the caller drops it, knowing the history.
+//   - Tool calls must be answered first: MEASURED, user text between a
+//     tool_use turn and its tool_result is a 400, "`tool_use` ids were found
+//     without `tool_result` blocks immediately after", while an assistant
+//     turn there was accepted (the endpoint joins consecutive assistant
+//     turns). So no user content may come between an assistant turn's calls
+//     and their tool turns, and a tool turn must follow calls or another tool
+//     turn. Which ids answer which call is the endpoint's to check.
 //   - Ending on an assistant turn is a prefill; refused unless the profile
 //     takes one (assistant_prefill). MEASURED on claude-opus-5-5: "This model
 //     does not support assistant message prefill. The conversation must end
@@ -904,23 +907,32 @@ func (v *validation) checkProtocol(req ChatRequest) {
 //   - Opening on an assistant turn, or two in a row, is fine: MEASURED
 //     accepted, and render never merges assistant turns.
 func (v *validation) checkMessagesTurns() bool {
-	lastAt, textInRun := -1, -1
+	lastAt := -1
+	callsAt := -1      // the assistant turn whose calls await their results
+	answering := false // inside the run of tool turns right after a call
 	for i, m := range v.out.Messages {
-		switch m.Role {
-		case RoleSystem:
+		if m.Role == RoleSystem {
 			continue
-		case RoleAssistant:
-			textInRun = -1
-		case RoleTool:
-			if textInRun >= 0 {
-				v.reject("messages", fmt.Sprintf("message %d is a tool result after the user content of message %d, "+
-					"with no assistant turn between; the %s protocol takes a tool result right after its call, "+
-					"ahead of any other user content", i, textInRun, v.profile.WireAPI))
-				return false
-			}
+		}
+		switch {
+		case m.Role == RoleTool && callsAt < 0 && !answering:
+			v.reject("messages", fmt.Sprintf("message %d is a tool result with no tool call right before it; "+
+				"the %s protocol takes tool results directly after the assistant turn that called", i, v.profile.WireAPI))
+			return false
+		case m.Role == RoleTool:
+			callsAt, answering = -1, true
+		case m.Role == RoleAssistant && callsAt >= 0:
+			// MEASURED accepted: the endpoint joins consecutive assistant
+			// turns, so the calls are still awaiting their results.
+			answering = false
+		case callsAt >= 0:
+			v.reject("messages", fmt.Sprintf("message %d comes after the tool calls of message %d before their results; "+
+				"the %s protocol takes the results directly after the calls", i, callsAt, v.profile.WireAPI))
+			return false
 		default:
-			if textInRun < 0 {
-				textInRun = i
+			answering = false
+			if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+				callsAt = i
 			}
 		}
 		if _, blocks := turnBlocks(m); len(blocks) == 0 {

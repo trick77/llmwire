@@ -651,21 +651,35 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	// Opening on an assistant turn, and two in a row, are fine (measured),
 	// and two assistant turns stay two: a signed one goes back unchanged.
 	r1, _ := parseMessagesResponseWith(Redact, json.RawMessage(opusRound1))
-	pl = mustPlan(t, c, opusRequest(Assistant("hi"), User("q"), r1.Assistant(), Assistant("note"),
-		ToolResult("toolu_01AM", "r"), User("and?")), false)
+	pl = mustPlan(t, c, opusRequest(Assistant("hi"), User("q"), r1.Assistant(), ToolResult("toolu_01AM", "r"),
+		Assistant("note"), Assistant("more"), User("and?")), false)
 	turns := renderedBody(t, pl)["messages"].([]any)
-	if len(turns) != 5 || len(turns[2].(map[string]any)["content"].([]any)) != 2 {
+	if len(turns) != 7 || len(turns[2].(map[string]any)["content"].([]any)) != 2 {
 		t.Errorf("turns = %v", turns)
 	}
-	// The merged user turn carries the tool_result first, as sent; a tool
-	// result after user text in one run is refused, never reordered.
-	last, _ := json.Marshal(turns[4])
+	// The tool results answer their call first, as sent; anything between
+	// a call and its results is refused, never reordered.
+	last, _ := json.Marshal(turns[3])
 	if !strings.HasPrefix(string(last), `{"content":[{"content":"r","tool_use_id":"toolu_01AM","type":"tool_result"}`) {
 		t.Errorf("tool_result not first: %s", last)
 	}
-	if _, _, err := c.plan(opusRequest(User("q"), r1.Assistant(), User("also"), ToolResult("toolu_01AM", "r")), false); err == nil ||
-		!strings.Contains(err.Error(), "message 3 is a tool result after the user content of message 2") {
-		t.Errorf("text ahead of the tool result: %v", err)
+	for name, tc := range map[string]struct {
+		ms   []Message
+		want string
+	}{
+		"text before result": {[]Message{User("q"), r1.Assistant(), User("also"), ToolResult("toolu_01AM", "r")}, "message 2 comes after the tool calls of message 1"},
+		"no result":          {[]Message{User("q"), r1.Assistant(), User("never mind")}, "message 2 comes after"},
+		"orphan result":      {[]Message{User("q"), ToolResult("toolu_01AM", "r")}, "message 1 is a tool result with no tool call"},
+		"result after text":  {[]Message{User("q"), r1.Assistant(), ToolResult("toolu_01AM", "r"), User("x"), ToolResult("toolu_01AM", "r")}, "message 4 is a tool result with no tool call"},
+	} {
+		if _, _, err := c.plan(opusRequest(tc.ms...), false); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	// An assistant turn between the calls and their results is accepted
+	// (measured): the endpoint joins them.
+	if _, _, err := c.plan(opusRequest(User("q"), r1.Assistant(), Assistant("note"), ToolResult("toolu_01AM", "r")), false); err != nil {
+		t.Errorf("assistant before result: %v", err)
 	}
 	// A request with nothing to refuse goes out as the caller wrote it, and
 	// says nothing about it.
@@ -687,9 +701,9 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	if err != nil || r.ResponseItems != nil {
 		t.Errorf("thinking-only reply replayed: %s %v", r.ResponseItems, err)
 	}
-	// A server-tool turn is an answer and keeps its blocks, but sending it
-	// back last is a pause_turn resume, which plan refuses as a prefill:
-	// server tools are unmodelled.
+	// A server-tool turn is an answer and keeps its blocks. Sent back last it
+	// is refused like any request ending on an assistant turn: there is no
+	// pause_turn exemption, server tools being unmodelled.
 	r, err = parseMessagesResponseWith(Redact, json.RawMessage(
 		`{"content":[{"type":"server_tool_use","id":"s","name":"web_search","input":{}}],"stop_reason":"pause_turn"}`))
 	if err != nil || len(r.ResponseItems) != 1 {
