@@ -914,6 +914,11 @@ func (v *validation) checkMessagesTurns() bool {
 		if m.Role == RoleSystem {
 			continue
 		}
+		if _, blocks := turnBlocks(m); len(blocks) == 0 {
+			v.reject("messages", fmt.Sprintf("message %d has role %q and nothing left to send (no text, image or "+
+				"tool call); the %s protocol refuses an empty turn, so leave it out", i, m.Role, v.profile.WireAPI))
+			return false
+		}
 		switch {
 		case m.Role == RoleTool && callsAt < 0 && !answering:
 			v.reject("messages", fmt.Sprintf("message %d is a tool result with no tool call right before it; "+
@@ -921,9 +926,11 @@ func (v *validation) checkMessagesTurns() bool {
 			return false
 		case m.Role == RoleTool:
 			callsAt, answering = -1, true
-		case m.Role == RoleAssistant && callsAt >= 0:
-			// MEASURED accepted: the endpoint joins consecutive assistant
-			// turns, so the calls are still awaiting their results.
+		case m.Role == RoleAssistant && callsAt >= 0 && len(m.ToolCalls) == 0 && len(m.ResponseItems) == 0:
+			// MEASURED accepted, a plain text turn: the endpoint joins
+			// consecutive assistant turns, so the calls still await their
+			// results. A replayed or calling turn there is not measured, and
+			// joined it would edit a signed turn: refused below.
 			answering = false
 		case callsAt >= 0:
 			v.reject("messages", fmt.Sprintf("message %d comes after the tool calls of message %d before their results; "+
@@ -935,15 +942,15 @@ func (v *validation) checkMessagesTurns() bool {
 				callsAt = i
 			}
 		}
-		if _, blocks := turnBlocks(m); len(blocks) == 0 {
-			v.reject("messages", fmt.Sprintf("message %d has role %q and nothing left to send (no text, image or "+
-				"tool call); the %s protocol refuses an empty turn, so leave it out", i, m.Role, v.profile.WireAPI))
-			return false
-		}
 		lastAt = i
 	}
-	if lastAt < 0 {
+	switch {
+	case lastAt < 0:
 		v.reject("messages", "the request has no user or assistant turn")
+		return false
+	case callsAt >= 0:
+		v.reject("messages", fmt.Sprintf("the tool calls of message %d have no results after them; "+
+			"the %s protocol takes the results directly after the calls", callsAt, v.profile.WireAPI))
 		return false
 	}
 	if v.out.Messages[lastAt].Role == RoleAssistant && !v.profile.AssistantPrefill {

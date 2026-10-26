@@ -31,7 +31,9 @@ import (
 //   - A tool result is a tool_result block in a USER turn, and consecutive
 //     user turns are merged into one, so a round of parallel tool results
 //     goes back as one user turn, as the protocol asks. Assistant turns are
-//     never merged: a replayed turn's signed blocks go back as they came.
+//     never merged here; the endpoint joins consecutive ones itself
+//     (MEASURED), so plan refuses a replayed or calling turn placed between
+//     a call and its results, where joining would edit a signed turn.
 //   - Thinking is sent as {"type":"adaptive","display":"summarized"} on a
 //     model that reasons. The display is visibility only, billed the same; the
 //     default ("omitted") streams thinking blocks with no text, so a long think

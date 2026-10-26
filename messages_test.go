@@ -676,10 +676,26 @@ func TestMessages_ReviewEdges(t *testing.T) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
-	// An assistant turn between the calls and their results is accepted
-	// (measured): the endpoint joins them.
+	// A plain assistant turn between the calls and their results is accepted
+	// (measured): the endpoint joins them. A replayed or calling one there is
+	// not measured, and is refused; so are calls that never get results, and
+	// an empty turn between gets the empty-turn refusal.
 	if _, _, err := c.plan(opusRequest(User("q"), r1.Assistant(), Assistant("note"), ToolResult("toolu_01AM", "r")), false); err != nil {
 		t.Errorf("assistant before result: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		ms   []Message
+		want string
+	}{
+		"replayed between": {[]Message{User("q"), r1.Assistant(), r1.Assistant(), ToolResult("toolu_01AM", "r")}, "message 2 comes after the tool calls of message 1"},
+		"calls between": {[]Message{User("q"), r1.Assistant(), {Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "t2", Name: "get_weather"}}},
+			ToolResult("toolu_01AM", "r")}, "message 2 comes after the tool calls of message 1"},
+		"unanswered":    {[]Message{User("q"), r1.Assistant()}, "the tool calls of message 1 have no results"},
+		"empty between": {[]Message{User("q"), r1.Assistant(), User(" "), ToolResult("toolu_01AM", "r")}, "message 2 has role \"user\" and nothing left"},
+	} {
+		if _, _, err := c.plan(opusRequest(tc.ms...), false); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v", name, err)
+		}
 	}
 	// A request with nothing to refuse goes out as the caller wrote it, and
 	// says nothing about it.
