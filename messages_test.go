@@ -690,9 +690,7 @@ func TestMessages_ReviewEdges(t *testing.T) {
 		ms   []Message
 		want string
 	}{
-		"replayed between": {[]Message{User("q"), r1.Assistant(), r2, ToolResult("toolu_01AM", "r")}, "messages 1 and 2 are replayed assistant turns in a row"},
-		"replayed in a row": {[]Message{User("q"), r1.Assistant(), ToolResult("toolu_01AM", "r"), r2, r2, User("again")},
-			"messages 3 and 4 are replayed assistant turns in a row"},
+		"replayed between": {[]Message{User("q"), r1.Assistant(), r2, ToolResult("toolu_01AM", "r")}, "message 2 comes after the tool calls of message 1"},
 		"replayed after hand-built calls": {[]Message{User("q"), {Role: RoleAssistant, ToolCalls: r1.ToolCalls}, r2,
 			ToolResult("toolu_01AM", "r")}, "message 2 comes after the tool calls of message 1"},
 		"calls between": {[]Message{User("q"), r1.Assistant(), {Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "t2", Name: "get_weather"}}},
@@ -703,6 +701,10 @@ func TestMessages_ReviewEdges(t *testing.T) {
 		if _, _, err := c.plan(opusRequest(tc.ms...), false); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v", name, err)
 		}
+	}
+	// Two replayed turns in a row are the endpoint's to judge, not plan's.
+	if _, _, err := c.plan(opusRequest(User("q"), r1.Assistant(), ToolResult("toolu_01AM", "r"), r2, r2, User("again")), false); err != nil {
+		t.Errorf("replayed in a row: %v", err)
 	}
 	// A request with nothing to refuse goes out as the caller wrote it, and
 	// says nothing about it.

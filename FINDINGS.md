@@ -399,9 +399,9 @@ endpoint joins consecutive assistant turns. With real signed thinking
 (`OpusSignedJoins`, same effort as the replayed turns): a plain note after a
 replayed calling turn was accepted; a replayed turn sent twice was a 400,
 "Invalid `signature` in `thinking` block. The block is bound to a different
-conversation." On a model without prefill two replies can never sit side by
-side (each followed a user or tool turn), so plan refuses two replayed turns
-in a row by index; subtler edits are the endpoint's check alone.
+conversation." Plan does not refuse it: it cannot tell an edited history from
+a genuine one (another model's replies, a turn with no signed block), so the
+endpoint's 400 comes back as that APIError.
 
 Not measured: vision, parallel tool calls, a stop sequence.
 
