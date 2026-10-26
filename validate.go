@@ -881,31 +881,48 @@ func (v *validation) checkProtocol(req ChatRequest) {
 }
 
 // checkMessagesTurns refuses the conversations the protocol cannot carry as
-// sent. Nothing is dropped or rearranged: dropping an empty turn changes the
-// shape around it (a prefill nobody sent, a tool_use no longer followed by its
-// result, two assistant turns side by side), and each of those is its own 400.
+// sent. Nothing is dropped or rearranged, so the coerced request is what goes
+// out: dropping an empty turn reshapes the history around it (a prefill nobody
+// sent, a tool_use no longer followed by its result), and moving a block can
+// change what the turn says.
 //
 //   - A user or assistant turn with nothing to send is refused, by index. The
 //     protocol refuses an empty content array, and MEASURED an empty or
 //     whitespace text block, which Chat Completions takes and OpenAI histories
 //     carry: the caller drops it, knowing the history.
+//   - Tool results are merged with the user turns around them into one user
+//     turn, and there the protocol takes tool_result blocks first. A tool
+//     result after user text in one such run is refused, by index.
 //   - Ending on an assistant turn is a prefill; refused unless the profile
 //     takes one (assistant_prefill). MEASURED on claude-opus-5-5: "This model
 //     does not support assistant message prefill. The conversation must end
-//     with a user message." A turn carrying a server-tool block is exempt:
-//     sending it back is how a pause_turn reply resumes. NOT measured, and
-//     only a non-streamed reply keeps those blocks (messages.go head comment).
+//     with a user message." That includes a pause_turn resume: server tools
+//     are unmodelled (messages.go head comment).
 //   - Opening on an assistant turn, or two in a row, is fine: MEASURED
-//     accepted.
+//     accepted, and render never merges assistant turns.
 func (v *validation) checkMessagesTurns() bool {
-	lastAt := -1
+	lastAt, textInRun := -1, -1
 	for i, m := range v.out.Messages {
-		if m.Role == RoleSystem {
+		switch m.Role {
+		case RoleSystem:
 			continue
+		case RoleAssistant:
+			textInRun = -1
+		case RoleTool:
+			if textInRun >= 0 {
+				v.reject("messages", fmt.Sprintf("message %d is a tool result after the user text of message %d "+
+					"in one user turn; the %s protocol takes tool results first, so send the text after them",
+					i, textInRun, v.profile.WireAPI))
+				return false
+			}
+		default:
+			if textInRun < 0 {
+				textInRun = i
+			}
 		}
 		if _, blocks := turnBlocks(m); len(blocks) == 0 {
-			v.reject("messages", fmt.Sprintf("message %d has role %q and no text, image or tool call; "+
-				"the %s protocol refuses an empty turn, so leave it out", i, m.Role, v.profile.WireAPI))
+			v.reject("messages", fmt.Sprintf("message %d has role %q and nothing left to send (no text, image or "+
+				"tool call); the %s protocol refuses an empty turn, so leave it out", i, m.Role, v.profile.WireAPI))
 			return false
 		}
 		lastAt = i
@@ -914,28 +931,12 @@ func (v *validation) checkMessagesTurns() bool {
 		v.reject("messages", "the request has no user or assistant turn")
 		return false
 	}
-	if last := v.out.Messages[lastAt]; last.Role == RoleAssistant && !v.profile.AssistantPrefill &&
-		!carriesServerTool(last.ResponseItems) {
+	if v.out.Messages[lastAt].Role == RoleAssistant && !v.profile.AssistantPrefill {
 		v.reject("messages", fmt.Sprintf("the request ends on an assistant turn (message %d): a prefill, "+
 			"which this model refuses; the conversation must end on a user turn", lastAt))
 		return false
 	}
 	return true
-}
-
-// carriesServerTool says replay items include a server-tool block, the shape
-// a pause_turn reply leaves for the caller to send back as it is.
-func carriesServerTool(items []json.RawMessage) bool {
-	for _, raw := range items {
-		var it struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(raw, &it) == nil &&
-			(it.Type == "server_tool_use" || strings.HasSuffix(it.Type, "_tool_result")) {
-			return true
-		}
-	}
-	return false
 }
 
 // toolArgsAreObjects refuses a turn whose calls go out as tool_use blocks with

@@ -657,24 +657,23 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	if len(turns) != 5 || len(turns[2].(map[string]any)["content"].([]any)) != 2 {
 		t.Errorf("turns = %v", turns)
 	}
-	// The merged user turn puts its tool_result ahead of the text, whatever
-	// the order it was sent in.
+	// The merged user turn carries the tool_result first, as sent; a tool
+	// result after user text in one run is refused, never reordered.
 	last, _ := json.Marshal(turns[4])
 	if !strings.HasPrefix(string(last), `{"content":[{"content":"r","tool_use_id":"toolu_01AM","type":"tool_result"}`) {
 		t.Errorf("tool_result not first: %s", last)
 	}
-	pl = mustPlan(t, c, opusRequest(User("q"), r1.Assistant(), User("also"), ToolResult("toolu_01AM", "r")), false)
-	last, _ = json.Marshal(renderedBody(t, pl)["messages"].([]any)[2])
-	if !strings.HasPrefix(string(last), `{"content":[{"content":"r"`) {
-		t.Errorf("text sent ahead of the tool_result: %s", last)
+	if _, _, err := c.plan(opusRequest(User("q"), r1.Assistant(), User("also"), ToolResult("toolu_01AM", "r")), false); err == nil ||
+		!strings.Contains(err.Error(), "message 3 is a tool result after the user text of message 2") {
+		t.Errorf("text ahead of the tool result: %v", err)
 	}
-	// A pause_turn resume ends on the paused turn, server-tool block anywhere
-	// in it, and goes out.
-	paused := Message{Role: RoleAssistant, ResponseItems: []json.RawMessage{
-		json.RawMessage(`{"type":"server_tool_use","id":"s","name":"web_search","input":{}}`),
-		json.RawMessage(`{"type":"text","text":"searching"}`)}}
-	if _, _, err := c.plan(opusRequest(User("q"), paused), false); err != nil {
-		t.Errorf("pause_turn resume: %v", err)
+	// A request with nothing to refuse goes out as the caller wrote it, and
+	// says nothing about it.
+	req := opusRequest(System("s"), User("q"), r1.Assistant(), ToolResult("toolu_01AM", "r"), User("and?"))
+	pl, warnings, err := c.plan(req, false)
+	if err != nil || len(warnings) != 0 || !reflect.DeepEqual(pl.req.Messages, req.Messages) {
+		t.Errorf("plain request: warnings %v, err %v, messages changed %v", warnings, err,
+			!reflect.DeepEqual(pl.req.Messages, req.Messages))
 	}
 	// An empty text block in a reply is not replayed; a reply of thinking
 	// alone carries no items at all.

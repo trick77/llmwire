@@ -67,8 +67,9 @@ gofmt, build, golangci-lint (ship's config, no repo copy), secret scan, `go test
   **beside** `input_tokens` (added, never subtracted); `ping` is a `data:`
   frame and never re-arms the guard; `max_tokens` required (uncapped =
   `limits.max_output`); `speed`/`inference_geo` refused (bill off list).
-  Empty turns are refused, never dropped (`checkMessagesTurns`): a drop
-  reshapes the history into another 400. Read `messages.go`'s head comment
+  Plan never drops or reorders turns (`checkMessagesTurns` refuses by index);
+  only user turns merge. Key header + `anthropic-version` live on the
+  provider entry, never in client code. Read `messages.go`'s head comment
   first.
 
 ## Transport

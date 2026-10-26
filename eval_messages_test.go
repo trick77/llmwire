@@ -312,9 +312,9 @@ func TestProbe_OpusCacheContainment(t *testing.T) {
 	}
 }
 
-// TestProbe_OpusConversationShapes: the conversation shapes plan has to
-// decide about once it drops empty turns. Each is reported, not asserted:
-// what the endpoint answers is the finding.
+// TestProbe_OpusConversationShapes: the conversation shapes checkMessagesTurns
+// refuses or lets through. Each is reported, not asserted: what the endpoint
+// answers is the finding.
 func TestProbe_OpusConversationShapes(t *testing.T) {
 	user := func(s string) map[string]any { return map[string]any{"role": "user", "content": s} }
 	asst := func(s string) map[string]any { return map[string]any{"role": "assistant", "content": s} }

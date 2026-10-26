@@ -57,8 +57,10 @@ import (
 //   - A streamed block of a type not spelled here (server_tool_use and its
 //     result, reachable only through tools in ExtraBody) is its start frame
 //     alone, so the whole turn is left unreplayable: it goes back as Text
-//     and ToolCalls, its thinking with it. Unmodelled, not unsupported by
-//     accident.
+//     and ToolCalls, its thinking with it. A non-streamed reply keeps such
+//     blocks verbatim. Server tools are unmodelled, on purpose: a pause_turn
+//     resume ends on the paused assistant turn, which plan refuses as a
+//     prefill on a model without assistant_prefill.
 //   - Completion is asserted by message_stop, never inferred. A tool call's
 //     input comes from its input_json_delta fragments only; the input on
 //     content_block_start is the empty placeholder and is never also read.
@@ -152,8 +154,9 @@ type messagesTurn struct {
 
 // renderMessagesTurns encodes the conversation, system turns excluded. Only
 // consecutive USER turns are merged: a round of tool results goes back as one
-// user turn, as the protocol asks, with every tool_result block ahead of any
-// other content, as it also asks. Assistant turns are never merged, so a
+// user turn, as the protocol asks (plan has refused a tool result after user
+// text in such a run, which would put it second). Assistant turns are never
+// merged, so a
 // replayed turn's signed blocks go back exactly as they came. plan refuses
 // every turn turnBlocks leaves empty (checkMessagesTurns); one reaching here
 // is plan's bug and an error, never an empty content array on the wire.
@@ -176,20 +179,7 @@ func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("llmwire: the Messages protocol needs a user or assistant turn with content; the request carries none")
 	}
-	for i := range out {
-		if out[i].Role == string(RoleUser) {
-			slices.SortStableFunc(out[i].Content, func(a, b any) int { return toolResultRank(a) - toolResultRank(b) })
-		}
-	}
 	return out, nil
-}
-
-// toolResultRank puts tool_result blocks first in a user turn.
-func toolResultRank(block any) int {
-	if b, ok := block.(map[string]any); ok && b["type"] == "tool_result" {
-		return 0
-	}
-	return 1
 }
 
 // turnBlocks is one non-system message as the role it goes out under and its
