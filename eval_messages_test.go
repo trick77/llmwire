@@ -324,6 +324,16 @@ func TestProbe_OpusConversationShapes(t *testing.T) {
 		"whitespace user":     {user(" "), asst("ok"), user("Reply with ok")},
 		"trailing whitespace": {user("Reply with ok"), asst("ok ")},
 		"two assistants":      {user("Reply with ok"), asst("ok"), asst("ok again"), user("Reply with ok")},
+		"whitespace tool result": {user("Call get_weather for Bern"),
+			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "toolu_x",
+				"name": "get_weather", "input": map[string]any{"city": "Bern"}}}},
+			map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "toolu_x",
+				"content": " \n"}}}},
+		"empty tool result": {user("Call get_weather for Bern"),
+			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "toolu_x",
+				"name": "get_weather", "input": map[string]any{"city": "Bern"}}}},
+			map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "toolu_x",
+				"content": ""}}}},
 	} {
 		raw, apiErr := opusRaw(t, body{"messages": msgs})
 		if apiErr != nil {

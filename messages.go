@@ -29,8 +29,9 @@ import (
 //     mid-conversation system role has placement rules (after a user turn, last
 //     or before an assistant turn) that a converted OpenAI history breaks.
 //   - A tool result is a tool_result block in a USER turn, and consecutive
-//     turns of one role are merged into one turn, so a round of parallel tool
-//     results goes back as one user turn, as the protocol asks.
+//     user turns are merged into one, so a round of parallel tool results
+//     goes back as one user turn, as the protocol asks. Assistant turns are
+//     never merged: a replayed turn's signed blocks go back as they came.
 //   - Thinking is sent as {"type":"adaptive","display":"summarized"} on a
 //     model that reasons. The display is visibility only, billed the same; the
 //     default ("omitted") streams thinking blocks with no text, so a long think
@@ -149,8 +150,11 @@ type messagesTurn struct {
 	Content []any  `json:"content"`
 }
 
-// renderMessagesTurns encodes the conversation, system turns excluded, merging
-// consecutive turns of one role. plan has taken out every turn turnBlocks
+// renderMessagesTurns encodes the conversation, system turns excluded. Only
+// consecutive USER turns are merged: a round of tool results goes back as one
+// user turn, as the protocol asks. Assistant turns are never merged, so a
+// replayed turn's signed blocks go back exactly as they came (two assistant
+// turns in a row MEASURED accepted). plan has taken out every turn turnBlocks
 // leaves empty (checkMessagesTurns); one reaching here is plan's bug and an
 // error, never an empty content array on the wire.
 func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
@@ -163,7 +167,7 @@ func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
 		if len(blocks) == 0 {
 			return nil, fmt.Errorf("llmwire: message %d has nothing to send and plan did not take it out", i)
 		}
-		if n := len(out); n > 0 && out[n-1].Role == string(role) {
+		if n := len(out); n > 0 && role == RoleUser && out[n-1].Role == string(RoleUser) {
 			out[n-1].Content = append(out[n-1].Content, blocks...)
 			continue
 		}

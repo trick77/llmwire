@@ -670,13 +670,25 @@ func TestMessages_ReviewEdges(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	// Two signed assistant turns brought side by side by a drop would merge.
+	// Two assistant turns brought side by side by a drop stay two turns: the
+	// signed one goes back unchanged, never merged with its neighbour.
 	r1, _ := parseMessagesResponseWith(Redact, json.RawMessage(opusRound1))
-	r1.ToolCalls = nil
-	signed := Message{Role: RoleAssistant, ResponseItems: r1.ResponseItems[:1]}
-	if _, _, err := c.plan(opusRequest(User("q"), signed, User(""), signed, User("r")), false); err == nil ||
-		!strings.Contains(err.Error(), "signed thinking") {
-		t.Errorf("signed turns side by side: err = %v", err)
+	signed := r1.Assistant()
+	pl = mustPlan(t, c, opusRequest(User("q"), signed, User(""), Assistant("note"), ToolResult("toolu_01AM", "r")), false)
+	turns := renderedBody(t, pl)["messages"].([]any)
+	if len(turns) != 4 || len(turns[1].(map[string]any)["content"].([]any)) != 2 {
+		t.Errorf("assistant turns merged: %v", turns)
+	}
+	// The prefill refusal names only the drops after the last assistant turn.
+	_, _, err := c.plan(opusRequest(User(""), User("q"), Assistant("a"), User(" ")), false)
+	if err == nil || !strings.Contains(err.Error(), "messages [3] after it") {
+		t.Errorf("prefill blame: %v", err)
+	}
+	// A pause_turn resume ends on the paused assistant turn and goes out.
+	paused := Message{Role: RoleAssistant, ResponseItems: []json.RawMessage{
+		json.RawMessage(`{"type":"server_tool_use","id":"s","name":"web_search","input":{}}`)}}
+	if _, _, err := c.plan(opusRequest(User("q"), paused), false); err != nil {
+		t.Errorf("pause_turn resume: %v", err)
 	}
 	// An empty text block in a reply is not replayed; a reply of thinking
 	// alone carries no items at all.
