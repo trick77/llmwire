@@ -152,11 +152,11 @@ type messagesTurn struct {
 
 // renderMessagesTurns encodes the conversation, system turns excluded. Only
 // consecutive USER turns are merged: a round of tool results goes back as one
-// user turn, as the protocol asks. Assistant turns are never merged, so a
-// replayed turn's signed blocks go back exactly as they came (two assistant
-// turns in a row MEASURED accepted). plan has taken out every turn turnBlocks
-// leaves empty (checkMessagesTurns); one reaching here is plan's bug and an
-// error, never an empty content array on the wire.
+// user turn, as the protocol asks, with every tool_result block ahead of any
+// other content, as it also asks. Assistant turns are never merged, so a
+// replayed turn's signed blocks go back exactly as they came. plan refuses
+// every turn turnBlocks leaves empty (checkMessagesTurns); one reaching here
+// is plan's bug and an error, never an empty content array on the wire.
 func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
 	var out []messagesTurn
 	for i, m := range ms {
@@ -165,7 +165,7 @@ func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
 		}
 		role, blocks := turnBlocks(m)
 		if len(blocks) == 0 {
-			return nil, fmt.Errorf("llmwire: message %d has nothing to send and plan did not take it out", i)
+			return nil, fmt.Errorf("llmwire: message %d has nothing to send and plan did not refuse it", i)
 		}
 		if n := len(out); n > 0 && role == RoleUser && out[n-1].Role == string(RoleUser) {
 			out[n-1].Content = append(out[n-1].Content, blocks...)
@@ -176,7 +176,20 @@ func renderMessagesTurns(ms []Message) ([]messagesTurn, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("llmwire: the Messages protocol needs a user or assistant turn with content; the request carries none")
 	}
+	for i := range out {
+		if out[i].Role == string(RoleUser) {
+			slices.SortStableFunc(out[i].Content, func(a, b any) int { return toolResultRank(a) - toolResultRank(b) })
+		}
+	}
 	return out, nil
+}
+
+// toolResultRank puts tool_result blocks first in a user turn.
+func toolResultRank(block any) int {
+	if b, ok := block.(map[string]any); ok && b["type"] == "tool_result" {
+		return 0
+	}
+	return 1
 }
 
 // turnBlocks is one non-system message as the role it goes out under and its
@@ -236,7 +249,7 @@ func toolResultBlock(m Message) map[string]any {
 // contentBlocks spells a user turn's content. An empty or whitespace text
 // block is left out: the protocol refuses one, where Chat Completions takes
 // it without a word, so an OpenAI history carries them. A turn left with
-// nothing is taken out in plan (checkMessagesTurns).
+// nothing is refused in plan (checkMessagesTurns).
 func contentBlocks(m Message) []any {
 	if len(m.Parts) == 0 {
 		if !hasText(m.Text) {

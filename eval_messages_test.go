@@ -335,7 +335,12 @@ func TestProbe_OpusConversationShapes(t *testing.T) {
 			map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "toolu_x",
 				"content": ""}}}},
 	} {
-		raw, apiErr := opusRaw(t, body{"messages": msgs})
+		b := body{"messages": msgs}
+		if strings.Contains(name, "tool result") {
+			// As a tool loop sends it: the tool defined beside its call.
+			b["tools"] = []any{weatherToolRaw()}
+		}
+		raw, apiErr := opusRaw(t, b)
 		if apiErr != nil {
 			t.Logf("%s: REFUSED status %d code %q message %q", name, apiErr.StatusCode, apiErr.Code, apiErr.Message)
 			continue

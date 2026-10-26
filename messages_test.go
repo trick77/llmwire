@@ -629,64 +629,50 @@ func TestMessages_ReviewEdges(t *testing.T) {
 	if want := `{"content":[{"text":"b","type":"text"}],"role":"user"}`; string(got) != want {
 		t.Errorf("last turn = %s, want %s", got, want)
 	}
-	// An empty user turn is dropped mid-conversation, and refused where
-	// dropping it would end the request on the assistant turn, a prefill.
-	pl = mustPlan(t, c, opusRequest(User(""), User("q")), false)
-	if got := renderedBody(t, pl)["messages"].([]any); len(got) != 1 {
-		t.Errorf("empty first turn: %v", got)
-	}
-	// The coerced request is what goes out: the empty turn is gone from it,
-	// and the warning names it by index.
-	if w := pl.req; len(w.Messages) != 1 {
-		t.Errorf("the coerced request kept the empty turn: %v", w.Messages)
-	}
-	if _, warnings, _ := c.plan(opusRequest(User(""), User("q")), false); len(warnings) != 1 ||
-		!strings.Contains(warnings[0].Details, "messages [0]") {
-		t.Errorf("dropped turn not warned by index: %v", warnings)
-	}
-	// A prefill is refused (measured a 400 on this model), and the refusal
-	// says when a drop is what made one.
+	// An empty or whitespace turn is refused by index, never dropped: a drop
+	// reshapes the history around it. The coerced request is the caller's.
 	for name, tc := range map[string]struct {
-		ms   []Message
-		drop bool
+		ms []Message
+		at string
 	}{
-		"prefill as sent":      {[]Message{User("q"), Assistant("{")}, false},
-		"ends on assistant":    {[]Message{User("q"), Assistant("a"), User(""), System("s")}, true},
-		"two empty trailing":   {[]Message{User("q"), Assistant("a"), User(""), Assistant("")}, true},
-		"whitespace last turn": {[]Message{User("q"), Assistant("a"), User(" \n")}, true},
+		"empty first":      {[]Message{User(""), User("q")}, "message 0"},
+		"whitespace last":  {[]Message{User("q"), Assistant("a"), User(" \n")}, "message 2"},
+		"empty assistant":  {[]Message{User("q"), Assistant(""), User("r")}, "message 1"},
+		"after system":     {[]Message{System("s"), User(" ")}, "message 1"},
+		"system only":      {[]Message{System("s")}, "no user or assistant"},
+		"image stripped":   {[]Message{User("q"), Assistant("a"), {Role: RoleUser, Parts: []Part{{Kind: PartText, Text: " "}}}}, "message 2"},
+		"prefill as sent":  {[]Message{User("q"), Assistant("{")}, "prefill"},
+		"prefill over two": {[]Message{User("q"), Assistant("a"), Assistant("b")}, "message 2"},
 	} {
-		_, _, err := c.plan(opusRequest(tc.ms...), false)
-		if err == nil || !strings.Contains(err.Error(), "prefill") || strings.Contains(err.Error(), "left out") != tc.drop {
+		if _, _, err := c.plan(opusRequest(tc.ms...), false); err == nil || !strings.Contains(err.Error(), tc.at) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
-	// Opening on an assistant turn is fine (measured), and so is a trailing
-	// pair of empty turns after a real user turn.
-	for name, ms := range map[string][]Message{
-		"opens on assistant": {User(""), Assistant("a"), User("q")},
-		"empty after q":      {User("q"), Assistant(""), User("")},
-	} {
-		if _, _, err := c.plan(opusRequest(ms...), false); err != nil {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-	// Two assistant turns brought side by side by a drop stay two turns: the
-	// signed one goes back unchanged, never merged with its neighbour.
+	// Opening on an assistant turn, and two in a row, are fine (measured),
+	// and two assistant turns stay two: a signed one goes back unchanged.
 	r1, _ := parseMessagesResponseWith(Redact, json.RawMessage(opusRound1))
-	signed := r1.Assistant()
-	pl = mustPlan(t, c, opusRequest(User("q"), signed, User(""), Assistant("note"), ToolResult("toolu_01AM", "r")), false)
+	pl = mustPlan(t, c, opusRequest(Assistant("hi"), User("q"), r1.Assistant(), Assistant("note"),
+		ToolResult("toolu_01AM", "r"), User("and?")), false)
 	turns := renderedBody(t, pl)["messages"].([]any)
-	if len(turns) != 4 || len(turns[1].(map[string]any)["content"].([]any)) != 2 {
-		t.Errorf("assistant turns merged: %v", turns)
+	if len(turns) != 5 || len(turns[2].(map[string]any)["content"].([]any)) != 2 {
+		t.Errorf("turns = %v", turns)
 	}
-	// The prefill refusal names only the drops after the last assistant turn.
-	_, _, err := c.plan(opusRequest(User(""), User("q"), Assistant("a"), User(" ")), false)
-	if err == nil || !strings.Contains(err.Error(), "messages [3] after it") {
-		t.Errorf("prefill blame: %v", err)
+	// The merged user turn puts its tool_result ahead of the text, whatever
+	// the order it was sent in.
+	last, _ := json.Marshal(turns[4])
+	if !strings.HasPrefix(string(last), `{"content":[{"content":"r","tool_use_id":"toolu_01AM","type":"tool_result"}`) {
+		t.Errorf("tool_result not first: %s", last)
 	}
-	// A pause_turn resume ends on the paused assistant turn and goes out.
+	pl = mustPlan(t, c, opusRequest(User("q"), r1.Assistant(), User("also"), ToolResult("toolu_01AM", "r")), false)
+	last, _ = json.Marshal(renderedBody(t, pl)["messages"].([]any)[2])
+	if !strings.HasPrefix(string(last), `{"content":[{"content":"r"`) {
+		t.Errorf("text sent ahead of the tool_result: %s", last)
+	}
+	// A pause_turn resume ends on the paused turn, server-tool block anywhere
+	// in it, and goes out.
 	paused := Message{Role: RoleAssistant, ResponseItems: []json.RawMessage{
-		json.RawMessage(`{"type":"server_tool_use","id":"s","name":"web_search","input":{}}`)}}
+		json.RawMessage(`{"type":"server_tool_use","id":"s","name":"web_search","input":{}}`),
+		json.RawMessage(`{"type":"text","text":"searching"}`)}}
 	if _, _, err := c.plan(opusRequest(User("q"), paused), false); err != nil {
 		t.Errorf("pause_turn resume: %v", err)
 	}

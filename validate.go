@@ -880,68 +880,62 @@ func (v *validation) checkProtocol(req ChatRequest) {
 	}
 }
 
-// checkMessagesTurns takes the turns with nothing to send out of the coerced
-// request, with a warning naming them (the protocol refuses an empty content
-// array, and an empty or whitespace text block, which Chat Completions takes
-// and OpenAI histories carry), then judges what is left as it goes out:
+// checkMessagesTurns refuses the conversations the protocol cannot carry as
+// sent. Nothing is dropped or rearranged: dropping an empty turn changes the
+// shape around it (a prefill nobody sent, a tool_use no longer followed by its
+// result, two assistant turns side by side), and each of those is its own 400.
 //
-//   - Nothing left to send is refused.
+//   - A user or assistant turn with nothing to send is refused, by index. The
+//     protocol refuses an empty content array, and MEASURED an empty or
+//     whitespace text block, which Chat Completions takes and OpenAI histories
+//     carry: the caller drops it, knowing the history.
 //   - Ending on an assistant turn is a prefill; refused unless the profile
 //     takes one (assistant_prefill). MEASURED on claude-opus-5-5: "This model
 //     does not support assistant message prefill. The conversation must end
-//     with a user message." The refusal names the drop when a drop caused it.
-//   - A turn whose replay items end in a server-tool block is exempt: that is
-//     a pause_turn resume, the documented way to continue a paused server
-//     tool, not a prefill. NOT measured; server tools are unmodelled.
+//     with a user message." A turn carrying a server-tool block is exempt:
+//     sending it back is how a pause_turn reply resumes. NOT measured, and
+//     only a non-streamed reply keeps those blocks (messages.go head comment).
 //   - Opening on an assistant turn, or two in a row, is fine: MEASURED
-//     accepted, and render never merges assistant turns.
+//     accepted.
 func (v *validation) checkMessagesTurns() bool {
-	kept := make([]Message, 0, len(v.out.Messages))
-	var dropped []int
-	last, lastAt := Message{}, -1
+	lastAt := -1
 	for i, m := range v.out.Messages {
-		if m.Role != RoleSystem {
-			if _, blocks := turnBlocks(m); len(blocks) == 0 {
-				dropped = append(dropped, i)
-				continue
-			}
-			last, lastAt = m, i
+		if m.Role == RoleSystem {
+			continue
 		}
-		kept = append(kept, m)
-	}
-	switch {
-	case lastAt < 0:
-		v.reject("messages", fmt.Sprintf("no user or assistant turn has text, an image or a tool call to send "+
-			"(empty: %v)", dropped))
-		return false
-	case last.Role == RoleAssistant && !v.profile.AssistantPrefill && !resumesServerTool(last.ResponseItems):
-		why := ""
-		if after := dropped[sort.SearchInts(dropped, lastAt):]; len(after) > 0 {
-			why = fmt.Sprintf(" once the empty messages %v after it are left out", after)
+		if _, blocks := turnBlocks(m); len(blocks) == 0 {
+			v.reject("messages", fmt.Sprintf("message %d has role %q and no text, image or tool call; "+
+				"the %s protocol refuses an empty turn, so leave it out", i, m.Role, v.profile.WireAPI))
+			return false
 		}
-		v.reject("messages", fmt.Sprintf("the request ends on an assistant turn (message %d)%s: a prefill, "+
-			"which this model refuses; the conversation must end on a user turn", lastAt, why))
-		return false
-	case len(dropped) == 0:
-		return true
+		lastAt = i
 	}
-	v.out.Messages = kept
-	v.warn(WarnCompatibility, "messages", fmt.Sprintf("messages %v have no text, image or tool call and were left out: "+
-		"the %s protocol refuses an empty turn", dropped, v.profile.WireAPI))
+	if lastAt < 0 {
+		v.reject("messages", "the request has no user or assistant turn")
+		return false
+	}
+	if last := v.out.Messages[lastAt]; last.Role == RoleAssistant && !v.profile.AssistantPrefill &&
+		!carriesServerTool(last.ResponseItems) {
+		v.reject("messages", fmt.Sprintf("the request ends on an assistant turn (message %d): a prefill, "+
+			"which this model refuses; the conversation must end on a user turn", lastAt))
+		return false
+	}
 	return true
 }
 
-// resumesServerTool says replay items end in a server-tool block, the shape
+// carriesServerTool says replay items include a server-tool block, the shape
 // a pause_turn reply leaves for the caller to send back as it is.
-func resumesServerTool(items []json.RawMessage) bool {
-	if len(items) == 0 {
-		return false
+func carriesServerTool(items []json.RawMessage) bool {
+	for _, raw := range items {
+		var it struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &it) == nil &&
+			(it.Type == "server_tool_use" || strings.HasSuffix(it.Type, "_tool_result")) {
+			return true
+		}
 	}
-	var it struct {
-		Type string `json:"type"`
-	}
-	return json.Unmarshal(items[len(items)-1], &it) == nil &&
-		(it.Type == "server_tool_use" || strings.HasSuffix(it.Type, "_tool_result"))
+	return false
 }
 
 // toolArgsAreObjects refuses a turn whose calls go out as tool_use blocks with
