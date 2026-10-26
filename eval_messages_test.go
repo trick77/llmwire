@@ -379,12 +379,14 @@ func TestProbe_OpusSignedJoins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("round 2: %v", err)
 	}
+	// Same thinking settings as the turns being replayed, so only the shape
+	// varies. Plan lets both through; the endpoint decides.
 	for name, ms := range map[string][]Message{
 		"note after signed call": {req.Messages[0], r1.Assistant(), Assistant("Checking the weather now."), result},
-		"two signed in a row":    {req.Messages[0], r1.Assistant(), result, r2.Assistant(), r2.Assistant(), User("Say it again.")},
+		"signed turn sent twice": {req.Messages[0], r1.Assistant(), result, r2.Assistant(), r2.Assistant(), User("Say it again.")},
 	} {
-		resp, _, err := opusChat(t, c, ChatRequest{Model: opusModel, Tools: req.Tools, Reasoning: ReasoningEffort("low"),
-			MaxTokens: ptr(2000), Messages: ms})
+		resp, _, err := opusChat(t, c, ChatRequest{Model: opusModel, Tools: req.Tools, Reasoning: req.Reasoning,
+			MaxTokens: req.MaxTokens, Messages: ms})
 		if err != nil {
 			t.Logf("%s: REFUSED %v", name, err)
 			continue

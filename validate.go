@@ -901,11 +901,12 @@ func (v *validation) checkProtocol(req ChatRequest) {
 //     its own, nothing replayed), a tool turn must follow calls or another
 //     tool turn, and calls left without results are refused. Which ids
 //     answer which call is the endpoint's to check.
-//   - Two replayed assistant turns in a row are refused: joined, the second
-//     turn's signed thinking sits inside the first, MEASURED a 400, "Invalid
+//   - Two plain assistant turns in a row, or opening on one, are fine:
+//     MEASURED accepted. Whether a replayed history was edited (a turn sent
+//     twice, blocks moved) is the endpoint's preserved-thinking check, not
+//     plan's: MEASURED, a replayed turn sent twice is a 400, "Invalid
 //     `signature` in `thinking` block. The block is bound to a different
-//     conversation." Two plain ones, or opening on an assistant turn, are
-//     fine: MEASURED accepted.
+//     conversation.", which comes back as that APIError.
 //   - Ending on an assistant turn is a prefill; refused unless the profile
 //     takes one (assistant_prefill). MEASURED on claude-opus-5-5: "This model
 //     does not support assistant message prefill. The conversation must end
@@ -915,7 +916,6 @@ func (v *validation) checkMessagesTurns() bool {
 	lastAt := -1
 	callsAt := -1      // the assistant turn whose calls await their results
 	answering := false // inside the run of tool turns right after a call
-	replayedAt := -1   // the previous turn, when it was a replayed assistant turn
 	for i, m := range v.out.Messages {
 		if m.Role == RoleSystem {
 			continue
@@ -925,19 +925,14 @@ func (v *validation) checkMessagesTurns() bool {
 				"tool call); the %s protocol refuses an empty turn, so leave it out", i, m.Role, v.profile.WireAPI))
 			return false
 		}
-		replayed := m.Role == RoleAssistant && len(m.ResponseItems) > 0
 		switch {
-		case replayed && replayedAt >= 0:
-			v.reject("messages", fmt.Sprintf("messages %d and %d are replayed assistant turns in a row; the endpoint "+
-				"joins them, and the second's signed thinking is then refused", replayedAt, i))
-			return false
 		case m.Role == RoleTool && callsAt < 0 && !answering:
 			v.reject("messages", fmt.Sprintf("message %d is a tool result with no tool call right before it; "+
 				"the %s protocol takes tool results directly after the assistant turn that called", i, v.profile.WireAPI))
 			return false
 		case m.Role == RoleTool:
 			callsAt, answering = -1, true
-		case m.Role == RoleAssistant && callsAt >= 0 && len(m.ToolCalls) == 0 && !replayed:
+		case m.Role == RoleAssistant && callsAt >= 0 && len(m.ToolCalls) == 0 && len(m.ResponseItems) == 0:
 			// The plain turn the endpoint joins onto the calls: MEASURED
 			// accepted. The calls still await their results.
 		case callsAt >= 0:
@@ -950,10 +945,6 @@ func (v *validation) checkMessagesTurns() bool {
 			if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
 				callsAt = i
 			}
-		}
-		replayedAt = -1
-		if replayed {
-			replayedAt = i
 		}
 		lastAt = i
 	}
