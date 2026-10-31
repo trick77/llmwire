@@ -39,7 +39,7 @@ func TestValidate_ForcedFunctionChoiceUsesTheBit(t *testing.T) {
 	}
 
 	// And a model without the bit still relaxes it, with the warning.
-	req.Model = "mimo-v2.5-pro"
+	req.Model = "mimo-v2.6-pro"
 	warnings, err = c.Validate(req)
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -395,14 +395,14 @@ func TestValidate_ExtraBodyReservedKeysAreRejected(t *testing.T) {
 func TestValidate_PartKindIsChecked(t *testing.T) {
 	c := testClient(t, nil)
 	_, err := c.Validate(ChatRequest{
-		Model:    "mimo-v2.5",
+		Model:    "mimo-v2.6-flash",
 		Messages: []Message{{Role: RoleUser, Parts: []Part{{Kind: PartText, Text: "look"}, {URL: "data:image/png;base64,AAAA"}}}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "part 1") {
 		t.Fatalf("err = %v, want the kind-less part refused by index", err)
 	}
 	_, err = c.Validate(ChatRequest{
-		Model:    "mimo-v2.5",
+		Model:    "mimo-v2.6-flash",
 		Messages: []Message{{Role: RoleUser, Parts: []Part{{Kind: PartImage}}}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "no URL") {

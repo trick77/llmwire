@@ -78,16 +78,13 @@ type evalRate struct{ inputPerM, outputPerM float64 }
 var evalRates = map[string]evalRate{
 	// docs.z.ai publishes 0.15/0.50; models.dev has 0.075/0.25. Higher wins.
 	"glm-5.3-flash": {0.15, 0.50},
-	// ismimodown vendors 1.00/3.00; models.dev has 0.435/0.87. Higher wins.
-	// Reached over a Token Plan host this is credits, not dollars — the USD
-	// figure is a proxy bound, which is all a circuit breaker needs.
-	"mimo-v2.5-pro": {1.00, 3.00},
-	"mimo-v2.5":     {0.40, 2.00},
-	// V2.6 is priced identically to the V2.5 pair on the vendor page
+	// V2.6 is priced identically to the retired V2.5 pair on the vendor page
 	// (0.435/0.87 and 0.14/0.28), and models.dev carries no v2.6 entry at all,
-	// so there is no third-party figure to be higher. The V2.5 over-bounds are
-	// kept rather than tightened to the vendor rate: over-estimating is the
-	// correct direction for a breaker.
+	// so there is no third-party figure to be higher. The V2.5 over-bounds
+	// (ismimodown vendored 1.00/3.00 for -pro) are kept rather than tightened
+	// to the vendor rate: over-estimating is the correct direction for a
+	// breaker. Reached over a Token Plan host this is credits, not dollars —
+	// the USD figure is a proxy bound, which is all a circuit breaker needs.
 	"mimo-v2.6-pro":   {1.00, 3.00},
 	"mimo-v2.6-flash": {0.40, 2.00},
 	// Model page 0.75/4.50, standard tier; no probe runs against it yet, the

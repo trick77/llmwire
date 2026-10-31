@@ -18,18 +18,19 @@ func TestRegistry_Require(t *testing.T) {
 		t.Fatalf("got %v, %v", p, err)
 	}
 
-	_, err = reg.Require("mimo-v2.5-pro", Needs{Vision: true, Tools: true})
+	// No shipped chat model is text-only since mimo-v2.5-pro retired.
+	_, err = registryFrom(t, textOnlyDoc).Require("textonly", Needs{Vision: true, Tools: true})
 	var ce *CapabilityError
 	if !errors.As(err, &ce) {
 		t.Fatalf("err = %v, want *CapabilityError", err)
 	}
-	if ce.Model != "mimo-v2.5-pro" || !slices.Equal(ce.Missing, []string{"vision"}) {
+	if ce.Model != "textonly" || !slices.Equal(ce.Missing, []string{"vision"}) {
 		t.Errorf("error = %+v", ce)
 	}
-	if !slices.Contains(ce.Satisfying, "mimo-v2.6-pro") || slices.Contains(ce.Satisfying, "mimo-v2.5-pro") {
+	if !slices.Contains(ce.Satisfying, "seeing") || slices.Contains(ce.Satisfying, "textonly") {
 		t.Errorf("satisfying = %v", ce.Satisfying)
 	}
-	for _, want := range []string{`"mimo-v2.5-pro"`, "vision", "mimo-v2.6-pro"} {
+	for _, want := range []string{`"textonly"`, "vision", "seeing"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message %q does not name %s", err, want)
 		}
@@ -54,9 +55,9 @@ func TestRegistry_ChatModels(t *testing.T) {
 	if !slices.IsSorted(all) {
 		t.Errorf("not sorted: %v", all)
 	}
-	vision := reg.ChatModels(Needs{Vision: true})
-	if slices.Contains(vision, "mimo-v2.5-pro") {
-		t.Errorf("mimo-v2.5-pro 404s on images: %v", vision)
+	vision := registryFrom(t, textOnlyDoc).ChatModels(Needs{Vision: true})
+	if !slices.Equal(vision, []string{"seeing"}) {
+		t.Errorf("only the vision profile qualifies: %v", vision)
 	}
 
 	strict := registryFrom(t, chatHead)

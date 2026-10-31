@@ -241,7 +241,7 @@ func TestFromEnv_identityFollowsTheProvider(t *testing.T) {
 	t.Setenv("LLMWIRE_MIMO_BASE_URL", "")
 	t.Setenv("LLMWIRE_MIMO_API_KEY", "k")
 	t.Setenv("LLMWIRE_ZAI_API_KEY", "k")
-	mimo, err := FromEnv("mimo-v2.5-pro", Config{})
+	mimo, err := FromEnv("mimo-v2.6-pro", Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestFromEnv_emulateOpenCodeEnv(t *testing.T) {
 		if got := zai.session != nil; got != tc.zaiOn {
 			t.Errorf("%s=%q: zai emulates=%v, want %v", EmulateOpenCodeEnv, tc.value, got, tc.zaiOn)
 		}
-		mimo, err := FromEnv("mimo-v2.5-pro", Config{})
+		mimo, err := FromEnv("mimo-v2.6-pro", Config{})
 		if err != nil {
 			t.Fatalf("%s=%q: mimo: %v", EmulateOpenCodeEnv, tc.value, err)
 		}
@@ -350,7 +350,7 @@ func TestFromEnv_logsItsSettings(t *testing.T) {
 	t.Setenv("LLMWIRE_MIMO_API_KEY", "sk-secret-value")
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
-	if _, err := FromEnv("mimo-v2.5-pro", Config{Logger: log}); err != nil {
+	if _, err := FromEnv("mimo-v2.6-pro", Config{Logger: log}); err != nil {
 		t.Fatal(err)
 	}
 	got := buf.String()
@@ -358,7 +358,7 @@ func TestFromEnv_logsItsSettings(t *testing.T) {
 		t.Fatalf("want exactly one line, got:\n%s", got)
 	}
 	for _, want := range []string{
-		"model=mimo-v2.5-pro", "provider=mimo", "base_url=https://token-plan-sgp.xiaomimimo.com/v1",
+		"model=mimo-v2.6-pro", "provider=mimo", "base_url=https://token-plan-sgp.xiaomimimo.com/v1",
 		"api_key=LLMWIRE_MIMO_API_KEY", "emulate_opencode=true",
 		// Integer ms: a raw Duration prints "1m0s" here and nanoseconds under
 		// a JSON handler.

@@ -76,7 +76,7 @@ func TestToolCallIdleTimeout_WidensOnInlineMarker(t *testing.T) {
 	}
 	srv := sseServer(t, lines, reply{pauseAfter: 0, pause: 300 * time.Millisecond})
 	c := streamClient(t, srv.URL, 100*time.Millisecond)
-	req := ChatRequest{Model: "mimo-v2.5-pro", Messages: []Message{User("hi")}, ToolCallIdleTimeout: 2 * time.Second}
+	req := ChatRequest{Model: "mimo-v2.6-pro", Messages: []Message{User("hi")}, ToolCallIdleTimeout: 2 * time.Second}
 	res, err := drain(t, c, req)
 	if err != nil {
 		t.Fatal(err)

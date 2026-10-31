@@ -275,7 +275,7 @@ func (e *APIError) fill(clean func(string) string, o errorObject) {
 //
 // An endpoint that has already decided to answer in text/event-stream can send
 // its ERROR that way too, even under a non-2xx status. Measured against MiMo:
-// asking mimo-v2.5-pro for image input returns HTTP 404 whose body is the single
+// asking the retired mimo-v2.5-pro for image input returned HTTP 404 whose body is the single
 // line
 //
 //	data:{"error":{"code":"404","message":"No endpoints found that support image input",...}}

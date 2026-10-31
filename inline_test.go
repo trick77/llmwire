@@ -397,7 +397,7 @@ func TestReadStream_NoRecoveryLeavesMarkupAlone(t *testing.T) {
 func TestChatStream_MiMoRecoversInlineCall(t *testing.T) {
 	srv := sseServer(t, frameLines(contentDelta("<tool_call><function=search><parameter=q>x</parameter></function></tool_call>")))
 	c := New(Config{BaseURL: srv.URL})
-	stream, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "mimo-v2.5-pro", Messages: []Message{User("hi")}})
+	stream, _, err := c.ChatStream(context.Background(), ChatRequest{Model: "mimo-v2.6-pro", Messages: []Message{User("hi")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,9 +426,9 @@ func TestChatStream_MiMoRecoversInlineCall(t *testing.T) {
 }
 
 func TestChat_MiMoRecoversInlineCall(t *testing.T) {
-	srv := jsonServer(t, 200, `{"model":"mimo-v2.5-pro","choices":[{"finish_reason":"stop","message":{"content":"Sure. <tool_invocation name=\"generate_image\" arguments={\"prompt\": \"a fox\"} />"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	srv := jsonServer(t, 200, `{"model":"mimo-v2.6-pro","choices":[{"finish_reason":"stop","message":{"content":"Sure. <tool_invocation name=\"generate_image\" arguments={\"prompt\": \"a fox\"} />"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	c := New(Config{BaseURL: srv.URL})
-	resp, warnings, err := c.Chat(context.Background(), ChatRequest{Model: "mimo-v2.5-pro", Messages: []Message{User("hi")}})
+	resp, warnings, err := c.Chat(context.Background(), ChatRequest{Model: "mimo-v2.6-pro", Messages: []Message{User("hi")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,10 +451,10 @@ func TestChat_MiMoRecoversInlineCall(t *testing.T) {
 // would leave a fragment that no longer parses. Same rule as the </think> cut.
 func TestChat_JSONReplyKeepsQuotedMarkup(t *testing.T) {
 	answer := `{"doc":"wrap calls in <tool_call>x</tool_call>"}`
-	req := ChatRequest{Model: "mimo-v2.5-pro", Messages: []Message{User("hi")},
+	req := ChatRequest{Model: "mimo-v2.6-pro", Messages: []Message{User("hi")},
 		ResponseFormat: ResponseFormat{Kind: FormatJSONObject}}
 
-	srv := jsonServer(t, 200, `{"model":"mimo-v2.5-pro","choices":[{"finish_reason":"stop","message":{"content":`+jsonString(answer)+`}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	srv := jsonServer(t, 200, `{"model":"mimo-v2.6-pro","choices":[{"finish_reason":"stop","message":{"content":`+jsonString(answer)+`}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	resp, _, err := New(Config{BaseURL: srv.URL}).Chat(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)

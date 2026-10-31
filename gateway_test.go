@@ -28,14 +28,14 @@ func TestParseGatewayModels(t *testing.T) {
 
 func TestFromEnv_gatewayModels(t *testing.T) {
 	t.Run("a listed model goes to the gateway under its alias", func(t *testing.T) {
-		c, err := FromEnv("mimo-v2.5-pro", Config{Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.5-pro=proxy-mimo"))})
+		c, err := FromEnv("mimo-v2.6-pro", Config{Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.6-pro=proxy-mimo"))})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if c.baseURL != "https://gw.example/v1" || c.apiKey != "gw-key" {
 			t.Fatalf("got %q %q, want the gateway's host and key", c.baseURL, c.apiKey)
 		}
-		p, err := c.Registry().Lookup("mimo-v2.5-pro")
+		p, err := c.Registry().Lookup("mimo-v2.6-pro")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,23 +71,23 @@ func TestFromEnv_gatewayModels(t *testing.T) {
 		t.Setenv("LLMWIRE_MIMO_BASE_URL", "")
 		m := gatewayEnv(gwHost, "glm-5.3-flash=proxy-glm")
 		m["LLMWIRE_MIMO_API_KEY"] = "mimo-key"
-		c, err := FromEnv("mimo-v2.5-pro", Config{Lookup: mapLookup(m)})
+		c, err := FromEnv("mimo-v2.6-pro", Config{Lookup: mapLookup(m)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if c.baseURL != "https://token-plan-sgp.xiaomimimo.com/v1" || c.apiKey != "mimo-key" {
 			t.Fatalf("got %q %q, want MiMo's own host and key", c.baseURL, c.apiKey)
 		}
-		if Default().byID["mimo-v2.5-pro"].Provider != "mimo" {
+		if Default().byID["mimo-v2.6-pro"].Provider != "mimo" {
 			t.Fatal("the shared registry was mutated")
 		}
 	})
 
 	t.Run("the gateway's URL and key are required and named", func(t *testing.T) {
 		for _, missing := range []string{"LLMWIRE_LITELLM_BASE_URL", "LLMWIRE_LITELLM_API_KEY"} {
-			full := gatewayEnv(gwHost, "mimo-v2.5-pro")
+			full := gatewayEnv(gwHost, "mimo-v2.6-pro")
 			delete(full, missing)
-			_, err := FromEnv("mimo-v2.5-pro", Config{Lookup: mapLookup(full)})
+			_, err := FromEnv("mimo-v2.6-pro", Config{Lookup: mapLookup(full)})
 			var me *MissingEnvError
 			if !errors.As(err, &me) || me.Var != missing {
 				t.Errorf("without %s: err = %v, want a MissingEnvError naming it", missing, err)
@@ -99,12 +99,12 @@ func TestFromEnv_gatewayModels(t *testing.T) {
 		// The list is validated as a whole on every build: a typo'd entry
 		// would otherwise let the model it meant fall through to its vendor,
 		// bypassing the gateway with nothing said.
-		_, err := FromEnv("mimo-v2.5-pro", Config{Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.5-pr=x"))})
+		_, err := FromEnv("mimo-v2.6-pro", Config{Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.6-pr=x"))})
 		var ue *UnknownModelError
 		if !errors.As(err, &ue) || !strings.Contains(err.Error(), GatewayModelsEnv) {
 			t.Fatalf("err = %v, want UnknownModelError naming the variable", err)
 		}
-		if _, err := FromEnv("mimo-v2.5-pro", Config{Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.5-pro=a=b"))}); err == nil {
+		if _, err := FromEnv("mimo-v2.6-pro", Config{Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.6-pro=a=b"))}); err == nil {
 			t.Fatal("a malformed entry must fail the build")
 		}
 	})
@@ -134,12 +134,12 @@ profiles:
 	})
 
 	t.Run("an explicit base url still wins over the list", func(t *testing.T) {
-		c, err := FromEnv("mimo-v2.5-pro", Config{BaseURL: "https://cfg.example", Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.5-pro=proxy"))})
+		c, err := FromEnv("mimo-v2.6-pro", Config{BaseURL: "https://cfg.example", Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.6-pro=proxy"))})
 		if err != nil {
 			t.Fatal(err)
 		}
-		p, _ := c.Registry().Lookup("mimo-v2.5-pro")
-		if c.baseURL != "https://cfg.example" || p.WireModelID != "mimo-v2.5-pro" {
+		p, _ := c.Registry().Lookup("mimo-v2.6-pro")
+		if c.baseURL != "https://cfg.example" || p.WireModelID != "mimo-v2.6-pro" {
 			t.Fatalf("got %q wire %q", c.baseURL, p.WireModelID)
 		}
 	})
@@ -147,7 +147,7 @@ profiles:
 	t.Run("the log line names the route", func(t *testing.T) {
 		var buf bytes.Buffer
 		log := slog.New(slog.NewTextHandler(&buf, nil))
-		if _, err := FromEnv("mimo-v2.5-pro", Config{Logger: log, Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.5-pro=proxy-mimo"))}); err != nil {
+		if _, err := FromEnv("mimo-v2.6-pro", Config{Logger: log, Lookup: mapLookup(gatewayEnv(gwHost, "mimo-v2.6-pro=proxy-mimo"))}); err != nil {
 			t.Fatal(err)
 		}
 		for _, want := range []string{"wire_model=proxy-mimo", "gateway=litellm", "provider=litellm", "base_url=https://gw.example/v1", "api_key=LLMWIRE_LITELLM_API_KEY"} {

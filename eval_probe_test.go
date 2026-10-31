@@ -37,7 +37,7 @@ import (
 func TestProbe_MiMoToolCallFormat(t *testing.T) {
 	c := mimoEndpoint.client(t)
 
-	for _, model := range []string{"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2.6-pro", "mimo-v2.6-flash"} {
+	for _, model := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
 		t.Run(model, func(t *testing.T) {
 			b := probeBody(model, "What is the weather in Zurich? Use the tool.")
 			b["tools"] = []any{map[string]any{
@@ -122,7 +122,7 @@ func channelOf(res StreamResult) string {
 func TestProbe_MiMoToolFreeCall(t *testing.T) {
 	c := mimoEndpoint.client(t)
 
-	for _, model := range []string{"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2.6-pro", "mimo-v2.6-flash"} {
+	for _, model := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
 		t.Run(model, func(t *testing.T) {
 			// Prompt shaped like the tail of a research turn: the model has
 			// "gathered" material and is told to answer without tools. No tools
@@ -166,7 +166,7 @@ func TestProbe_MiMoToolFreeCall(t *testing.T) {
 // not, the field stays optional.
 func TestProbe_MiMoReasoningReplayRequirement(t *testing.T) {
 	c := mimoEndpoint.client(t)
-	const model = "mimo-v2.5-pro"
+	const model = "mimo-v2.6-pro"
 
 	tool := map[string]any{
 		"type": "function",
@@ -247,7 +247,6 @@ func TestProbe_LongestCommentOnlyGap(t *testing.T) {
 		model string
 		deep  body
 	}{
-		{mimoEndpoint, "mimo-v2.5-pro", body{"max_completion_tokens": 1024}},
 		{mimoEndpoint, "mimo-v2.6-pro", body{"max_completion_tokens": 1024}},
 		{mimoEndpoint, "mimo-v2.6-flash", body{"max_completion_tokens": 1024}},
 		{zaiEndpoint, "glm-5.3-flash", body{"max_tokens": 1024, "reasoning_effort": "max"}},
@@ -322,7 +321,7 @@ func TestProbe_MiMoThinkingCanBeDisabled(t *testing.T) {
 	for _, model := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
 		t.Run(model, func(t *testing.T) {
 			// The same arithmetic prompt MiMoReasoningEffortValues uses, so the
-			// two logs are comparable: there, mimo-v2.5 spent 225-396
+			// two logs are comparable: there, the retired mimo-v2.5 spent 225-396
 			// completion tokens on it.
 			const prompt = "A train leaves at 09:40 and arrives at 13:05 the same day. " +
 				"How many minutes is the journey? Reply with the number only."
@@ -374,8 +373,9 @@ func TestProbe_MiMoThinkingCanBeDisabled(t *testing.T) {
 			case !offReported || !onReported:
 				// The completion-token fallback, and the only case where the
 				// silent lane is still informative: this family has been seen
-				// counting thinking inside completion_tokens (mimo-v2.5 reports
-				// the lane as 0 throughout), so a large drop is the signal.
+				// counting thinking inside completion_tokens (the retired
+				// mimo-v2.5 reported the lane as 0 throughout), so a large drop
+				// is the signal.
 				if onTotal > 0 && offTotal > 0 && onTotal > offTotal*2 {
 					t.Logf("  => reasoning lane NOT REPORTED on at least one call "+
 						"(disabled reported=%v, control reported=%v), but completion tokens "+
@@ -431,17 +431,17 @@ func TestProbe_ZaiReasoningEffortValues(t *testing.T) {
 // or the doc is incomplete.
 func TestProbe_MiMoAcceptsReasoningEffort(t *testing.T) {
 	c := mimoEndpoint.client(t)
-	b := probeBody("mimo-v2.5-pro", "Reply with the single word: ok")
+	b := probeBody("mimo-v2.6-pro", "Reply with the single word: ok")
 	b["reasoning_effort"] = "high"
 	b["max_completion_tokens"] = probeMaxTokens
 
 	res, err := stream(t, c, b)
 	if ok, why := accepted(res, err); !ok {
-		t.Logf("FINDING: reasoning_effort REJECTED by mimo-v2.5-pro on chat/completions: %s", why)
+		t.Logf("FINDING: reasoning_effort REJECTED by mimo-v2.6-pro on chat/completions: %s", why)
 		t.Logf("  => loom has been sending a parameter this endpoint refuses.")
 		return
 	}
-	t.Logf("FINDING: reasoning_effort ACCEPTED by mimo-v2.5-pro (reasoning tokens: %v). "+
+	t.Logf("FINDING: reasoning_effort ACCEPTED by mimo-v2.6-pro (reasoning tokens: %v). "+
 		"Accepted-and-possibly-ignored; the vendor doc is incomplete.",
 		valueOr(res.Usage.Output.Reasoning, -1))
 }
@@ -457,7 +457,7 @@ func TestProbe_MiMoReasoningEffortValues(t *testing.T) {
 	// "" is the control: the same prompt with no level sent, so a model that
 	// stops thinking when a level arrives is told apart from one that never
 	// thought about this prompt.
-	for _, model := range []string{"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2.6-pro", "mimo-v2.6-flash"} {
+	for _, model := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
 		for _, effort := range []string{"", "low", "medium", "high", "xhigh"} {
 			t.Run(model+"/"+effort, func(t *testing.T) {
 				b := probeBody(model, "A train leaves at 09:40 and arrives at 13:05 the same day. "+
@@ -706,7 +706,6 @@ func TestProbe_OutputCapParameter(t *testing.T) {
 		ep    endpoint
 		model string
 	}{
-		{mimoEndpoint, "mimo-v2.5-pro"},
 		{mimoEndpoint, "mimo-v2.6-pro"},
 		{mimoEndpoint, "mimo-v2.6-flash"},
 		{zaiEndpoint, "glm-5.3-flash"},
@@ -739,7 +738,6 @@ func TestProbe_UsageReportingWithoutStreamOptions(t *testing.T) {
 		model string
 		cap   string
 	}{
-		{mimoEndpoint, "mimo-v2.5-pro", "max_completion_tokens"},
 		{mimoEndpoint, "mimo-v2.6-pro", "max_completion_tokens"},
 		{mimoEndpoint, "mimo-v2.6-flash", "max_completion_tokens"},
 		{zaiEndpoint, "glm-5.3-flash", "max_tokens"},
@@ -787,7 +785,6 @@ func TestProbe_ResponseFormatSupport(t *testing.T) {
 		cap   string
 	}{
 		{zaiEndpoint, "glm-5.3-flash", "max_tokens"},
-		{mimoEndpoint, "mimo-v2.5-pro", "max_completion_tokens"},
 		{mimoEndpoint, "mimo-v2.6-pro", "max_completion_tokens"},
 		{mimoEndpoint, "mimo-v2.6-flash", "max_completion_tokens"},
 	} {
@@ -820,16 +817,17 @@ func TestProbe_ResponseFormatSupport(t *testing.T) {
 	}
 }
 
-// mimo-v2.5-pro is text-only and 404s on any image_url part, while mimo-v2.5
-// takes images. loom routes around this; the module errors instead, so the
-// profile bit has to be right.
+// The retired mimo-v2.5-pro was text-only and 404'd on any image_url part,
+// while mimo-v2.5 took images; V2.6 takes them on both. The module errors on an
+// image for a text-only model instead of rerouting, so the profile bit has to
+// be right. No served MiMo id exercises the REJECTS branch now.
 func TestProbe_MiMoProRejectsImageInput(t *testing.T) {
 	c := mimoEndpoint.client(t)
 	// A 1x1 transparent PNG, small enough to be inline and large enough to be a
 	// real image part.
 	const onePixelPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 
-	for _, model := range []string{"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2.6-pro", "mimo-v2.6-flash"} {
+	for _, model := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
 		t.Run(model, func(t *testing.T) {
 			b := body{
 				"model": model,
@@ -868,7 +866,6 @@ func TestProbe_ChatHonoursTheOutputCap(t *testing.T) {
 		model string
 	}{
 		{zaiEndpoint, "glm-5.3-flash"},
-		{mimoEndpoint, "mimo-v2.5-pro"},
 		{mimoEndpoint, "mimo-v2.6-pro"},
 		{mimoEndpoint, "mimo-v2.6-flash"},
 	} {
@@ -934,7 +931,6 @@ func TestProbe_CachedTokensAreInsidePromptTokens(t *testing.T) {
 		model string
 		cap   string
 	}{
-		{mimoEndpoint, "mimo-v2.5-pro", "max_completion_tokens"},
 		{mimoEndpoint, "mimo-v2.6-pro", "max_completion_tokens"},
 		{mimoEndpoint, "mimo-v2.6-flash", "max_completion_tokens"},
 		{zaiEndpoint, "glm-5.3-flash", "max_tokens"},

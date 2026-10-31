@@ -659,8 +659,8 @@ func (c *Client) rawCall(ctx context.Context, method, route string, body []byte)
 	//
 	// On a non-streaming route the endpoint withholds headers until the entire
 	// answer is ready, so "time until headers" is not "time until the endpoint
-	// starts talking" — it is the model's total latency. profiles.yaml records
-	// single calls on mimo-v2.5-pro at 25-64 seconds against a 60s default header
+	// starts talking" — it is the model's total latency. FINDINGS.md records
+	// single calls on mimo-v2.5-pro (retired) at 25-64 seconds against a 60s default header
 	// bound, so arming this with c.header would abort a call the endpoint was about
 	// to answer. The guard is still worth arming: when nothing arrives at all, the
 	// failure says "no response headers" rather than a bare context deadline.

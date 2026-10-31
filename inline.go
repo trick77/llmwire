@@ -12,7 +12,7 @@ import (
 // Some deployments emit a tool call as markup inside the content (or reasoning)
 // channel instead of populating the native tool_calls field. Two syntaxes are
 // known, both observed on MiMo in production against a long, tool-saturated
-// history that a probe does not reproduce (see profiles.yaml, mimo-v2.5-pro):
+// history that a probe does not reproduce (see profiles.yaml, mimo-v2.6-pro):
 //
 //	<tool_call>
 //	<function=tavily__tavily_search>

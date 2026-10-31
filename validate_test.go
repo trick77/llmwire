@@ -131,7 +131,7 @@ func TestValidate_ReasoningVariantMustMatchTheModelsControl(t *testing.T) {
 	// mimo takes a toggle object AND a level beside it (measured), so an
 	// accepted level passes and one outside the set is refused by name.
 	_, err := c.Validate(ChatRequest{
-		Model:     "mimo-v2.5-pro",
+		Model:     "mimo-v2.6-pro",
 		Messages:  []Message{User("hi")},
 		Reasoning: ReasoningEffort("high"),
 	})
@@ -139,7 +139,7 @@ func TestValidate_ReasoningVariantMustMatchTheModelsControl(t *testing.T) {
 		t.Errorf("error = %v, want a level the profile lists to pass", err)
 	}
 	_, err = c.Validate(ChatRequest{
-		Model:     "mimo-v2.5-pro",
+		Model:     "mimo-v2.6-pro",
 		Messages:  []Message{User("hi")},
 		Reasoning: ReasoningEffort("xhigh"),
 	})
@@ -162,11 +162,11 @@ func TestValidate_ReasoningVariantMustMatchTheModelsControl(t *testing.T) {
 func TestValidate_ReasoningOffOnAModelThatCan(t *testing.T) {
 	c := testClient(t, nil)
 	if _, err := c.Validate(ChatRequest{
-		Model:     "mimo-v2.5-pro",
+		Model:     "mimo-v2.6-pro",
 		Messages:  []Message{User("hi")},
 		Reasoning: ReasoningOff(),
 	}); err != nil {
-		t.Fatalf("mimo-v2.5-pro can disable thinking: %v", err)
+		t.Fatalf("mimo-v2.6-pro can disable thinking: %v", err)
 	}
 }
 
@@ -177,23 +177,23 @@ func TestValidate_ReasoningOffOnAModelThatCan(t *testing.T) {
 // misattributes the answer and its cost; picking the model is the application's
 // job.
 func TestValidate_ImageAgainstATextOnlyModel(t *testing.T) {
-	c := testClient(t, nil)
+	c := testClient(t, registryFrom(t, textOnlyDoc))
 	msg := Message{Role: RoleUser, Parts: []Part{
 		{Kind: PartText, Text: "what is this?"},
 		{Kind: PartImage, URL: "data:image/png;base64,iVBORw0KGgo="},
 	}}
 
-	_, err := c.Validate(ChatRequest{Model: "mimo-v2.5-pro", Messages: []Message{msg}})
+	_, err := c.Validate(ChatRequest{Model: "textonly", Messages: []Message{msg}})
 	if err == nil {
-		t.Fatal("mimo-v2.5-pro is text-only and should refuse an image")
+		t.Fatal("textonly is text-only and should refuse an image")
 	}
 	if !strings.Contains(err.Error(), "text-only") {
 		t.Errorf("error = %v", err)
 	}
 
 	// The sibling takes it.
-	if _, err := c.Validate(ChatRequest{Model: "mimo-v2.5", Messages: []Message{msg}}); err != nil {
-		t.Fatalf("mimo-v2.5 supports vision: %v", err)
+	if _, err := c.Validate(ChatRequest{Model: "seeing", Messages: []Message{msg}}); err != nil {
+		t.Fatalf("seeing supports vision: %v", err)
 	}
 }
 
@@ -203,10 +203,10 @@ func TestValidate_ImageAgainstATextOnlyModel(t *testing.T) {
 // succeeds — but believing it took effect is how a caller spends a week tuning
 // something the model discarded.
 func TestValidate_InertSamplingParameterWarns(t *testing.T) {
-	c := testClient(t, nil)
+	c := testClient(t, registryFrom(t, textOnlyDoc))
 	temp := 0.2
 	warnings, err := c.Validate(ChatRequest{
-		Model:       "mimo-v2.5-pro",
+		Model:       "textonly",
 		Messages:    []Message{User("hi")},
 		Temperature: &temp,
 	})
@@ -312,7 +312,7 @@ func TestValidate_JSONSchemaDowngradesWithAWarning(t *testing.T) {
 // docs. No warning should appear for them.
 func TestValidate_JSONSchemaIsCleanOnModelsThatSupportIt(t *testing.T) {
 	c := testClient(t, nil)
-	for _, model := range []string{"glm-5.3-flash", "mimo-v2.5-pro"} {
+	for _, model := range []string{"glm-5.3-flash", "mimo-v2.6-pro"} {
 		warnings, err := c.Validate(ChatRequest{
 			Model:    model,
 			Messages: []Message{User("hi")},
@@ -364,7 +364,7 @@ func TestValidate_MalformedResponseFormat(t *testing.T) {
 func TestValidate_ForcedToolChoiceIsRelaxedWithAWarning(t *testing.T) {
 	c := testClient(t, nil)
 	warnings, err := c.Validate(ChatRequest{
-		Model:      "mimo-v2.5-pro",
+		Model:      "mimo-v2.6-pro",
 		Messages:   []Message{User("hi")},
 		Tools:      []Tool{{Name: "search"}},
 		ToolChoice: ToolChoice{Mode: ToolChoiceRequired},
@@ -383,7 +383,7 @@ func TestValidate_ForcedToolChoiceIsRelaxedWithAWarning(t *testing.T) {
 func TestValidate_AutoToolChoiceIsClean(t *testing.T) {
 	c := testClient(t, nil)
 	warnings, err := c.Validate(ChatRequest{
-		Model:      "mimo-v2.5-pro",
+		Model:      "mimo-v2.6-pro",
 		Messages:   []Message{User("hi")},
 		Tools:      []Tool{{Name: "search"}},
 		ToolChoice: ToolChoice{Mode: ToolChoiceAuto},
@@ -396,7 +396,7 @@ func TestValidate_AutoToolChoiceIsClean(t *testing.T) {
 func TestValidate_ToolChoiceWithoutTools(t *testing.T) {
 	c := testClient(t, nil)
 	warnings, err := c.Validate(ChatRequest{
-		Model:      "mimo-v2.5-pro",
+		Model:      "mimo-v2.6-pro",
 		Messages:   []Message{User("hi")},
 		ToolChoice: ToolChoice{Mode: ToolChoiceAuto},
 	})
@@ -411,7 +411,7 @@ func TestValidate_ToolChoiceWithoutTools(t *testing.T) {
 func TestValidate_MalformedTools(t *testing.T) {
 	c := testClient(t, nil)
 	_, err := c.Validate(ChatRequest{
-		Model:    "mimo-v2.5-pro",
+		Model:    "mimo-v2.6-pro",
 		Messages: []Message{User("hi")},
 		Tools:    []Tool{{Name: ""}},
 	})
@@ -420,7 +420,7 @@ func TestValidate_MalformedTools(t *testing.T) {
 	}
 
 	_, err = c.Validate(ChatRequest{
-		Model:      "mimo-v2.5-pro",
+		Model:      "mimo-v2.6-pro",
 		Messages:   []Message{User("hi")},
 		Tools:      []Tool{{Name: "x"}},
 		ToolChoice: ToolChoice{Mode: ToolChoiceFunction},

@@ -44,9 +44,7 @@ func TestRender_OutputCapUsesTheProfilesSpelling(t *testing.T) {
 	cap16 := 16
 	for _, tc := range []struct{ model, want, mustNotSend string }{
 		{"glm-5.3-flash", "max_tokens", "max_completion_tokens"},
-		{"mimo-v2.5-pro", "max_completion_tokens", "max_tokens"},
-		{"mimo-v2.5", "max_completion_tokens", "max_tokens"},
-		// Both names are honoured on V2.6 too, so the profile's spelling is what
+		// Both names are honoured on V2.6, so the profile's spelling is what
 		// decides which one goes on the wire.
 		{"mimo-v2.6-pro", "max_completion_tokens", "max_tokens"},
 		{"mimo-v2.6-flash", "max_completion_tokens", "max_tokens"},
@@ -108,7 +106,7 @@ func TestRender_SamplingDefaultsAndOverrides(t *testing.T) {
 	}
 
 	// A model with no recommendation gets no key at all.
-	body = renderFor(t, c, ChatRequest{Model: "mimo-v2.5-pro", Messages: []Message{User("hi")}}, false)
+	body = renderFor(t, c, ChatRequest{Model: "mimo-v2.6-pro", Messages: []Message{User("hi")}}, false)
 	absent(t, body, "temperature")
 	absent(t, body, "top_p")
 }
@@ -117,7 +115,7 @@ func TestRender_SamplingDefaultsAndOverrides(t *testing.T) {
 // is built from pointers rather than from a struct's zero values.
 func TestRender_ZeroTemperatureIsSent(t *testing.T) {
 	body := renderFor(t, testClient(t, Default()), ChatRequest{
-		Model:       "mimo-v2.5",
+		Model:       "mimo-v2.6-flash",
 		Messages:    []Message{User("hi")},
 		Temperature: f64(0),
 	}, false)
@@ -145,7 +143,7 @@ func TestRender_ReasoningSpellingPerControl(t *testing.T) {
 	// A toggle model that lists effort_values takes the level beside its
 	// switch: the level goes out, the toggle stays home.
 	body = renderFor(t, c, ChatRequest{
-		Model:     "mimo-v2.5-pro",
+		Model:     "mimo-v2.6-pro",
 		Messages:  []Message{User("hi")},
 		Reasoning: ReasoningEffort("low"),
 	}, false)
@@ -155,7 +153,7 @@ func TestRender_ReasoningSpellingPerControl(t *testing.T) {
 	absent(t, body, "thinking")
 
 	body = renderFor(t, c, ChatRequest{
-		Model:     "mimo-v2.5",
+		Model:     "mimo-v2.6-flash",
 		Messages:  []Message{User("hi")},
 		Reasoning: ReasoningOff(),
 	}, false)
@@ -167,7 +165,7 @@ func TestRender_ReasoningSpellingPerControl(t *testing.T) {
 
 	// Nothing said, nothing sent: every reasoning model here is on by default,
 	// so restating the default would add a key for no effect.
-	body = renderFor(t, c, ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("hi")}}, false)
+	body = renderFor(t, c, ChatRequest{Model: "mimo-v2.6-flash", Messages: []Message{User("hi")}}, false)
 	absent(t, body, "thinking")
 	absent(t, body, "reasoning_effort")
 }
@@ -263,7 +261,7 @@ func TestRender_StreamKeys(t *testing.T) {
 func TestRender_MessageShapes(t *testing.T) {
 	c := testClient(t, Default())
 	body := renderFor(t, c, ChatRequest{
-		Model: "mimo-v2.5",
+		Model: "mimo-v2.6-flash",
 		Messages: []Message{
 			System("be brief"),
 			{Role: RoleUser, Parts: []Part{
@@ -295,8 +293,8 @@ func TestRender_MessageShapes(t *testing.T) {
 	if img["type"] != "image_url" {
 		t.Errorf("image part type = %v", img["type"])
 	}
-	// A nested object, not a bare string: this exact shape is what 404s on
-	// mimo-v2.5-pro and is accepted here.
+	// A nested object, not a bare string: this exact shape is what 404'd on the
+	// retired mimo-v2.5-pro and is accepted here.
 	nested, ok := img["image_url"].(map[string]any)
 	if !ok || nested["url"] != "data:image/png;base64,AAAA" {
 		t.Errorf("image_url = %v, want a nested {url: ...}", img["image_url"])

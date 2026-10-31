@@ -27,7 +27,6 @@ func TestPlan_CapParamComesFromTheProfile(t *testing.T) {
 	c := testClient(t, Default())
 	for _, tc := range []struct{ model, want string }{
 		{"glm-5.3-flash", ParamMaxTokens},
-		{"mimo-v2.5-pro", ParamMaxCompletionTokens},
 		{"mimo-v2.6-pro", ParamMaxCompletionTokens},
 		{"mimo-v2.6-flash", ParamMaxCompletionTokens},
 	} {
@@ -80,7 +79,7 @@ func TestPlan_RecommendedSamplingFillsInSilently(t *testing.T) {
 // and inventing a value here would assert something nobody checked.
 func TestPlan_NoRecommendationSendsNothing(t *testing.T) {
 	pl := mustPlan(t, testClient(t, Default()), ChatRequest{
-		Model:    "mimo-v2.5-pro",
+		Model:    "mimo-v2.6-pro",
 		Messages: []Message{User("hi")},
 	}, false)
 	if pl.req.Temperature != nil || pl.req.TopP != nil {
@@ -120,7 +119,7 @@ func TestPlan_BestEffortDropsWhatItRefused(t *testing.T) {
 
 	t.Run("image on a text-only model keeps the text", func(t *testing.T) {
 		req := ChatRequest{
-			Model: "mimo-v2.5-pro",
+			Model: "textonly",
 			Messages: []Message{{
 				Role: RoleUser,
 				Parts: []Part{
@@ -130,7 +129,7 @@ func TestPlan_BestEffortDropsWhatItRefused(t *testing.T) {
 			}},
 			BestEffort: true,
 		}
-		pl := mustPlan(t, c, req, false)
+		pl := mustPlan(t, testClient(t, registryFrom(t, textOnlyDoc)), req, false)
 		parts := pl.req.Messages[0].Parts
 		if len(parts) != 1 || parts[0].Kind != PartText {
 			t.Fatalf("parts = %+v, want the text part only", parts)
@@ -241,8 +240,8 @@ func TestPlan_StrictSchemaSurvivesWhereSupported(t *testing.T) {
 // actually reason, which BestEffort can change after the fact: a demoted
 // ReasoningOff leaves a thinking model, so the warning must still fire.
 func TestPlan_InertSamplingWarnsAfterADemotedReasoningOff(t *testing.T) {
-	_, warnings, err := testClient(t, Default()).plan(ChatRequest{
-		Model:       "mimo-v2.5-pro",
+	_, warnings, err := testClient(t, registryFrom(t, textOnlyDoc)).plan(ChatRequest{
+		Model:       "textonly",
 		Messages:    []Message{User("hi")},
 		Reasoning:   ReasoningOff(),
 		Temperature: f64(0.2),
@@ -250,7 +249,7 @@ func TestPlan_InertSamplingWarnsAfterADemotedReasoningOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	// mimo CAN be disabled, so this request really does switch thinking off and
+	// textonly CAN be disabled, so this request really does switch thinking off and
 	// the temperature is honoured: no inert warning.
 	for _, w := range warnings {
 		if w.Feature == "temperature" {
