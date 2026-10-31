@@ -325,7 +325,9 @@ const chatHead = `profiles:
 // the last shipped text-only model and the last with inert sampling: no shipped
 // profile exercises the vision refusal or the inert-temperature warning now.
 // textonly thinks by default, can be switched off, and overrides temperature
-// and top_p while thinking; seeing is the same model with vision.
+// and top_p while thinking. seeing is NOT its twin: tools, JSON and vision
+// only, no reasoning or sampling blocks, so it refuses ReasoningOff and a
+// temperature. It exists for the vision side of Require and Validate.
 const textOnlyDoc = `profiles:
   - id: textonly
     wire_model_id: textonly

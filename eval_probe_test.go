@@ -821,7 +821,7 @@ func TestProbe_ResponseFormatSupport(t *testing.T) {
 // while mimo-v2.5 took images; V2.6 takes them on both. The module errors on an
 // image for a text-only model instead of rerouting, so the profile bit has to
 // be right. No served MiMo id exercises the REJECTS branch now.
-func TestProbe_MiMoProRejectsImageInput(t *testing.T) {
+func TestProbe_MiMoImageInput(t *testing.T) {
 	c := mimoEndpoint.client(t)
 	// A 1x1 transparent PNG, small enough to be inline and large enough to be a
 	// real image part.

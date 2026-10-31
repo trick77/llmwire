@@ -81,9 +81,11 @@ var evalRates = map[string]evalRate{
 	// V2.6 is priced identically to the retired V2.5 pair on the vendor page
 	// (0.435/0.87 and 0.14/0.28), and models.dev carries no v2.6 entry at all,
 	// so there is no third-party figure to be higher. The V2.5 over-bounds
-	// (ismimodown vendored 1.00/3.00 for -pro) are kept rather than tightened
-	// to the vendor rate: over-estimating is the correct direction for a
-	// breaker. Reached over a Token Plan host this is credits, not dollars —
+	// are kept rather than tightened to the vendor rate: over-estimating is
+	// the correct direction for a breaker. -pro's 1.00/3.00 is what ismimodown
+	// vendored; flash's 0.40/2.00 came in with mimo-v2.5 at Phase 0 with no
+	// source recorded, and stands at ~3x/7x the vendor's 0.14/0.28. Never
+	// tighten either to the vendor figure. Reached over a Token Plan host this is credits, not dollars —
 	// the USD figure is a proxy bound, which is all a circuit breaker needs.
 	"mimo-v2.6-pro":   {1.00, 3.00},
 	"mimo-v2.6-flash": {0.40, 2.00},

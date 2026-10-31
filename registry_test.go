@@ -111,7 +111,7 @@ func TestDefault_MeasuredFactsMatchFindings(t *testing.T) {
 			p := mustLookup(t, reg, id)
 			if !p.Vision {
 				t.Errorf("%s: vision should be true; it accepts an image_url part "+
-					"where mimo-v2.5-pro returned 404 (MiMoProRejectsImageInput)", id)
+					"where mimo-v2.5-pro returned 404 (MiMoImageInput)", id)
 			}
 		}
 	})

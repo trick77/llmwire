@@ -245,8 +245,8 @@ func TestChat_StatusErrors(t *testing.T) {
 //
 // The bound here is the WHOLE-CALL cap, not the header timeout: on this route the
 // endpoint withholds headers until the answer is complete, so the header bound
-// would be a latency limit in disguise — and profiles.yaml records 25-64s single
-// calls against a 60s default.
+// would be a latency limit in disguise — and the retired mimo-v2.5-pro measured
+// 25-64s single calls against a 60s default (FINDINGS.md).
 func TestChat_HeaderStallIsNamed(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
