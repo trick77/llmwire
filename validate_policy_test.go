@@ -24,13 +24,13 @@ func TestValidate_BestEffortDoesNotRescueAMalformedRequest(t *testing.T) {
 	}{
 		{
 			name:       "no messages",
-			req:        ChatRequest{Model: "mimo-v2.5-pro", BestEffort: true},
+			req:        ChatRequest{Model: "mimo-v2.6-pro", BestEffort: true},
 			wantSubstr: "at least one message",
 		},
 		{
 			name: "tool result with nothing to tie it to",
 			req: ChatRequest{
-				Model:      "mimo-v2.5-pro",
+				Model:      "mimo-v2.6-pro",
 				Messages:   []Message{{Role: RoleTool, Text: "result"}},
 				BestEffort: true,
 			},
@@ -39,7 +39,7 @@ func TestValidate_BestEffortDoesNotRescueAMalformedRequest(t *testing.T) {
 		{
 			name: "nameless tool",
 			req: ChatRequest{
-				Model:      "mimo-v2.5-pro",
+				Model:      "mimo-v2.6-pro",
 				Messages:   []Message{User("hi")},
 				Tools:      []Tool{{Name: ""}},
 				BestEffort: true,
@@ -49,7 +49,7 @@ func TestValidate_BestEffortDoesNotRescueAMalformedRequest(t *testing.T) {
 		{
 			name: "function choice without a name",
 			req: ChatRequest{
-				Model:      "mimo-v2.5-pro",
+				Model:      "mimo-v2.6-pro",
 				Messages:   []Message{User("hi")},
 				Tools:      []Tool{{Name: "search"}},
 				ToolChoice: ToolChoice{Mode: ToolChoiceFunction},
@@ -60,7 +60,7 @@ func TestValidate_BestEffortDoesNotRescueAMalformedRequest(t *testing.T) {
 		{
 			name: "schema format without a schema",
 			req: ChatRequest{
-				Model:          "mimo-v2.5-pro",
+				Model:          "mimo-v2.6-pro",
 				Messages:       []Message{User("hi")},
 				ResponseFormat: ResponseFormat{Kind: FormatJSONSchema, Name: "x"},
 				BestEffort:     true,
@@ -88,11 +88,11 @@ func TestValidate_BestEffortDoesNotRescueAMalformedRequest(t *testing.T) {
 // A demoted refusal must not stop the remaining checks, or a BestEffort request
 // reaches the wire carrying a second problem nobody looked for.
 func TestValidate_DemotedRefusalDoesNotSkipLaterChecks(t *testing.T) {
-	c := testClient(t, nil)
+	c := testClient(t, registryFrom(t, textOnlyDoc))
 	image := Message{Role: RoleUser, Parts: []Part{{Kind: PartImage, URL: "data:image/png;base64,AA"}}}
 
 	_, err := c.Validate(ChatRequest{
-		Model:      "mimo-v2.5-pro", // text-only: the image is a demotable refusal
+		Model:      "textonly", // the image is a demotable refusal
 		Messages:   []Message{image, {Role: RoleTool, Text: "orphan"}},
 		BestEffort: true,
 	})
@@ -154,10 +154,10 @@ func TestValidate_AdviceIsOfferedOnlyWhereItWorks(t *testing.T) {
 // Reading the reasoning state off the profile alone gets it wrong in both
 // directions. This is the direction that produces a false warning.
 func TestValidate_NoInertWarningWhenThinkingWasSwitchedOff(t *testing.T) {
-	c := testClient(t, nil)
+	c := testClient(t, registryFrom(t, textOnlyDoc))
 	temp := 0.2
 	warnings, err := c.Validate(ChatRequest{
-		Model:       "mimo-v2.5-pro",
+		Model:       "textonly",
 		Messages:    []Message{User("hi")},
 		Reasoning:   ReasoningOff(),
 		Temperature: &temp,
@@ -242,7 +242,7 @@ func TestValidate_InertWarningAppearsWhenThinkingWasSwitchedOn(t *testing.T) {
 func TestValidate_ToolChoiceNoneIsRefusedNotRelaxed(t *testing.T) {
 	c := testClient(t, nil)
 	_, err := c.Validate(ChatRequest{
-		Model:      "mimo-v2.5-pro",
+		Model:      "mimo-v2.6-pro",
 		Messages:   []Message{User("hi")},
 		Tools:      []Tool{{Name: "search"}},
 		ToolChoice: ToolChoice{Mode: ToolChoiceNone},

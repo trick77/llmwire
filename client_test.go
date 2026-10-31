@@ -350,7 +350,7 @@ func TestChatStream_ParentCancellationMidStreamIsNotMalformed(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := New(Config{BaseURL: srv.URL, IdleTimeout: 10 * time.Second, CallTimeout: 10 * time.Second})
-	stream, _, err := c.ChatStream(ctx, ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	stream, _, err := c.ChatStream(ctx, ChatRequest{Model: "mimo-v2.6-flash", Messages: []Message{User("x")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +438,7 @@ func TestErrors_TheConfiguredKeyNeverAppearsWhateverItsShape(t *testing.T) {
 	defer srv.Close()
 	c := New(Config{BaseURL: srv.URL, APIKey: key})
 
-	_, _, err := c.Chat(context.Background(), ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	_, _, err := c.Chat(context.Background(), ChatRequest{Model: "mimo-v2.6-flash", Messages: []Message{User("x")}})
 	if err == nil || strings.Contains(err.Error(), key) {
 		t.Fatalf("Chat error = %v, the key must not be quoted", err)
 	}
@@ -480,7 +480,7 @@ func TestErrors_TheKeyIsStrippedBeforeTheShapePassAndAcrossTheCut(t *testing.T) 
 	defer srv.Close()
 
 	c := New(Config{BaseURL: srv.URL, APIKey: key})
-	req := ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}}
+	req := ChatRequest{Model: "mimo-v2.6-flash", Messages: []Message{User("x")}}
 
 	// A key with an sk- run in the middle: the shape pass alone would leave
 	// "gw-" and "-tail" around a [REDACTED].
@@ -519,7 +519,7 @@ func TestErrors_ADialFailureNamesTheHostNotTheURL(t *testing.T) {
 
 	c := New(Config{BaseURL: addr + "/v1?api_key=querysecret"})
 
-	_, _, err := c.Chat(context.Background(), ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	_, _, err := c.Chat(context.Background(), ChatRequest{Model: "mimo-v2.6-flash", Messages: []Message{User("x")}})
 	if err == nil {
 		t.Fatal("expected a dial failure")
 	}
@@ -535,7 +535,7 @@ func TestErrors_ADialFailureNamesTheHostNotTheURL(t *testing.T) {
 		t.Errorf("error = %v, want the transport cause kept in the chain", err)
 	}
 
-	_, _, err = c.ChatStream(context.Background(), ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+	_, _, err = c.ChatStream(context.Background(), ChatRequest{Model: "mimo-v2.6-flash", Messages: []Message{User("x")}})
 	if err == nil || strings.Contains(err.Error(), "querysecret") || !strings.Contains(err.Error(), addr) {
 		t.Errorf("ChatStream error = %v, want the same trimming on the streaming path", err)
 	}
@@ -621,7 +621,7 @@ func TestNew_CopiesTheHeaderMap(t *testing.T) {
 func TestChatStream_DrainedStreamReleasesItsContexts(t *testing.T) {
 	srv := sseServer(t, frameLines(contentDelta("hi")))
 	stream, _, err := New(Config{BaseURL: srv.URL}).ChatStream(context.Background(),
-		ChatRequest{Model: "mimo-v2.5", Messages: []Message{User("x")}})
+		ChatRequest{Model: "mimo-v2.6-flash", Messages: []Message{User("x")}})
 	if err != nil {
 		t.Fatal(err)
 	}

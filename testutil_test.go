@@ -321,6 +321,47 @@ const chatHead = `profiles:
     verified: measured
 `
 
+// textOnlyDoc keeps the shape of the retired mimo-v2.5-pro / mimo-v2.5 pair,
+// the last shipped text-only model and the last with inert sampling: no shipped
+// profile exercises the vision refusal or the inert-temperature warning now.
+// textonly thinks by default, can be switched off, and overrides temperature
+// and top_p while thinking. seeing is NOT its twin: tools, JSON and vision
+// only, no reasoning or sampling blocks, so it refuses ReasoningOff and a
+// temperature. It exists for the vision side of Require and Validate.
+const textOnlyDoc = `profiles:
+  - id: textonly
+    wire_model_id: textonly
+    max_tokens_param: max_completion_tokens
+    verified: measured
+    reasoning:
+      supported: true
+      enabled_by_default: true
+      can_be_disabled: true
+      control: toggle_object
+      effort_values: [low, medium, high]
+      balanced: medium
+    temperature: {supported: true, inert_while_reasoning: true}
+    top_p: {supported: true, inert_while_reasoning: true}
+    tools:
+      supported: true
+      format: native
+      tool_choice_values: [auto]
+    output: {json_object: true}
+    streaming: {supported: true, accepts_stream_options: true}
+    vision: false
+  - id: seeing
+    wire_model_id: seeing
+    max_tokens_param: max_completion_tokens
+    verified: measured
+    tools:
+      supported: true
+      format: native
+      tool_choice_values: [auto]
+    output: {json_object: true}
+    streaming: {supported: true, accepts_stream_options: true}
+    vision: true
+`
+
 const goodProvenance = `      source_url: https://vendor.example/pricing
       verified_on: 2026-09-12
 `

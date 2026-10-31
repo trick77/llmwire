@@ -120,7 +120,7 @@ failure found.
 
 | bit | value | probe |
 |---|---|---|
-| `vision` | **false** | `MiMoProRejectsImageInput` |
+| `vision` | **false** | `MiMoImageInput` |
 | `max_tokens_param` | **both accepted and honoured** | `OutputCapParameter` |
 | `reasoning_effort` | **accepted** on chat/completions | `MiMoAcceptsReasoningEffort` |
 | `needs_include_usage` | **false** | `UsageReportingWithoutStreamOptions` |
@@ -146,7 +146,7 @@ seconds**, against 1–5 seconds for `glm-5.3-flash` on comparable prompts.
 
 | bit | value | probe |
 |---|---|---|
-| `vision` | **true** | `MiMoProRejectsImageInput` |
+| `vision` | **true** | `MiMoImageInput` |
 | tool-call format | **native** | `MiMoToolCallFormat` |
 
 The same image part that 404s on `-pro` is accepted here. This is the split loom
@@ -161,7 +161,7 @@ host's own `/models` listed `mimo-v2.6-pro` and `mimo-v2.6-flash` beside them.
 
 | bit | value | probe |
 |---|---|---|
-| `vision` | **true** | `MiMoProRejectsImageInput` |
+| `vision` | **true** | `MiMoImageInput` |
 | `max_tokens_param` | **both accepted and honoured** | `OutputCapParameter` |
 | `reasoning.can_be_disabled` | **true** | `MiMoThinkingCanBeDisabled` |
 | `reasoning.enabled_by_default` | **true** | `MiMoThinkingCanBeDisabled` |
@@ -232,7 +232,7 @@ Measured on 2026-09-22.
 
 | bit | value | probe |
 |---|---|---|
-| `vision` | **true** | `MiMoProRejectsImageInput` |
+| `vision` | **true** | `MiMoImageInput` |
 | `max_tokens_param` | **both accepted and honoured** | `OutputCapParameter` |
 | `reasoning.can_be_disabled` | **true** | `MiMoThinkingCanBeDisabled` |
 | `reasoning.enabled_by_default` | **true** | `MiMoThinkingCanBeDisabled` |
@@ -472,9 +472,9 @@ again, and the whole run fit the default 10-minute deadline per invocation
 because V2.6 answers in 1-5 seconds where V2.5-pro took 25-64.
 
 The same run showed `mimo-v2.5-pro` answering in **3.5-18 seconds**, not the
-25-64 recorded on 2026-09-12. Its `notes` still carry the old figure; the
-latency class of that endpoint has evidently improved and has not been re-probed
-deliberately.
+25-64 recorded on 2026-09-12. Its `notes` carried the old figure until the
+entry was retired on 2026-10-31; the latency class of that endpoint had
+evidently improved and was never re-probed deliberately.
 
 Settling the effort ladder cost a further **46 calls and roughly $0.034**:
 40 for `MiMoEffortLadderIsReal` (four levels, five samples, two models, on a

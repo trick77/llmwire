@@ -206,7 +206,7 @@ log line, never the vendor page.
 |---|---|---|---|---|
 | `max_tokens_param` | `OutputCapParameter` | the `tc` list, both params | honoured=true for exactly one name → that name. Both honoured (MiMo) → the vendor-documented one, say so in the comment | accepted+ignored is silent (glm); a body carrying both names is uncapped |
 | (regression) | `ChatHonoursTheOutputCap` | the `tc` list | runs through `Chat`, so needs the registry entry with `max_tokens_param` set. Fails when count > 2x cap | run AFTER the profile entry exists |
-| `reasoning.can_be_disabled` | `ZaiThinkingCanBeDisabled` (glm) or `MiMoThinkingCanBeDisabled` (MiMo, per-model table) | copy the nearer probe, sending the control's OFF shape: `thinking:{"type":"disabled"}` for `toggle_object`, `reasoning_effort: none` for `effort` | REJECTED → `false`; ACCEPTED with the lane REPORTED and 0 → `true` | "not reported" is NOT zero: guard `Usage.Output.Reasoning != nil` before reading it, or a missing `completion_tokens_details` reads as proof the toggle worked. The V2.5 MiMo entries are still doc-derived; the V2.6 pair is measured. `enabled_by_default` is a SEPARATE bool, read it off a request with no knob at all |
+| `reasoning.can_be_disabled` | `ZaiThinkingCanBeDisabled` (glm) or `MiMoThinkingCanBeDisabled` (MiMo, per-model table) | copy the nearer probe, sending the control's OFF shape: `thinking:{"type":"disabled"}` for `toggle_object`, `reasoning_effort: none` for `effort` | REJECTED → `false`; ACCEPTED with the lane REPORTED and 0 → `true` | "not reported" is NOT zero: guard `Usage.Output.Reasoning != nil` before reading it, or a missing `completion_tokens_details` reads as proof the toggle worked. The retired V2.5 MiMo entries were doc-derived here; the V2.6 pair is measured. `enabled_by_default` is a SEPARATE bool, read it off a request with no knob at all |
 | `reasoning.effort_values`, `default_effort` | `ZaiReasoningEffortValues` (pattern) | copy for the new model | the exact ACCEPTED set, nothing wider; token count per tier goes in the comment | one overloaded code (`1210`) rejects both bad tiers and the disable toggle; the message names a subset of what it rejects. `default_effort` is what the vendor says, not measured |
 | `reasoning.control` accepted on chat | `MiMoAcceptsReasoningEffort` | copy for the new model | accepted → note "accepted, effect not established" unless reasoning tokens moved | accepted-and-ignored is indistinguishable from honoured on a one-word prompt |
 | `tools.format`, `tools.recover_inline_markup` | `MiMoToolCallFormat` + `MiMoToolFreeCall` | the model list in each | native, no markup → `native`. Markup in content/reasoning → `xml`. `recover_inline_markup` is defensive, not a capability: ON wherever the serving family has been seen leaking (both MiMo profiles), since it acts only when markup appears | "not reproduced" is not "refuted": the production leak needed a long tool-saturated history the probe does not build (FINDINGS.md, question 1). Spool the raw stream (§1) if in doubt |
@@ -214,13 +214,14 @@ log line, never the vendor page.
 | idle bound | `LongestCommentOnlyGap` | the `tc` list, with the model's cap name | `MaxCommentGap` vs `DefaultIdleTimeout` (90s). Above 45s → warn; the data-only re-arm rule needs a per-profile escape hatch | reasoning at max with a small cap produced 1022 frames and ZERO content: "the cap counts reasoning" |
 | `streaming.needs_include_usage`, `streaming.accepts_stream_options` | `UsageReportingWithoutStreamOptions` | the `tc` list | usage without the option → `needs_include_usage: false`; option rejected → `accepts_stream_options: false` | `needs_include_usage: true` with `accepts_stream_options: false` fails the load |
 | `output.json_object`, `output.json_schema`, `output.strict_schema` | `ResponseFormatSupport` | the `tc` list | accepted and `parses=true` → `true`. Strict is sent inside the schema block, so acceptance there is `strict_schema` | both vendors accept `json_schema` though neither documents it. A fenced reply can still arrive with the format set (`errors.go` `JSONObject` comment) |
-| `vision` | `MiMoProRejectsImageInput` | the model list | rejected → `false`; accepted → `true` | the 404 body is SSE-framed (`data:{"error":…}`); `image_url` is a nested object, never a bare string |
+| `vision` | `MiMoImageInput` | the model list | rejected → `false`; accepted → `true` | the 404 body is SSE-framed (`data:{"error":…}`); `image_url` is a nested object, never a bare string |
 | `cost.cache_read` lane, usage containment | `CachedTokensAreInsidePromptTokens` | the `tc` list | INSIDE → pricing subtracts, nothing to set. BESIDE → stop: pricing needs a containment flag before this model can be priced | read the vendor's raw usage field name off the `raw=` log; the first non-zero `cached_tokens` is what confirmed Z.ai's spelling |
 
 Wire-level observations to take from ANY of the runs above and put in the
-profile's `notes`: latency class (MiMo 25-64s per call vs glm 1-5s), an
-injected system prompt showing up as cache hits on a tiny prompt (192 of 258
-on MiMo), vendor `finish_reason` strings seen (`finish_reasons_extra`).
+profile's `notes`: latency class (retired mimo-v2.5-pro 25-64s per call vs
+glm and mimo-v2.6 1-5s, the latter with a 60s+ tail), an injected system
+prompt showing up as cache hits on a tiny prompt (192 of 258 on the retired
+mimo-v2.5-pro), vendor `finish_reason` strings seen (`finish_reasons_extra`).
 
 ## 4. No probe exists: write one, never guess
 
@@ -287,7 +288,7 @@ see in the profile comment, whether or not it matched.
 | a bare `{"total_tokens":N}` with no lanes, or an empty details object: reported but unpriceable | `usage.go` `Usage.Reported` comment |
 | `completion_tokens_details.text_tokens` present: the reported figure wins over prompt minus reasoning (fixture only, never seen live) | `usage.go` `parseUsage` |
 | unmodelled usage fields (image/video tokens, web-search counts) | `Usage.Raw` |
-| non-streaming route withholds headers until the whole answer is ready (MiMo 25-64s) | `client.go` `RawPost`, "Bounded by the WHOLE-CALL cap" |
+| non-streaming route withholds headers until the whole answer is ready (retired mimo-v2.5-pro 25-64s, mimo-v2.6-pro 60s+ tail) | `client.go` `RawPost`, "Bounded by the WHOLE-CALL cap" |
 | HTTP/2 negotiated, so `Transport.ResponseHeaderTimeout` is inert | `client.go` `New`, `stream.go` guard comment |
 | `Retry-After` as seconds or HTTP-date; past date is 0 | `errors.go` `retryAfter` |
 | empty `Authorization` header rejected; send none instead | `client.go` `Config.APIKey` |

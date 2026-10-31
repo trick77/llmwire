@@ -202,267 +202,20 @@ profiles:
       answer with finish_reason "length" and no error.
 
   # ---------------------------------------------------------------------------
-  # Xiaomi MiMo. Reached here over a Token Plan host, which bills subscription
-  # credits rather than dollars. `provider: mimo` means THAT host; the
-  # pay-as-you-go API is a different host with a different key and would be
-  # its own provider.
+  # Xiaomi MiMo V2.6, measured 2026-09-22. Reached here over a Token Plan host,
+  # which bills subscription credits rather than dollars. `provider: mimo` means
+  # THAT host; the pay-as-you-go API is a different host with a different key
+  # and would be its own provider.
   #
-  # DEPRECATED BY THE VENDOR 2026-10-21, both entries below. They stay until the
-  # endpoint stops serving the ids — as of 2026-09-22 the host's /models still
-  # lists both — and mimo-v2.6-pro / mimo-v2.6-flash succeed them.
+  # RETIRED 2026-10-31: mimo-v2.5-pro and mimo-v2.5, deprecated by the vendor
+  # 2026-10-21 and no longer served. Comparisons with them below are
+  # measurement history; FINDINGS.md has the V2.5 probes.
   #
-  # Their cost blocks now outlive their source: the vendor's Overseas (USD)
-  # table lists only the V2.6 ids, and V2.5 survives only in the domestic RMB
-  # table marked "(deprecated)". So the source_url below no longer carries the
-  # USD figures it is cited for. The rates are kept as verified on 2026-09-12
-  # rather than dropped: they were read off that page when it did carry them,
-  # and pricing something at Unpriced instead would silently zero the lane.
-  # ---------------------------------------------------------------------------
-  - id: mimo-v2.5-pro
-    display_name: MiMo V2.5 Pro
-    endpoint: chat
-    wire_model_id: mimo-v2.5-pro
-    provider: mimo
-    verified: measured
-
-    # MEASURED: this endpoint honours BOTH max_tokens and max_completion_tokens
-    # — each returned exactly 16 tokens with finish_reason "length". The belief
-    # that only max_completion_tokens works is too strong. The explicit one is
-    # sent because it is the name the vendor documents.
-    max_tokens_param: max_completion_tokens
-
-    reasoning:
-      supported: true
-      # NOT measured: no probe sent the toggle to this endpoint in either
-      # direction. Thinking is ON unless switched off, per the vendor; the
-      # disable shape is vendor documentation.
-      enabled_by_default: true
-      can_be_disabled: true
-      control: toggle_object
-      # MEASURED 2026-09-13: reasoning_effort is taken BESIDE the toggle, and
-      # the set is enforced by the endpoint: low, medium and high return 200,
-      # xhigh is a 400 "Invalid request parameters". Whether the level changes
-      # how much this deployment thinks is not shown by the probe: a small
-      # arithmetic prompt answered in 9 completion tokens at every level AND
-      # with no level sent (the control), so this prompt simply did not make
-      # Pro think; sending a level does not switch thinking off. See mimo-v2.5
-      # for the sibling that did move.
-      effort_values: [low, medium, high]
-      # NOT measured as a depth: the middle of the enforced set, a choice.
-      # Same value on every MiMo entry; the V2.6 tables show why no level
-      # here is a promise. overhead ABSENT: DefaultReasoningOverhead applies.
-      balanced: medium
-      # MEASURED: reasoning arrived on this delta field on every probe.
-      stream_field: reasoning_content
-
-    # MEASURED behaviour, documented by the vendor: while thinking is on, these
-    # are accepted and then FORCIBLY overridden to the model's own values. Not
-    # rejected, not honoured. Sending them is harmless; believing they took
-    # effect is not.
-    temperature:
-      supported: true
-      inert_while_reasoning: true
-    top_p:
-      supported: true
-      inert_while_reasoning: true
-
-    tools:
-      supported: true
-      # MEASURED: native tool_calls, both with tools offered and on a forced
-      # tool-free call. The model's own chat template emits XML, but the serving
-      # layer parses it before it reaches a client.
-      #
-      # recover_inline_markup is ON although no probe reproduces the leak: loom
-      # captured it in production against a long, tool-saturated history, as
-      # <tool_call>…</tool_call> blocks and as an invented
-      # <tool_invocation name=… arguments={…} /> form, on tool-free calls too.
-      # Failing to reproduce is not refuting. Recovery only acts when the
-      # markup appears, so a clean answer costs nothing.
-      format: native
-      recover_inline_markup: true
-      # NOT measured, vendor documentation: documented auto-only; anything
-      # else is silently DROPPED by the backend rather than rejected, so a
-      # caller asking for a forced call would get an unforced one with no
-      # error. No probe offered a forced choice here either.
-      tool_choice_values: [auto]
-      supports_forced_choice: false
-      # NOT measured: no probe offered two tools in one turn.
-      supports_parallel: true
-
-    output:
-      # MEASURED: accepted and the reply parsed as JSON.
-      json_object: true
-      # MEASURED: accepted and honoured, though the vendor documents only
-      # json_object.
-      json_schema: true
-      # MEASURED: the probe sent "strict": true inside the json_schema block.
-      strict_schema: true
-
-    # MEASURED both ways: usage arrives without asking, and stream_options is
-    # accepted.
-    streaming:
-      supported: true
-      needs_include_usage: false
-      accepts_stream_options: true
-      # OBSERVED in production (loom), not probed: a tool call streams its
-      # name, then NOTHING while the whole argument is serialized server-side,
-      # then the argument in one burst. A ~10KB document argument measured
-      # ~82s of silence: past any idle bound sized for prose, and 8s short of
-      # the 90s default. Which MiMo id it was is not recorded, so it is set on every
-      # MiMo entry: the serving layer is shared. Callers widen
-      # ChatRequest.ToolCallIdleTimeout on turns offering such a tool.
-      buffers_tool_args: true
-
-    # NOT measured, vendor documentation.
-    limits:
-      context: 1048576
-      max_output: 131072
-
-    # MEASURED: an image_url part returns HTTP 404, "No endpoints found that
-    # support image input". Its sibling mimo-v2.5 accepts the same part. The
-    # module errors rather than rerouting: they are different models with
-    # different capabilities, and a silent swap would misattribute cost.
-    vision: false
-    # NOT measured: vendor documentation. Only "stop" and "length" have been
-    # seen from this endpoint.
-    finish_reasons_extra: [repetition_truncation]
-
-    # Published pay-as-you-go USD list rate per 1M tokens, from the vendor's own
-    # page. THIS IS NOT AN INVOICE: this deployment is reached over a Token Plan
-    # host that bills subscription credits, and llmwire reports the list USD rate
-    # anyway, because a credit figure is not comparable between models and
-    # reporting nothing leaves a budget cap with nothing to check.
-    #
-    # A third-party integration doc quoted 1.00/3.00 for this model; the vendor
-    # page says 0.435/0.87 and models.dev agrees with the vendor. Recorded
-    # because it is the second price conflict in this file.
-    #
-    # cache_write 0: the vendor lists cache writes as "Limited-time Free" — a
-    # promotion as of verified_on, not a property of the lane.
-    cost:
-      input: 0.435
-      cache_read: 0.0036
-      cache_write: 0
-      output: 0.87
-      source_url: https://mimo.mi.com/docs/en-US/price/pay-as-you-go
-      verified_on: 2026-09-12
-
-    notes: >-
-      Latency is what to plan around, not tokens: single calls measured 25-64
-      seconds, against 1-5 seconds for glm-5.3-flash on comparable prompts.
-      Prompt caching is live and visible — a 258-token prompt reported 192 cached
-      — because the endpoint injects its own system message when none is given.
-      Measured 2026-09-13: cached_tokens sits INSIDE prompt_tokens (11131 / 192,
-      then 11131 / 11072 on the identical prompt), so the full-rate lane is the
-      difference and pricing subtracts it.
-      reasoning_effort is accepted on chat/completions despite the vendor
-      documenting it as a Responses-API parameter; see the reasoning block for
-      the accepted set and what the probe measured.
-
-  - id: mimo-v2.5
-    display_name: MiMo V2.5
-    endpoint: chat
-    wire_model_id: mimo-v2.5
-    provider: mimo
-    verified: measured
-
-    # Two bits were measured on this model: vision and the tool-call format.
-    # Every other bit below is NOT measured; it is the -pro entry's value,
-    # carried over on the strength of a shared serving layer and the vendor's
-    # documentation. The output-cap, reasoning, response-format and usage
-    # probes ran against -pro only.
-
-    # NOT measured here; measured on -pro (both names honoured).
-    max_tokens_param: max_completion_tokens
-
-    # NOT measured, vendor documentation.
-    reasoning:
-      supported: true
-      enabled_by_default: true
-      can_be_disabled: true
-      control: toggle_object
-      # MEASURED 2026-09-13, same probe as -pro: low, medium, high accepted,
-      # xhigh a 400. Here the level did move the answer: the same arithmetic
-      # prompt took 225 / 377 / 396 completion tokens at low / medium / high
-      # (one sample each, answer identical), while the reasoning_tokens lane
-      # reported 0 throughout — the thinking is counted inside
-      # completion_tokens on this endpoint.
-      effort_values: [low, medium, high]
-      # NOT measured as a depth; see mimo-v2.5-pro. overhead ABSENT.
-      balanced: medium
-      stream_field: reasoning_content
-
-    # NOT measured, vendor documentation; same statement as for -pro.
-    temperature:
-      supported: true
-      inert_while_reasoning: true
-    top_p:
-      supported: true
-      inert_while_reasoning: true
-
-    tools:
-      supported: true
-      # MEASURED: native tool_calls, with tools offered and on a tool-free call.
-      format: native
-      # Same serving layer as -pro; see the note there.
-      recover_inline_markup: true
-      # NOT measured, vendor documentation.
-      tool_choice_values: [auto]
-      supports_forced_choice: false
-      supports_parallel: true
-
-    # NOT measured here; measured on -pro.
-    output:
-      json_object: true
-      json_schema: true
-      strict_schema: true
-
-    # NOT measured here; measured on -pro.
-    streaming:
-      supported: true
-      needs_include_usage: false
-      accepts_stream_options: true
-      # OBSERVED on MiMo, not probed; see mimo-v2.5-pro.
-      buffers_tool_args: true
-
-    # NOT measured, vendor documentation.
-    limits:
-      context: 1048576
-      max_output: 32768
-
-    # MEASURED: accepts the same image part that 404s on -pro.
-    vision: true
-    # NOT measured: vendor documentation.
-    finish_reasons_extra: [repetition_truncation]
-
-    # Same page and same caveats as mimo-v2.5-pro above: list USD rate, not the
-    # credit invoice this route actually bills, and cache_write is a promotion.
-    cost:
-      input: 0.14
-      cache_read: 0.0028
-      cache_write: 0
-      output: 0.28
-      source_url: https://mimo.mi.com/docs/en-US/price/pay-as-you-go
-      verified_on: 2026-09-12
-
-    notes: >-
-      The vision-capable sibling of mimo-v2.5-pro. Not "the weaker model": it is
-      the same reasoning family and thinks when asked to.
-
-
-  # ---------------------------------------------------------------------------
-  # MiMo V2.6, the successor generation, measured 2026-09-22 on the same Token
-  # Plan host as the V2.5 pair above and with the same "list USD rate, not the
-  # credit invoice" caveat.
-  #
-  # Nothing here is inherited from the V2.5 entries. Identical published prices
-  # and an identically documented thinking toggle made a copy tempting, and a
-  # copy would have shipped two wrong bits: V2.5-pro REJECTS image input and
-  # V2.6-pro accepts it, and V2.5 reports a reasoning lane of 0 while V2.6
+  # Nothing here was inherited from the V2.5 entries. Identical published
+  # prices and an identically documented thinking toggle made a copy tempting,
+  # and a copy would have shipped two wrong bits: V2.5-pro REJECTED image input
+  # and V2.6-pro accepts it, and V2.5 reported a reasoning lane of 0 while V2.6
   # populates it. Every bit below is marked MEASURED or NOT measured.
-  #
-  # Both ids are served: the host's own /models listed mimo-v2.6-pro and
-  # mimo-v2.6-flash beside the V2.5 family and the ASR/TTS models.
   # ---------------------------------------------------------------------------
   - id: mimo-v2.6-pro
     display_name: MiMo V2.6 Pro
@@ -480,8 +233,8 @@ profiles:
     reasoning:
       supported: true
       # MEASURED 2026-09-22, and this is the first direct measurement of MiMo's
-      # thinking toggle in either direction: both V2.5 entries carry these two
-      # bools on vendor documentation alone.
+      # thinking toggle in either direction: both retired V2.5 entries carried
+      # these two bools on vendor documentation alone.
       #
       # The card documents the disable shape as extra_body {"thinking":
       # {"type": "disabled"}}; extra_body is the OpenAI SDK's passthrough, so
@@ -547,7 +300,7 @@ profiles:
     # NOT measured on this generation. supported stays true because these are
     # accepted — dropping the block would have Validate refuse a caller that
     # sends either — but inert_while_reasoning is deliberately ABSENT, unlike
-    # the V2.5 entries: that bit rests on a vendor statement that the model
+    # the retired V2.5 entries: that bit rests on a vendor statement that the model
     # forcibly overrides both while thinking, and no V2.6 source has been found
     # repeating it. Absent means the warning is not emitted; it does not change
     # what is sent.
@@ -563,10 +316,13 @@ profiles:
       # with no markup in either channel.
       format: native
       # recover_inline_markup is ON although no probe reproduces the leak here
-      # either, for the same reason as the V2.5 entries: loom captured it in
-      # production against a long, tool-saturated history that this probe does
-      # not build. Failing to reproduce is not refuting, and recovery only acts
-      # when the markup appears, so a clean answer costs nothing.
+      # either, for the same reason it was on V2.5: loom captured it in
+      # production against a long, tool-saturated history, as
+      # <tool_call>…</tool_call> blocks and as an invented
+      # <tool_invocation name=… arguments={…} /> form, on tool-free calls too,
+      # and no probe builds that history. Failing to reproduce is not
+      # refuting, and recovery only acts when the markup appears, so a clean
+      # answer costs nothing.
       recover_inline_markup: true
       # NOT measured, all three: no probe has offered a forced choice or two
       # tools in one turn to ANY MiMo endpoint. Vendor documentation, at the
@@ -601,7 +357,13 @@ profiles:
       supported: true
       needs_include_usage: false
       accepts_stream_options: true
-      # OBSERVED on MiMo, not probed on this generation; see mimo-v2.5-pro.
+      # OBSERVED in production (loom), not probed: a tool call streams its
+      # name, then NOTHING while the whole argument is serialized server-side,
+      # then the argument in one burst. A ~10KB document argument measured
+      # ~82s of silence: past any idle bound sized for prose, and 8s short of
+      # the 90s default. Seen on V2.5, which MiMo id is not recorded, so it is
+      # set on every MiMo entry: the serving layer is shared. Callers widen
+      # ChatRequest.ToolCallIdleTimeout on turns offering such a tool.
       buffers_tool_args: true
 
     # NOT measured, vendor model card: "Context Window 1M tokens" /
@@ -612,7 +374,7 @@ profiles:
       max_output: 131072
 
     # MEASURED 2026-09-22, and this REVERSES the V2.5 split. An image_url part
-    # is ACCEPTED here, where the same part against mimo-v2.5-pro returns HTTP
+    # is ACCEPTED here, where the same part against mimo-v2.5-pro returned HTTP
     # 404 "No endpoints found that support image input" — re-confirmed as a
     # control in the same run. The vendor's own model card is self-contradictory
     # on this point: the prose sells "Omni-Modal Understanding" and "joint input
@@ -632,9 +394,9 @@ profiles:
     # nothing to check.
     #
     # No cross-check exists for this generation: models.dev carries no
-    # mimo-v2.6 entry at all as of verified_on. Both earlier MiMo prices in this
-    # file had a third-party figure to disagree with; this one stands on the
-    # vendor page alone. The rates happen to equal mimo-v2.5-pro's exactly.
+    # mimo-v2.6 entry at all as of verified_on. Both retired V2.5 prices had a
+    # third-party figure to disagree with; this one stands on the vendor page
+    # alone. The rates happen to equal mimo-v2.5-pro's exactly.
     #
     # cache_write 0: the vendor lists cache writes as "Limited-time Free" — a
     # promotion as of verified_on, not a property of the lane.
@@ -651,9 +413,9 @@ profiles:
       verified_on: 2026-09-22
 
     notes: >-
-      Succeeds mimo-v2.5-pro, which the vendor deprecates 2026-10-21, and
-      differs from it in two ways a caller can trip over. It ACCEPTS image
-      input where -pro returns 404, so the vision split this library used to
+      Succeeds mimo-v2.5-pro, retired 2026-10-31, and differs from it in two
+      ways a caller moving over can trip over. It ACCEPTS image input where
+      -pro returned 404, so the vision split this library used to
       route around does not exist at this generation. And it populates the
       reasoning lane: 197 of 202 completion tokens on one arithmetic prompt
       came back as reasoning_tokens, where mimo-v2.5 reported 0 and counted
@@ -792,7 +554,7 @@ profiles:
       supported: true
       needs_include_usage: false
       accepts_stream_options: true
-      # OBSERVED on MiMo, not probed on this generation; see mimo-v2.5-pro.
+      # OBSERVED on MiMo, not probed on this generation; see mimo-v2.6-pro.
       buffers_tool_args: true
 
     # NOT measured, vendor model card: 1M context / 128K max output. Note the
@@ -823,7 +585,7 @@ profiles:
       verified_on: 2026-09-22
 
     notes: >-
-      Succeeds mimo-v2.5, which the vendor deprecates 2026-10-21. The vendor
+      Succeeds mimo-v2.5, retired 2026-10-31. The vendor
       describes a 309B-parameter Mixture-of-Experts model with 15B activated per
       token, and gives it the same 1M/128K window as -pro where its predecessor
       had max_output 32768. On 2026-09-22 it was the fastest endpoint measured

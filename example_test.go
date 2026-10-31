@@ -46,15 +46,16 @@ func ExampleClient_Validate_unsupportedEffort() {
 }
 
 // A request that can be honoured approximately succeeds and reports a warning,
-// rather than failing. Here the model cannot enforce a schema but can still be
-// held to JSON.
+// rather than failing. Here the model takes only an automatic tool choice, so
+// a forced one is relaxed to auto instead of being dropped silently.
 func ExampleClient_Validate_warnings() {
 	c := llmwire.New(llmwire.Config{})
 
 	warnings, err := c.Validate(llmwire.ChatRequest{
-		Model:       "mimo-v2.5-pro",
-		Messages:    []llmwire.Message{llmwire.User("hello")},
-		Temperature: ptr(0.2),
+		Model:      "mimo-v2.6-pro",
+		Messages:   []llmwire.Message{llmwire.User("hello")},
+		Tools:      []llmwire.Tool{{Name: "search"}},
+		ToolChoice: llmwire.ToolChoice{Mode: llmwire.ToolChoiceRequired},
 	})
 	fmt.Println("error:", err)
 	for _, w := range warnings {
@@ -63,7 +64,7 @@ func ExampleClient_Validate_warnings() {
 
 	// Output:
 	// error: <nil>
-	// compatibility: temperature
+	// compatibility: tool_choice
 }
 
 // One completion, against a stub endpoint so the example is runnable. Warnings
@@ -159,5 +160,3 @@ func ExampleClient_ChatStream() {
 	// two plus two is four
 	// finish: stop
 }
-
-func ptr(f float64) *float64 { return &f }

@@ -275,8 +275,8 @@ func TestTruncate_ShortStringIsUntouched(t *testing.T) {
 }
 
 // An endpoint already answering in text/event-stream can send its ERROR that
-// way too, under a non-2xx status. Measured against MiMo: asking
-// mimo-v2.5-pro for image input returns HTTP 404 whose body is a single
+// way too, under a non-2xx status. Measured against MiMo: asking the retired
+// mimo-v2.5-pro for image input returned HTTP 404 whose body is a single
 // "data:{...}" frame. Without unframing, the code is lost to raw text.
 func TestParseAPIError_SSEFramedErrorBody(t *testing.T) {
 	body := `data:{"error":{"code":"404","message":"No endpoints found that support image input","param":"","type":""}}`

@@ -124,7 +124,7 @@ func renderParts(parts []Part) []any {
 		case PartImage:
 			// image_url is a nested OBJECT, not a bare string. This is the exact
 			// shape that returns 404 "No endpoints found that support image
-			// input" on mimo-v2.5-pro and is accepted by its sibling.
+			// input" on the retired mimo-v2.5-pro and is accepted by V2.6.
 			out = append(out, map[string]any{
 				"type":      string(PartImage),
 				"image_url": map[string]any{"url": p.URL},

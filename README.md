@@ -54,9 +54,9 @@ ttft := stream.Result().Timing.FirstData // also Headers and Total, on every res
 Every OpenAI-compatible endpoint bends the protocol somewhere, and the bends are
 not discoverable from the spec:
 
-- `mimo-v2.5-pro` takes `max_completion_tokens`; `glm-5.3-flash` takes `max_tokens`.
-- `mimo-v2.5-pro` returns 404 for any `image_url` part. Its sibling `mimo-v2.5`
-  does not.
+- `mimo-v2.6-pro` takes `max_completion_tokens`; `glm-5.3-flash` takes `max_tokens`.
+- `glm-5.3-flash` refuses the thinking toggle its vendor documents; `mimo-v2.6-pro`
+  honours the same toggle.
 - On `glm-5.3-flash`, a prompt that says "reply as JSON" parses 0 times out of 8;
   the same prompt with `response_format` parses 8 out of 8.
 - gpt-5.x rejects a non-default `temperature` outright, with a 400.
@@ -238,24 +238,24 @@ ids are matched exactly, and an unknown id is an error rather than a silent set
 of defaults.
 
 ```yaml
-- id: mimo-v2.5-pro
+- id: mimo-v2.6-pro
   endpoint: chat
-  max_tokens_param: max_completion_tokens  # verified live: a cap of 8 returned
-                                           # exactly 8, finish_reason=length
+  max_tokens_param: max_completion_tokens  # verified live: a cap of 16 returned
+                                           # exactly 16, finish_reason=length
   reasoning:
     supported: true
     enabled_by_default: true               # thinking defaults ON
-    can_be_disabled: true
+    can_be_disabled: true                  # measured: reasoning tokens 54 -> 0
     control: toggle_object                 # thinking:{type}, not reasoning_effort
     stream_field: reasoning_content
-  vision: false                            # 404s on any image_url part
+  vision: true                             # accepts an image_url part
   cost:                                    # USD per 1M tokens, the vendor's own
     input: 0.435                           # decimals, converted exactly from text
     cache_read: 0.0036
     cache_write: 0                         # "limited-time free" as of verified_on
     output: 0.87
     source_url: https://mimo.mi.com/docs/en-US/price/pay-as-you-go
-    verified_on: 2026-09-12
+    verified_on: 2026-09-22
 ```
 
 All four chat lanes are required, or the block is left out entirely and the model

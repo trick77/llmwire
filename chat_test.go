@@ -130,7 +130,7 @@ func TestChat_NoChoicesIsAnErrorNotAPanic(t *testing.T) {
 // an unmodelled field. None of these may fail a completion the caller paid for.
 func TestChat_LenientDecoding(t *testing.T) {
 	body := `{
-      "model": "mimo-v2.5-pro",
+      "model": "mimo-v2.6-pro",
       "id": "chatcmpl-x",
       "some_new_field": {"nested": true},
       "choices": [{"finish_reason": "repetition_truncation",
@@ -139,7 +139,7 @@ func TestChat_LenientDecoding(t *testing.T) {
     }`
 	srv := jsonServer(t, 200, body)
 	resp, warnings, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
-		Model:    "mimo-v2.5-pro",
+		Model:    "mimo-v2.6-pro",
 		Messages: []Message{User("hi")},
 	})
 	if err != nil {
@@ -168,7 +168,7 @@ func TestChat_LenientDecoding(t *testing.T) {
 // Tool calls are assembled from the nested wire shape.
 func TestChat_ToolCalls(t *testing.T) {
 	body := `{
-      "model": "mimo-v2.5-pro",
+      "model": "mimo-v2.6-pro",
       "choices": [{"finish_reason": "tool_calls", "message": {"content": "",
         "tool_calls": [{"id": "call_1", "type": "function",
                         "function": {"name": "search", "arguments": "{\"q\":\"x\"}"}}]}}],
@@ -176,7 +176,7 @@ func TestChat_ToolCalls(t *testing.T) {
     }`
 	srv := jsonServer(t, 200, body)
 	resp, _, err := clientOn(t, srv.URL).Chat(context.Background(), ChatRequest{
-		Model:    "mimo-v2.5-pro",
+		Model:    "mimo-v2.6-pro",
 		Messages: []Message{User("hi")},
 		Tools:    []Tool{{Name: "search"}},
 	})
@@ -245,8 +245,8 @@ func TestChat_StatusErrors(t *testing.T) {
 //
 // The bound here is the WHOLE-CALL cap, not the header timeout: on this route the
 // endpoint withholds headers until the answer is complete, so the header bound
-// would be a latency limit in disguise — and profiles.yaml records 25-64s single
-// calls against a 60s default.
+// would be a latency limit in disguise — and the retired mimo-v2.5-pro measured
+// 25-64s single calls against a 60s default (FINDINGS.md).
 func TestChat_HeaderStallIsNamed(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -284,7 +284,7 @@ func TestChat_HeaderStallIsNamed(t *testing.T) {
 }
 
 // A non-streaming answer slower than the HEADER bound but inside the call cap must
-// still succeed. mimo-v2.5-pro measured 25-64 seconds per call against a 60s
+// still succeed. mimo-v2.5-pro (retired) measured 25-64 seconds per call against a 60s
 // default header timeout, so binding this route to c.header would abort calls the
 // endpoint was about to answer.
 func TestChat_SlowAnswerIsNotAHeaderStall(t *testing.T) {

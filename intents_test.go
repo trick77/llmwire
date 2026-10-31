@@ -175,8 +175,6 @@ func TestReasoningIntents_ShippedProfiles(t *testing.T) {
 		{"glm-5.3-flash", "low", "high"},
 		{"mimo-v2.6-pro", "off", "medium"},
 		{"mimo-v2.6-flash", "off", "medium"},
-		{"mimo-v2.5-pro", "off", "medium"},
-		{"mimo-v2.5", "off", "medium"},
 		{"gpt-5.5", "off", "medium"},
 		// No none on the page: the floor is low.
 		{"gpt-6.1-sol", "low", "medium"},
@@ -583,7 +581,7 @@ func TestDefault_EveryProfileHasADisplayName(t *testing.T) {
 // sizes ToolCallIdleTimeout from the profile rather than from a model name.
 func TestDefault_MiMoBuffersToolArgs(t *testing.T) {
 	reg := Default()
-	for _, id := range []string{"mimo-v2.5-pro", "mimo-v2.5", "mimo-v2.6-pro", "mimo-v2.6-flash"} {
+	for _, id := range []string{"mimo-v2.6-pro", "mimo-v2.6-flash"} {
 		if !mustLookup(t, reg, id).Streaming.BuffersToolArgs {
 			t.Errorf("%s: buffers_tool_args is false", id)
 		}
