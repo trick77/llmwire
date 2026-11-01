@@ -71,6 +71,20 @@ func TestDefault_MeasuredFactsMatchFindings(t *testing.T) {
 		}
 	})
 
+	t.Run("glm-5.3-flash reasoning overhead covers the measured depth", func(t *testing.T) {
+		p := mustLookup(t, reg, "glm-5.3-flash")
+		want := map[string]int{"low": 1024, "high": 5632}
+		if len(p.Reasoning.Overhead) != len(want) {
+			t.Errorf("overhead = %v, want exactly %v; max was not measured", p.Reasoning.Overhead, want)
+		}
+		for level, n := range want {
+			if p.Reasoning.Overhead[level] != n {
+				t.Errorf("overhead[%s] = %d, want %d (ZaiReasoningOverhead: high reasoned up to "+
+					"5166 tokens on a ~20k prompt, low up to 826)", level, p.Reasoning.Overhead[level], n)
+			}
+		}
+	})
+
 	t.Run("json_schema is supported despite the docs", func(t *testing.T) {
 		for _, id := range []string{"glm-5.3-flash", "mimo-v2.6-pro", "mimo-v2.6-flash"} {
 			p := mustLookup(t, reg, id)

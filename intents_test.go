@@ -219,6 +219,27 @@ func TestMaxAnswerTokens_MimoFlashNoKnobFitsADeepPass(t *testing.T) {
 	}
 }
 
+// glm-5.3-flash at high reasoned past the old 1024 allowance on a long
+// memory-refresh prompt: a 1900-token answer sent with a 2924 cap came back
+// cut, answer starved. Balanced resolves to high and now carries an allowance
+// above its measured depth.
+func TestMaxAnswerTokens_GlmFlashHighFitsALongPrompt(t *testing.T) {
+	c := testClient(t, Default())
+	for _, tc := range []struct {
+		name string
+		r    ReasoningRequest
+		want int
+	}{
+		{"balanced (high)", ReasoningBalanced(), 1900 + 5632},
+		{"minimal (low)", ReasoningMinimal(), 1900 + 1024},
+	} {
+		pl := mustPlan(t, c, ChatRequest{Model: "glm-5.3-flash", Messages: []Message{User("hi")}, Reasoning: tc.r, MaxAnswerTokens: ptr(1900)}, false)
+		if pl.req.MaxTokens == nil || *pl.req.MaxTokens != tc.want {
+			t.Errorf("%s: wire cap = %v, want %d", tc.name, pl.req.MaxTokens, tc.want)
+		}
+	}
+}
+
 // The resolved request is what a caller persists and logs, so it rides back on
 // both results.
 func TestReasoningSent_OnChatAndStream(t *testing.T) {
