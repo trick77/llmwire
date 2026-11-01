@@ -180,5 +180,6 @@ dead workaround labelled dead rather than deleted.
 - Default branch `master`; branch + PR, never push to `master`.
 - Commit subjects + PR titles: Go style `area: what` (`profiles: …`, `stream: …`), gated by ship; release
   notes list them by area.
+- Fresh clone: `ship hooks` before the first push (check, conform and init install it too); without the pre-push hook a push skips the gate.
 - A merge ships nothing: release by hand only (`gh workflow run Release -f bump=patch`).
 - `.yaml`, never `.yml`.
