@@ -14,7 +14,8 @@ serving `glm-5.3-flash`.
 
 The V2.6 pair was added on 2026-09-22 (`mimo-v2.6-pro`, `mimo-v2.6-flash`
 sections below); the Z.ai probes skipped on that run for want of a key, so every
-`glm-5.3-flash` line still dates from 2026-09-12.
+`glm-5.3-flash` line dates from 2026-09-12 except the reasoning overhead, measured
+2026-11-01.
 
 ## The three architecture questions
 
@@ -96,6 +97,7 @@ empty" failure, reproduced.
 | `needs_include_usage` | **false** | `UsageReportingWithoutStreamOptions` |
 | `json_object` | **true** | `ResponseFormatSupport` |
 | `json_schema` | **true** | `ResponseFormatSupport` |
+| `reasoning.overhead` | **low 1024, high 4096** (max absent) | `ZaiReasoningOverhead` |
 
 `thinking: {"type":"disabled"}` is refused:
 
@@ -115,6 +117,31 @@ rejects. Reasoning tokens scale with the accepted tiers: `low` 0, `high` 11,
 and nothing signals the cap was dropped, so sending the wrong parameter name here
 means unbounded output rather than an error. This is the most expensive silent
 failure found.
+
+**At `high`, reasoning grows with the prompt and outlasts the default
+allowance.** Measured 2026-11-01 by `ZaiReasoningOverhead`, after a consumer's
+memory refresh (`MaxAnswerTokens` 1900, `ReasoningBalanced` = high, wire cap
+2924) saw reasoning 459, 474 and 1600 and two calls cut at the cap (>=2834,
+>=2923, prompts up to 17.5k tokens), answer starved. The probe sends that shape:
+a memory-maintenance system prompt, a sectioned memory, a multi-turn
+transcript, a different one per sample, cap 16384 on `max_tokens`. Five samples
+per level and size, no call cut (every `finish_reason: stop`):
+
+| prompt tokens | `low` reasoning | `high` reasoning |
+|---|---|---|
+| ~2.8k | 183-324, p50 199 `[183 199 242 193 324]` | 542-1047, p50 871 `[542 871 1013 730 1047]` |
+| ~7.2k | 174-466, p50 275 `[174 308 224 466 275]` | 1110-2270, p50 1543 `[1110 1890 2270 1543 1432]` |
+| ~16.1k | 218-826, p50 260 `[218 260 246 448 826]` | 1476-3110, p50 2437 `[1476 2437 3110 2513 1820]` |
+| all 15 | 174-826, p50 246 | 542-3110, p50 1476 |
+
+`low` hardly moves with input; `high` roughly triples from 3k to 16k. The
+profile sets `overhead: {low: 1024, high: 4096}`: `low` is the 15-draw max
+(nearest-rank p95 at n=15) rounded up to 512; `high` is the measured max 3110
+plus headroom for prompts past ~16k, which the probe did not cover and on which
+`high` keeps growing (production saw 17.5k). The one-word reading (`low` 0,
+`high` 11) said nothing about this. `max` was not sampled and keeps
+`DefaultReasoningOverhead`, as does the no-knob case, which resolves to the
+`max` default; both are known short.
 
 ### `mimo-v2.5-pro`
 
@@ -487,6 +514,11 @@ per-model tables a full `-run Probe` sweep is ~75 calls before the ladder probe'
 40, so the documented command was dying partway at the old ceiling and reading as
 a harness failure rather than as the guard working. The USD breaker is unchanged
 and is what bounds real spend: a full sweep is about $0.10 against $0.50.
+
+The 2026-11-01 overhead run (`ZaiReasoningOverhead`) was **30 calls, 261748
+prompt and 48992 completion tokens, roughly $0.064** at the list rate, run
+under `LLMWIRE_EVAL_MAX_CALLS=30` and a 90-minute deadline: 878 seconds, 10-64
+seconds per call, the `high` calls on 16k prompts the slowest.
 
 ## Still open
 

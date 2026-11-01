@@ -1011,3 +1011,423 @@ func cacheProbePrompt() string {
 	b.WriteString("\nReply with the single word: ok")
 	return b.String()
 }
+
+// --- reasoning overhead: how far does glm-5.3-flash think on a long input? ---
+//
+// reasoning.overhead is the allowance MaxAnswerTokens adds beside the answer,
+// and only a measured count may set it. glm-5.3-flash had none, so
+// DefaultReasoningOverhead (1024) applied at every level. A consumer's memory
+// refresh (MaxAnswerTokens 1900, ReasoningBalanced = high, wire cap 2924) saw
+// reasoning_tokens 459, 474, 1600, >=2834 and >=2923 in production, the last
+// two cut with finish_reason length and the answer starved, and the count grew
+// with the prompt (5k-17.5k tokens). A one-word prompt (ZaiReasoningEffortValues:
+// low 0, high 11) says nothing about that.
+//
+// So this sends that shape: a system prompt maintaining a sectioned user
+// memory, an existing memory, a multi-turn transcript, at three input sizes,
+// five samples per level and size. Every sample is a different transcript, so
+// the spread covers content and not only sampling. The cap is 16384 on
+// max_tokens, the name this endpoint honours (it ACCEPTS max_completion_tokens
+// and ignores it), far above the answer asked for, so nothing is cut short of a
+// 16k think. Temperature and top_p are the profile's recommended values, what
+// Chat sends.
+//
+// The FINDING lines are min/p50/p95/max per cell and per level, nearest-rank,
+// so at n <= 20 the p95 IS the max: five or fifteen draws carry no tail
+// estimate beyond that. Exactly 30 calls; run it under LLMWIRE_EVAL_MAX_CALLS=30.
+func TestProbe_ZaiReasoningOverhead(t *testing.T) {
+	const (
+		model     = "glm-5.3-flash"
+		samples   = 5
+		capTokens = 16384
+		// A 16k-token call on a slow tail must not turn a count into a
+		// timeout floor.
+		within = 10 * time.Minute
+	)
+	c := zaiEndpoint.clientWithin(t, within)
+
+	sizes := []struct {
+		name   string
+		tokens int
+	}{{"3k", 3000}, {"8k", 8000}, {"18k", 18000}}
+	levels := []string{"low", "high"}
+
+	type draw struct {
+		prompt, completion, reasoning int64
+		finish                        string
+	}
+	cells := map[string][]draw{}
+	var promptSum, completionSum int64
+	var calls, failed int
+
+	report := func() {
+		t.Logf("calls=%d failed=%d prompt_tokens=%d completion_tokens=%d",
+			calls, failed, promptSum, completionSum)
+		for _, level := range levels {
+			var pooled []int64
+			var cut int
+			for _, sz := range sizes {
+				ds := cells[level+"/"+sz.name]
+				var rs []int64
+				var ps []int64
+				var lengths int
+				for _, d := range ds {
+					rs = append(rs, d.reasoning)
+					ps = append(ps, d.prompt)
+					if d.finish == "length" {
+						lengths++
+					}
+				}
+				pooled = append(pooled, rs...)
+				cut += lengths
+				if len(rs) == 0 {
+					t.Logf("FINDING %s effort=%s size=%s: no clean sample", model, level, sz.name)
+					continue
+				}
+				s := quantiles(rs)
+				p := quantiles(ps)
+				t.Logf("FINDING %s effort=%s size=%s (prompt %d-%d): reasoning n=%d min=%d p50=%d p95=%d max=%d "+
+					"length=%d raw=%v", model, level, sz.name, p.min, p.max, len(rs), s.min, s.p50, s.p95, s.max,
+					lengths, rs)
+			}
+			if len(pooled) == 0 {
+				continue
+			}
+			s := quantiles(pooled)
+			t.Logf("FINDING %s effort=%s all sizes: reasoning n=%d min=%d p50=%d p95=%d max=%d length=%d; "+
+				"p95 rounded up to 512 = %d", model, level, len(pooled), s.min, s.p50, s.p95, s.max, cut,
+				(s.p95+511)/512*512)
+		}
+	}
+	defer report()
+
+	// Sample-major, so a run cut short by the spend guard still holds a draw
+	// in every cell rather than all of some and none of others.
+	for i := 0; i < samples; i++ {
+		for _, sz := range sizes {
+			for _, level := range levels {
+				system, user := memoryRefreshPrompt(sz.tokens, i)
+				b := body{
+					"model": model,
+					"messages": []any{
+						map[string]any{"role": "system", "content": system},
+						map[string]any{"role": "user", "content": user},
+					},
+					"stream":           true,
+					"reasoning_effort": level,
+					"max_tokens":       capTokens,
+					"temperature":      1.0,
+					"top_p":            0.95,
+				}
+				start := time.Now()
+				res, err := streamWithin(t, c, b, within)
+				calls++
+				promptSum += valueOr(res.Usage.Input.Total, 0)
+				completionSum += valueOr(res.Usage.Output.Total, 0)
+				// A refusal of the first call is the request shape, and every
+				// later call would repeat it. Past that, a refusal (a 429, an
+				// overload) costs no tokens and loses one draw, not the run.
+				var apiErr *APIError
+				if calls == 1 && asAPIError(err, &apiErr) {
+					_, why := accepted(res, err)
+					t.Fatalf("FINDING %s effort=%s: REJECTED: %s", model, level, why)
+				}
+				d := draw{
+					prompt:     valueOr(res.Usage.Input.Total, -1),
+					completion: valueOr(res.Usage.Output.Total, -1),
+					reasoning:  valueOr(res.Usage.Output.Reasoning, -1),
+					finish:     res.FinishReason,
+				}
+				t.Logf("call %d effort=%s size=%s sample=%d: prompt=%d completion=%d reasoning=%d finish=%q "+
+					"content_chars=%d took=%s", calls, level, sz.name, i, d.prompt, d.completion, d.reasoning,
+					d.finish, len(res.Content), time.Since(start).Round(time.Second))
+				if err != nil || d.reasoning < 0 {
+					failed++
+					t.Logf("  not counted: err=%v reasoning lane reported=%v",
+						Redact(fmt.Sprint(err)), res.Usage.Output.Reasoning != nil)
+					continue
+				}
+				cells[level+"/"+sz.name] = append(cells[level+"/"+sz.name], d)
+			}
+		}
+	}
+
+	for _, level := range levels {
+		n := 0
+		for _, sz := range sizes {
+			n += len(cells[level+"/"+sz.name])
+		}
+		if n == 0 {
+			t.Skipf("inconclusive: effort=%s produced no clean sample", level)
+		}
+	}
+}
+
+type tokenQuantiles struct{ min, p50, p95, max int64 }
+
+// quantiles is nearest-rank: the ceil(q*n)-th smallest value, so every figure
+// is a draw that happened, never an interpolation between two.
+func quantiles(vs []int64) tokenQuantiles {
+	s := append([]int64(nil), vs...)
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+	rank := func(q float64) int64 {
+		k := int(q*float64(len(s))+0.999999) - 1
+		return s[max(0, min(k, len(s)-1))]
+	}
+	return tokenQuantiles{min: s[0], p50: rank(0.50), p95: rank(0.95), max: s[len(s)-1]}
+}
+
+// memoryRefreshPrompt builds a synthetic memory-refresh request of about
+// `tokens` prompt tokens (at ~4 characters a token; the call logs the real
+// count). seed varies the transcript, so the samples of one cell are
+// different conversations about the same person.
+func memoryRefreshPrompt(tokens, seed int) (system, user string) {
+	system = memoryRefreshSystem
+	var tr strings.Builder
+	budget := tokens*4 - len(system) - len(memoryRefreshExisting) - 200
+	for k := 0; tr.Len() < budget; k++ {
+		turn := memoryRefreshTurns[(k+seed*5)%len(memoryRefreshTurns)]
+		u, a := turn(k*7 + seed*11)
+		fmt.Fprintf(&tr, "User: %s\n\nAssistant: %s\n\n", u, a)
+	}
+	user = "EXISTING MEMORY\n\n" + memoryRefreshExisting + "\n\nNEW CONVERSATION\n\n" + tr.String() +
+		"Return the complete updated memory."
+	return system, user
+}
+
+const memoryRefreshSystem = `You maintain the long-term memory a personal assistant keeps about one user.
+You receive the current memory and a new conversation between the user and the assistant.
+Return the complete updated memory in exactly these sections, in this order:
+## Identity, ## Household, ## Work, ## Health, ## Interests, ## Preferences, ## Ongoing, ## Recent.
+
+Rules:
+- Keep only durable facts the assistant would need in a future conversation.
+- Merge each new fact into the section it belongs to; never duplicate a fact.
+- When a new fact contradicts an old one, keep the new one and drop the old one.
+- Drop anything stale, one-off or already resolved.
+- No speculation, no advice, nothing the user did not say or clearly confirm.
+- One short bullet per fact. The whole memory stays under 600 words.
+- Output the memory only, no preamble and no closing remark.`
+
+const memoryRefreshExisting = `## Identity
+- Name: Marco. 41, software engineer, lives in Zurich (Wipkingen) since 2019.
+- Grew up in Ticino; Italian native, German and English fluent, learning Japanese.
+- Prefers to be addressed informally.
+
+## Household
+- Partner Lena, a physiotherapist; daughter Sofia, 9, in third grade.
+- Dog Pixel, a four-year-old border collie mix, 21 kg at the last check.
+- Rented four-room flat, third floor, no lift; small balcony with herbs.
+- One car, a 2015 Skoda Octavia estate, used mostly on weekends.
+
+## Work
+- Backend engineer at a mid-size insurance company, team of six.
+- Main stack Java and Kotlin; pushing to move new services to Go.
+- Owns the billing integration and the nightly reconciliation jobs.
+- On call one week in six; dislikes the pager rota.
+- Works from home Mondays and Fridays.
+
+## Health
+- Runs three times a week, usually along the Limmat; long run on Sundays.
+- Training for the Zurich half marathon in April; target time under 1:50.
+- Mild lactose intolerance.
+- Sleeps badly when on call; trying to stop coffee after lunch.
+
+## Interests
+- Home lab: Proxmox host, a Synology NAS, Home Assistant, Pi-hole.
+- Cooks most evenings; likes Japanese and northern Italian food.
+- Book club once a month with former colleagues; mostly literary fiction.
+- Learning Japanese with Genki II and a weekly tutor on Thursday evenings.
+- Follows FC Lugano.
+
+## Preferences
+- Wants concrete steps over background explanations.
+- Metric units, CHF for money, 24-hour time.
+- Code examples in Go unless he asks otherwise.
+- Does not want product recommendations unless he asks for them.
+
+## Ongoing
+- Planning a family trip to Japan next year, three weeks, dates not fixed.
+- Kitchen renovation: collecting quotes, budget around CHF 28000.
+- Considering selling the car.
+- Evaluating whether to replace the NAS drives (four years old).
+
+## Recent
+- Sofia started piano lessons.
+- Pixel had a stomach upset after eating something in the park; recovered.
+- Finished reading the book club pick about a family in Trieste; liked it.`
+
+var (
+	refreshCities = []string{"Zurich", "Lucerne", "Basel", "Bern", "Lugano", "Winterthur", "St. Gallen"}
+	refreshMonths = []string{"March", "April", "May", "September", "October", "November"}
+	refreshDays   = []string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
+	refreshDishes = []string{"risotto alla milanese", "a Japanese curry", "polenta with mushrooms",
+		"okonomiyaki", "a vegetable lasagne", "pizzoccheri", "miso ramen"}
+	refreshServices = []string{"invoice-export", "grafana", "paperless", "nextcloud", "jellyfin", "gitea"}
+	refreshBooks    = []string{"a novel about a lighthouse keeper", "a memoir set in post-war Milan",
+		"a thriller set in Hokkaido", "a family saga in Sicily", "a short-story collection from Korea"}
+)
+
+func pick(xs []string, k int) string { return xs[k%len(xs)] }
+
+// memoryRefreshTurns are user/assistant pairs with slots, so a long
+// transcript repeats a topic without repeating its text.
+var memoryRefreshTurns = []func(k int) (string, string){
+	func(k int) (string, string) {
+		return fmt.Sprintf("Did a %d km run along the lake in %s this morning, pace around 5:%02d per km. "+
+				"My left knee felt off after km %d. Should I worry with the half marathon in %s?",
+				8+k%9, pick(refreshCities, k), 10+k%40, 3+k%5, pick(refreshMonths, k)),
+			"A knee that feels off after a few kilometres is usually load, not injury, but it is worth " +
+				"watching. Take two easy days, then do a short flat run and note when it starts. If it is " +
+				"the outside of the knee and gets worse on descents, that points at the IT band: foam roll " +
+				"the outer thigh, add side planks and clamshells three times a week, and keep the long run " +
+				"at the same distance for a week instead of adding to it. If there is swelling, sharp pain, " +
+				"or it hurts walking down stairs, stop running and have it looked at. You have enough weeks " +
+				"before race day that one cautious week costs you nothing on the target time."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("I moved the Proxmox box to the basement rack. The %s VM keeps losing its NFS "+
+				"mount after a reboot. The NAS is at 192.168.%d.%d now, I changed the subnet last week.",
+				pick(refreshServices, k), 10+k%40, 2+k%200),
+			"The mount most likely races the network on boot, and the subnet change may have left an old " +
+				"address in the export rules. First, on the NAS, check that the NFS permission entry names " +
+				"the new subnet; a stale rule fails silently. Then in the VM replace the plain fstab line " +
+				"with a systemd automount: add noauto,x-systemd.automount,_netdev to the options so the " +
+				"share mounts on first access instead of at boot. Run systemctl daemon-reload and reboot " +
+				"once to confirm. If it still fails, journalctl -u the mount unit shows whether it is a " +
+				"timeout or a permission error, which tells you which side to look at."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("Making %s for %d people on %s. Lena has gone fully vegetarian since last month, "+
+				"and one guest is gluten-free. What should I swap?",
+				pick(refreshDishes, k), 4+k%6, pick(refreshDays, k)),
+			"Most of it adapts cleanly. Use a vegetable stock you have tasted on its own, since it carries " +
+				"the dish once meat is gone; a spoon of white miso or a parmesan rind adds the depth the meat " +
+				"stock would have given (rind is fine for a vegetarian who eats cheese, check with Lena on " +
+				"rennet). For the gluten-free guest, check the stock cube and any soy sauce, swap to tamari, " +
+				"and keep a separate pot and spoon if there is pasta or flour anywhere else in the meal. Make " +
+				"the gluten-free portion first and set it aside before anything else touches the pan. Plan " +
+				"a little more of the vegetarian side, it tends to go first."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("We fixed the Japan dates: %d %s to %d %s, flying into %s. I want two days in "+
+				"Nara with Sofia. Is the JR pass still worth it after the price increase?",
+				1+k%20, pick(refreshMonths, k), 18+k%10, pick(refreshMonths, k+1),
+				[]string{"Tokyo Haneda", "Osaka Kansai", "Tokyo Narita"}[k%3]),
+			"After the increase the national pass only pays off if you do several long Shinkansen legs " +
+				"inside its validity window. Price your actual route with single tickets: Tokyo to Kyoto and " +
+				"back, plus a side trip, is usually below the seven-day pass. Regional passes such as the " +
+				"Kansai area pass are often the better deal for Kyoto, Nara and Osaka. Children under twelve " +
+				"pay half on most tickets, so Sofia's fare is cheap either way. For Nara, stay one night " +
+				"rather than day-tripping: the deer park and Todai-ji are much calmer before nine in the " +
+				"morning, and that is the part a nine-year-old remembers."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("At work we are moving the billing service from %s to Go. About %d endpoints. "+
+				"I'm worried there is no maintained equivalent of the PDF library we use.",
+				[]string{"Java 11", "Kotlin", "Spring Boot 2"}[k%3], 20+k%60),
+			"Do the migration endpoint by endpoint behind the existing routing, not as a rewrite: put " +
+				"the Go service next to the old one and move traffic per route, so each step can be rolled " +
+				"back. For the PDF part, keep it where it is for now and call it over a small internal API; " +
+				"rendering is the least valuable thing to port first and the riskiest. Start with the " +
+				"read-only endpoints, compare responses from both services on mirrored traffic for a week, " +
+				"and only then move writes. Write the reconciliation job's checks as the acceptance test, " +
+				"since billing errors show up there first."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("The contractor quoted CHF %d for the kitchen, %d%% over our budget. The "+
+				"induction hob alone is CHF %d. Push back on cabinets or countertop?",
+				30000+k*350%9000, 5+k%20, 1800+k*90%1500),
+			"Ask for the quote itemised first: labour, cabinets, countertop, appliances and installation " +
+				"separately, so you are negotiating line items rather than a total. Cabinets are usually " +
+				"where the margin is, and a standard carcass with custom fronts gets most of the look for " +
+				"less. A countertop is hard to change later, so it is the worse place to save. Appliances " +
+				"you can often buy yourself at a lower price; check whether the contractor will install " +
+				"them without a surcharge. A second quote with the same itemised spec gives you leverage " +
+				"and a reality check on the labour figure."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("I'm on lesson %d of Genki II and I keep mixing up %s. Can you give me a short "+
+				"drill? My tutor session is on %s.",
+				13+k%11, []string{"ageru and kureru", "the passive and the causative", "you ni naru and koto ni naru",
+					"ba and tara"}[k%4], pick(refreshDays, k+3)),
+			"Here is a five-minute drill. Say each sentence out loud, then check it. First, decide who " +
+				"is the giver and who receives, and whose side the speaker is on; that choice decides the " +
+				"verb. Second, translate five sentences in each direction, changing only the people: my " +
+				"friend to me, me to my friend, my friend to my sister, my teacher to me, and me to my " +
+				"teacher. Third, write two sentences about your own week with each form. Bring the ones " +
+				"you hesitated on to the tutor; the hesitation is the useful part, not the right answers."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("Pixel was at the vet on %s, she's %d kg and the vet wants her at %d. She gets "+
+				"bored on the usual route along the river.", pick(refreshDays, k), 20+k%4, 18+k%2),
+			"A slow loss is the goal, about one percent of body weight a month. Weigh her food rather " +
+				"than using a cup, cut the daily amount by around ten percent, and count treats against it: " +
+				"use part of the kibble ration as training rewards. For boredom, sniffing tires a border " +
+				"collie mix more than distance. Vary the route twice a week, scatter part of her food on a " +
+				"lawn to search for, and add five minutes of trick training. A weekly weigh-in at the same " +
+				"time of day tells you whether the amount is right within a month."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("Doing the Zurich tax return. I paid CHF %d into pillar 3a this year and had "+
+				"%d home-office days. Can I deduct the standing desk?", 5000+k*137%2300, 60+k%60),
+			"The 3a contribution is deductible up to the annual maximum for employees with a pension " +
+				"fund; enter it with the bank certificate. Home office: Zurich generally does not allow a " +
+				"separate home-office deduction for employees if the employer provides a workplace, and " +
+				"the standing desk falls under that unless your employer requires home work and states it " +
+				"in writing. What does count is the flat-rate professional expense deduction, and travel " +
+				"costs for the days you commuted. Keep the receipt anyway; if your employer confirms the " +
+				"home-office requirement, you can claim actual costs instead of the flat rate."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("Our book club picked %s for %s. I found the first half slow. How do I lead "+
+				"the discussion without spoiling it for the two who are behind?",
+				pick(refreshBooks, k), pick(refreshMonths, k+2)),
+			"Structure the evening in two halves and say so up front: the first hour on the first half " +
+				"of the book only, then a break, and the rest open for whoever finished. Prepare three " +
+				"questions for the first half that do not depend on the ending: why the author starts where " +
+				"they do, which character you trusted early and why, and what the slow pace is doing. That " +
+				"last one turns your complaint into the discussion. Ask the two who are behind to say where " +
+				"they stopped, so everyone knows the line."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("By the way, keep answers shorter from now on, bullet points are fine. And stop "+
+				"suggesting %s, I tried it and it did nothing.",
+				[]string{"foam rolling", "meditation apps", "a sleep tracker", "blue-light glasses"}[k%4]),
+			"Understood. Shorter answers, bullets where they help, and I will not suggest that again."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("Sofia starts %s in %s and she is anxious about the new teacher. Any tips "+
+				"for the first week?", []string{"fourth grade", "the after-school club", "swimming lessons",
+				"a new piano teacher"}[k%4], pick(refreshMonths, k+4)),
+			"Make the unknown smaller. If you can, walk past the school or the venue with her before the " +
+				"first day and look at where she will go in. Ask her what she is worried about specifically " +
+				"and take each worry seriously rather than reassuring it away. Agree on a small routine for " +
+				"after school, for example ten minutes where she tells you one good and one hard thing. Most " +
+				"of the anxiety is about the first two days, so plan something she looks forward to on the " +
+				"first evening. If it has not eased after three weeks, a word with the teacher is reasonable."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("Started taking magnesium in the evening and I'm sleeping better, around %d "+
+				"hours now. I also stopped coffee after %d o'clock.", 6+k%3, 13+k%4),
+			"That is a good change, and the coffee cut-off probably does as much as the magnesium; " +
+				"caffeine's half-life is around five hours, so an afternoon cup is still active at bedtime. " +
+				"Keep the two changes stable for a few weeks before adding anything else, so you know what " +
+				"works. On-call weeks will disturb it regardless; on those, a fixed wake-up time matters " +
+				"more than the time you go to bed."
+	},
+	func(k int) (string, string) {
+		return fmt.Sprintf("Thinking about selling the car and going e-bike only. Commute is %d km each "+
+				"way with %d m of climb, and winters in %s are wet.", 6+k%12, 80+k*13%250, pick(refreshCities, k)),
+			"At that distance an e-bike is realistic all year if you set it up for winter: mudguards, " +
+				"lights that are visible in daylight, and studded or at least winter tyres for the icy days. " +
+				"Rain gear decides whether you keep doing it, so budget for a good jacket and overtrousers. " +
+				"For weekends, a car-sharing subscription and the occasional rental cover the trips the car " +
+				"was for. Try it for a month before selling: park the car and only use it if there is no " +
+				"other way, and count how often that happens."
+	},
+}

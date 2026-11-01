@@ -104,9 +104,25 @@ profiles:
       # entry: this model cannot be disabled, so it resolves to low, the
       # first of effort_values.
       balanced: high
-      # overhead ABSENT, NOT measured: DefaultReasoningOverhead (1024) applies
-      # at every level, and the notes below show it is short at max, where a
-      # 1024 cap produced zero content. No per-level count has been probed.
+      # MEASURED 2026-11-01, ZaiReasoningOverhead: a memory-refresh prompt
+      # (system prompt, sectioned memory, multi-turn transcript), cap 16384,
+      # five samples per level and prompt size, no call cut. Reasoning tokens:
+      #
+      #   prompt    low min/p50/max    high min/p50/max
+      #   ~2.8k     183 / 199 / 324     542 /  871 / 1047
+      #   ~7.2k     174 / 275 / 466    1110 / 1543 / 2270
+      #   ~16.1k    218 / 260 / 826    1476 / 2437 / 3110
+      #
+      # high grows with the prompt; low barely moves. low is the 15-draw max
+      # (= nearest-rank p95 at n=15, 826) rounded up to 512. high is 4096:
+      # the measured max 3110 plus headroom for prompts past ~16k, which the
+      # probe did not cover and on which high keeps growing. A consumer's
+      # production at high saw 459-1600 and two calls cut at the old 1024
+      # allowance (>=2834, >=2923, on prompts up to 17.5k).
+      # max ABSENT, NOT measured: DefaultReasoningOverhead (1024) applies
+      # there and to the no-knob case (default_effort max), and the notes
+      # below show it is short, where a 1024 cap produced zero content.
+      overhead: {low: 1024, high: 4096}
       # MEASURED: reasoning arrived on this delta field on every probe.
       stream_field: reasoning_content
 

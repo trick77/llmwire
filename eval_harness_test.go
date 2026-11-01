@@ -276,6 +276,20 @@ var (
 // look like a broken library.
 func (e endpoint) client(t *testing.T) *Client {
 	t.Helper()
+	return e.clientWithin(t, probeCallTimeout)
+}
+
+// probeCallTimeout is the whole-call bound of a probe client and of one
+// stream() call. Deliberately shorter than production: a probe that hangs
+// should fail the run quickly, and almost none of these questions needs a long
+// answer.
+const probeCallTimeout = 3 * time.Minute
+
+// clientWithin is client with another whole-call bound, for the one kind of
+// probe whose question IS a long answer: a reasoning count read off an
+// uncapped call, which a 3-minute cut would turn into a floor.
+func (e endpoint) clientWithin(t *testing.T, callTimeout time.Duration) *Client {
+	t.Helper()
 	evalGate(t)
 	base, key := strings.TrimSpace(os.Getenv(e.baseURLVar)), strings.TrimSpace(os.Getenv(e.apiKeyVar))
 	pv, err := Default().Provider(e.name)
@@ -299,13 +313,11 @@ func (e endpoint) client(t *testing.T) *Client {
 		BaseURL: base,
 		APIKey:  key,
 		// The host's own key header and required headers, as FromEnv sends.
-		APIKeyHeader: pv.APIKeyHeader,
-		Headers:      pv.Headers,
-		// Deliberately shorter than production: a probe that hangs should fail
-		// the run quickly, and none of these questions needs a long answer.
+		APIKeyHeader:  pv.APIKeyHeader,
+		Headers:       pv.Headers,
 		HeaderTimeout: 60 * time.Second,
 		IdleTimeout:   90 * time.Second,
-		CallTimeout:   3 * time.Minute,
+		CallTimeout:   callTimeout,
 	})
 }
 
@@ -331,6 +343,12 @@ func probeBody(model, prompt string) body {
 // actually sent.
 func stream(t *testing.T, c *Client, b body) (StreamResult, error) {
 	t.Helper()
+	return streamWithin(t, c, b, probeCallTimeout)
+}
+
+// streamWithin is stream with another bound, matching a clientWithin client.
+func streamWithin(t *testing.T, c *Client, b body, within time.Duration) (StreamResult, error) {
+	t.Helper()
 	model, _ := b["model"].(string)
 	theMeter.reserve(t, model)
 
@@ -338,7 +356,7 @@ func stream(t *testing.T, c *Client, b body) (StreamResult, error) {
 	if err != nil {
 		t.Fatalf("marshal probe body: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), within)
 	defer cancel()
 
 	res, err := c.RawStream(ctx, raw, nil)
