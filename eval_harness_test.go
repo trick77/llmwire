@@ -279,8 +279,8 @@ func (e endpoint) client(t *testing.T) *Client {
 	return e.clientWithin(t, probeCallTimeout)
 }
 
-// probeCallTimeout is the whole-call bound of a probe client and of one
-// stream() call. Deliberately shorter than production: a probe that hangs
+// probeCallTimeout is the whole-call bound of a probe client, which stream()
+// reads back off the client. Deliberately shorter than production: a probe that hangs
 // should fail the run quickly, and almost none of these questions needs a long
 // answer.
 const probeCallTimeout = 3 * time.Minute
@@ -340,14 +340,9 @@ func probeBody(model, prompt string) body {
 
 // stream sends a request and returns the result, metering the call. The model
 // is read back out of the body so the meter always attributes spend to what was
-// actually sent.
+// actually sent. The bound is the client's own whole-call cap, so a
+// clientWithin client's longer bound reaches the call without being restated.
 func stream(t *testing.T, c *Client, b body) (StreamResult, error) {
-	t.Helper()
-	return streamWithin(t, c, b, probeCallTimeout)
-}
-
-// streamWithin is stream with another bound, matching a clientWithin client.
-func streamWithin(t *testing.T, c *Client, b body, within time.Duration) (StreamResult, error) {
 	t.Helper()
 	model, _ := b["model"].(string)
 	theMeter.reserve(t, model)
@@ -356,7 +351,7 @@ func streamWithin(t *testing.T, c *Client, b body, within time.Duration) (Stream
 	if err != nil {
 		t.Fatalf("marshal probe body: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), within)
+	ctx, cancel := context.WithTimeout(context.Background(), c.cap)
 	defer cancel()
 
 	res, err := c.RawStream(ctx, raw, nil)

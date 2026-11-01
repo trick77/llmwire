@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1024,39 +1027,50 @@ func cacheProbePrompt() string {
 // low 0, high 11) says nothing about that.
 //
 // So this sends that shape: a system prompt maintaining a sectioned user
-// memory, an existing memory, a multi-turn transcript, at three input sizes,
+// memory, an existing memory, a multi-turn transcript, at three input sizes
+// (about 3k, 8k and 20k prompt tokens, the last past production's 17.5k),
 // five samples per level and size. Every sample is a different transcript, so
-// the spread covers content and not only sampling. The cap is 16384 on
-// max_tokens, the name this endpoint honours (it ACCEPTS max_completion_tokens
-// and ignores it), far above the answer asked for, so nothing is cut short of a
-// 16k think. Temperature and top_p are the profile's recommended values, what
+// the spread covers content and not only sampling; both levels of one sample
+// get the identical prompt. The cap is 16384 on max_tokens, the name this
+// endpoint honours (it ACCEPTS max_completion_tokens and ignores it), far
+// above the answer asked for. A draw cut by it anyway (finish_reason length)
+// is only a floor: it is counted and logged apart, never fed into the
+// figures. Temperature and top_p are the profile's recommended values, what
 // Chat sends.
 //
 // The FINDING lines are min/p50/p95/max per cell and per level, nearest-rank,
 // so at n <= 20 the p95 IS the max: five or fifteen draws carry no tail
-// estimate beyond that. Exactly 30 calls; run it under LLMWIRE_EVAL_MAX_CALLS=30.
+// estimate beyond that.
+//
+// OPT-IN, beyond LLMWIRE_EVAL: 30 calls of 7-90 seconds each, 13-15
+// minutes, past the suite's default deadline and go test's default -timeout,
+// so a `-run Probe` sweep skips it. Run it alone:
+//
+//	LLMWIRE_EVAL=1 LLMWIRE_EVAL_OVERHEAD=1 LLMWIRE_EVAL_MAX_CALLS=30 \
+//	LLMWIRE_EVAL_DEADLINE=60m go test -run Probe_ZaiReasoningOverhead -v -timeout 70m .
 func TestProbe_ZaiReasoningOverhead(t *testing.T) {
 	const (
 		model     = "glm-5.3-flash"
 		samples   = 5
 		capTokens = 16384
-		// A 16k-token call on a slow tail must not turn a count into a
-		// timeout floor.
-		within = 10 * time.Minute
 	)
-	c := zaiEndpoint.clientWithin(t, within)
+	evalGate(t)
+	if os.Getenv("LLMWIRE_EVAL_OVERHEAD") != "1" {
+		t.Skip("live probe: 30 long calls, about 15 minutes; set LLMWIRE_EVAL_OVERHEAD=1 and see the doc comment")
+	}
+	// A 16k-token call on a slow tail must not turn a count into a timeout
+	// floor.
+	c := zaiEndpoint.clientWithin(t, 10*time.Minute)
 
 	sizes := []struct {
 		name   string
 		tokens int
-	}{{"3k", 3000}, {"8k", 8000}, {"18k", 18000}}
+	}{{"3k", 3000}, {"8k", 8000}, {"20k", 20000}}
 	levels := []string{"low", "high"}
 
-	type draw struct {
-		prompt, completion, reasoning int64
-		finish                        string
-	}
+	type draw struct{ prompt, reasoning int64 }
 	cells := map[string][]draw{}
+	cut := map[string][]draw{}
 	var promptSum, completionSum int64
 	var calls, failed int
 
@@ -1065,38 +1079,35 @@ func TestProbe_ZaiReasoningOverhead(t *testing.T) {
 			calls, failed, promptSum, completionSum)
 		for _, level := range levels {
 			var pooled []int64
-			var cut int
+			var floors []int64
 			for _, sz := range sizes {
-				ds := cells[level+"/"+sz.name]
-				var rs []int64
-				var ps []int64
-				var lengths int
-				for _, d := range ds {
+				key := level + "/" + sz.name
+				var rs, ps, fs []int64
+				for _, d := range cells[key] {
 					rs = append(rs, d.reasoning)
 					ps = append(ps, d.prompt)
-					if d.finish == "length" {
-						lengths++
-					}
+				}
+				for _, d := range cut[key] {
+					fs = append(fs, d.reasoning)
 				}
 				pooled = append(pooled, rs...)
-				cut += lengths
+				floors = append(floors, fs...)
 				if len(rs) == 0 {
-					t.Logf("FINDING %s effort=%s size=%s: no clean sample", model, level, sz.name)
+					t.Logf("FINDING %s effort=%s size=%s: no clean sample; cut (floors) %v", model, level, sz.name, fs)
 					continue
 				}
-				s := quantiles(rs)
-				p := quantiles(ps)
-				t.Logf("FINDING %s effort=%s size=%s (prompt %d-%d): reasoning n=%d min=%d p50=%d p95=%d max=%d "+
-					"length=%d raw=%v", model, level, sz.name, p.min, p.max, len(rs), s.min, s.p50, s.p95, s.max,
-					lengths, rs)
+				s, p := quantiles(rs), quantiles(ps)
+				t.Logf("FINDING %s effort=%s prompt %d-%d: reasoning n=%d min=%d p50=%d p95=%d max=%d raw=%v; "+
+					"cut at the cap (floors, not counted) %v", model, level, p.min, p.max, len(rs),
+					s.min, s.p50, s.p95, s.max, rs, fs)
 			}
 			if len(pooled) == 0 {
 				continue
 			}
 			s := quantiles(pooled)
-			t.Logf("FINDING %s effort=%s all sizes: reasoning n=%d min=%d p50=%d p95=%d max=%d length=%d; "+
-				"p95 rounded up to 512 = %d", model, level, len(pooled), s.min, s.p50, s.p95, s.max, cut,
-				(s.p95+511)/512*512)
+			t.Logf("FINDING %s effort=%s all sizes: reasoning n=%d min=%d p50=%d p95=%d max=%d; "+
+				"max rounded up to 512 = %d; cut (floors) %v", model, level, len(pooled),
+				s.min, s.p50, s.p95, s.max, (s.max+511)/512*512, floors)
 		}
 	}
 	defer report()
@@ -1105,8 +1116,8 @@ func TestProbe_ZaiReasoningOverhead(t *testing.T) {
 	// in every cell rather than all of some and none of others.
 	for i := 0; i < samples; i++ {
 		for _, sz := range sizes {
+			system, user := memoryRefreshPrompt(sz.tokens, i)
 			for _, level := range levels {
-				system, user := memoryRefreshPrompt(sz.tokens, i)
 				b := body{
 					"model": model,
 					"messages": []any{
@@ -1120,34 +1131,38 @@ func TestProbe_ZaiReasoningOverhead(t *testing.T) {
 					"top_p":            0.95,
 				}
 				start := time.Now()
-				res, err := streamWithin(t, c, b, within)
+				res, err := stream(t, c, b)
 				calls++
 				promptSum += valueOr(res.Usage.Input.Total, 0)
 				completionSum += valueOr(res.Usage.Output.Total, 0)
-				// A refusal of the first call is the request shape, and every
-				// later call would repeat it. Past that, a refusal (a 429, an
-				// overload) costs no tokens and loses one draw, not the run.
+				// A 4xx other than 429 is the request shape, and every later
+				// call would repeat it. A 429, a 5xx or a cut connection
+				// costs one draw, not the run; never retried.
 				var apiErr *APIError
-				if calls == 1 && asAPIError(err, &apiErr) {
+				if asAPIError(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 &&
+					apiErr.StatusCode != 429 {
 					_, why := accepted(res, err)
 					t.Fatalf("FINDING %s effort=%s: REJECTED: %s", model, level, why)
 				}
 				d := draw{
-					prompt:     valueOr(res.Usage.Input.Total, -1),
-					completion: valueOr(res.Usage.Output.Total, -1),
-					reasoning:  valueOr(res.Usage.Output.Reasoning, -1),
-					finish:     res.FinishReason,
+					prompt:    valueOr(res.Usage.Input.Total, -1),
+					reasoning: valueOr(res.Usage.Output.Reasoning, -1),
 				}
 				t.Logf("call %d effort=%s size=%s sample=%d: prompt=%d completion=%d reasoning=%d finish=%q "+
-					"content_chars=%d took=%s", calls, level, sz.name, i, d.prompt, d.completion, d.reasoning,
-					d.finish, len(res.Content), time.Since(start).Round(time.Second))
-				if err != nil || d.reasoning < 0 {
+					"content_chars=%d took=%s", calls, level, sz.name, i, d.prompt,
+					valueOr(res.Usage.Output.Total, -1), d.reasoning, res.FinishReason, len(res.Content),
+					time.Since(start).Round(time.Second))
+				key := level + "/" + sz.name
+				switch {
+				case err != nil || d.reasoning < 0:
 					failed++
 					t.Logf("  not counted: err=%v reasoning lane reported=%v",
 						Redact(fmt.Sprint(err)), res.Usage.Output.Reasoning != nil)
-					continue
+				case res.FinishReason == "length":
+					cut[key] = append(cut[key], d)
+				default:
+					cells[key] = append(cells[key], d)
 				}
-				cells[level+"/"+sz.name] = append(cells[level+"/"+sz.name], d)
 			}
 		}
 	}
@@ -1168,27 +1183,28 @@ type tokenQuantiles struct{ min, p50, p95, max int64 }
 // quantiles is nearest-rank: the ceil(q*n)-th smallest value, so every figure
 // is a draw that happened, never an interpolation between two.
 func quantiles(vs []int64) tokenQuantiles {
-	s := append([]int64(nil), vs...)
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
+	s := slices.Clone(vs)
+	slices.Sort(s)
 	rank := func(q float64) int64 {
-		k := int(q*float64(len(s))+0.999999) - 1
+		k := int(math.Ceil(q*float64(len(s)))) - 1
 		return s[max(0, min(k, len(s)-1))]
 	}
 	return tokenQuantiles{min: s[0], p50: rank(0.50), p95: rank(0.95), max: s[len(s)-1]}
 }
 
+// memoryRefreshCharsPerToken is glm-5.3-flash's prompt_tokens against the
+// characters of this prompt, measured 2026-11-01: 12495 chars -> 2809 tokens,
+// 32364 -> 7241, 72071 -> 16085, 4.45-4.48 throughout.
+const memoryRefreshCharsPerToken = 4.47
+
 // memoryRefreshPrompt builds a synthetic memory-refresh request of about
-// `tokens` prompt tokens (at ~4 characters a token; the call logs the real
-// count). seed varies the transcript, so the samples of one cell are
-// different conversations about the same person.
+// `tokens` prompt tokens (the call logs the real count). seed varies the
+// transcript, so the samples of one cell are different conversations about
+// the same person.
 func memoryRefreshPrompt(tokens, seed int) (system, user string) {
 	system = memoryRefreshSystem
 	var tr strings.Builder
-	budget := tokens*4 - len(system) - len(memoryRefreshExisting) - 200
+	budget := int(float64(tokens)*memoryRefreshCharsPerToken) - len(system) - len(memoryRefreshExisting) - 200
 	for k := 0; tr.Len() < budget; k++ {
 		turn := memoryRefreshTurns[(k+seed*5)%len(memoryRefreshTurns)]
 		u, a := turn(k*7 + seed*11)

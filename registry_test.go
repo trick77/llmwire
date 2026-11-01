@@ -73,15 +73,19 @@ func TestDefault_MeasuredFactsMatchFindings(t *testing.T) {
 
 	t.Run("glm-5.3-flash reasoning overhead covers the measured depth", func(t *testing.T) {
 		p := mustLookup(t, reg, "glm-5.3-flash")
-		want := map[string]int{"low": 1024, "high": 4096}
+		want := map[string]int{"low": 1024, "high": 5632, "max": 5632}
 		if len(p.Reasoning.Overhead) != len(want) {
-			t.Errorf("overhead = %v, want exactly %v; max was not measured", p.Reasoning.Overhead, want)
+			t.Errorf("overhead = %v, want exactly %v", p.Reasoning.Overhead, want)
 		}
 		for level, n := range want {
 			if p.Reasoning.Overhead[level] != n {
 				t.Errorf("overhead[%s] = %d, want %d (ZaiReasoningOverhead: high reasoned up to "+
-					"3110 tokens on a ~16k prompt, low up to 826)", level, p.Reasoning.Overhead[level], n)
+					"5166 tokens on a ~20k prompt, low up to 826; max is a floor at high's figure)",
+					level, p.Reasoning.Overhead[level], n)
 			}
+		}
+		if p.Reasoning.Overhead["max"] < p.Reasoning.Overhead["high"] {
+			t.Error("overhead max is below high: the deeper level cannot think less")
 		}
 	})
 

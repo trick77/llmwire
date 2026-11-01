@@ -104,25 +104,34 @@ profiles:
       # entry: this model cannot be disabled, so it resolves to low, the
       # first of effort_values.
       balanced: high
-      # MEASURED 2026-11-01, ZaiReasoningOverhead: a memory-refresh prompt
-      # (system prompt, sectioned memory, multi-turn transcript), cap 16384,
-      # five samples per level and prompt size, no call cut. Reasoning tokens:
+      # low and high MEASURED 2026-11-01, ZaiReasoningOverhead, two runs: a
+      # memory-refresh prompt (system prompt, sectioned memory, multi-turn
+      # transcript), cap 16384, five samples per level and prompt size, no
+      # call cut in either run. Reasoning tokens, min / p50 / max:
       #
-      #   prompt    low min/p50/max    high min/p50/max
-      #   ~2.8k     183 / 199 / 324     542 /  871 / 1047
-      #   ~7.2k     174 / 275 / 466    1110 / 1543 / 2270
-      #   ~16.1k    218 / 260 / 826    1476 / 2437 / 3110
+      #   prompt    low              high
+      #   ~2.8k     183 / 199 / 324   542 /  871 / 1047   run 1
+      #   ~7.2k     174 / 275 / 466  1110 / 1543 / 2270   run 1
+      #   ~16.1k    218 / 260 / 826  1476 / 2437 / 3110   run 1
+      #   ~3.1k     164 / 188 / 381   517 /  836 / 1450   run 2
+      #   ~8.0k     134 / 233 / 315   861 / 1529 / 1689   run 2
+      #   ~20.0k    254 / 295 / 400  1032 / 1322 / 5166   run 2
       #
-      # high grows with the prompt; low barely moves. low is the 15-draw max
-      # (= nearest-rank p95 at n=15, 826) rounded up to 512. high is 4096:
-      # the measured max 3110 plus headroom for prompts past ~16k, which the
-      # probe did not cover and on which high keeps growing. A consumer's
-      # production at high saw 459-1600 and two calls cut at the old 1024
-      # allowance (>=2834, >=2923, on prompts up to 17.5k).
-      # max ABSENT, NOT measured: DefaultReasoningOverhead (1024) applies
-      # there and to the no-knob case (default_effort max), and the notes
-      # below show it is short, where a 1024 cap produced zero content.
-      overhead: {low: 1024, high: 4096}
+      # Each figure is the max of the 30 clean draws rounded up to 512: low
+      # 826 -> 1024, high 5166 -> 5632. low barely moves with input. high
+      # mostly sits at 0.5k-2.6k and grows with the prompt, then takes a
+      # deep pass: one draw in five on a 20k prompt reasoned 5166. A
+      # consumer's production at high saw 459-1600 and two calls cut at the
+      # old 1024 allowance (>=2834, >=2923, prompts up to 17.5k). Nothing
+      # past 20k was measured, and a fixed per-level figure cannot follow
+      # the input size.
+      # max NOT measured, a FLOOR: max thinks at least as long as high, so
+      # it takes high's figure rather than the 1024 default, which the notes
+      # below show is short (a 1024 cap at max produced zero content). The
+      # no-knob case resolves to default_effort max and reads it too. Same
+      # move as mimo-v2.6-flash's `default: 8192`: a budget above what was
+      # seen, not a depth.
+      overhead: {low: 1024, high: 5632, max: 5632}
       # MEASURED: reasoning arrived on this delta field on every probe.
       stream_field: reasoning_content
 

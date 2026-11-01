@@ -97,7 +97,7 @@ empty" failure, reproduced.
 | `needs_include_usage` | **false** | `UsageReportingWithoutStreamOptions` |
 | `json_object` | **true** | `ResponseFormatSupport` |
 | `json_schema` | **true** | `ResponseFormatSupport` |
-| `reasoning.overhead` | **low 1024, high 4096** (max absent) | `ZaiReasoningOverhead` |
+| `reasoning.overhead` | **low 1024, high 5632** (max 5632, a floor, not measured) | `ZaiReasoningOverhead` |
 
 `thinking: {"type":"disabled"}` is refused:
 
@@ -124,24 +124,35 @@ memory refresh (`MaxAnswerTokens` 1900, `ReasoningBalanced` = high, wire cap
 2924) saw reasoning 459, 474 and 1600 and two calls cut at the cap (>=2834,
 >=2923, prompts up to 17.5k tokens), answer starved. The probe sends that shape:
 a memory-maintenance system prompt, a sectioned memory, a multi-turn
-transcript, a different one per sample, cap 16384 on `max_tokens`. Five samples
-per level and size, no call cut (every `finish_reason: stop`):
+transcript, a different one per sample and the same one for both levels of a
+sample, cap 16384 on `max_tokens`. Five samples per level and size, two runs,
+no call cut in either (every `finish_reason: stop`). Run 2 recalibrated the
+prompt builder (4.47 chars a token, measured off run 1) to reach past
+production's 17.5k:
 
-| prompt tokens | `low` reasoning | `high` reasoning |
-|---|---|---|
-| ~2.8k | 183-324, p50 199 `[183 199 242 193 324]` | 542-1047, p50 871 `[542 871 1013 730 1047]` |
-| ~7.2k | 174-466, p50 275 `[174 308 224 466 275]` | 1110-2270, p50 1543 `[1110 1890 2270 1543 1432]` |
-| ~16.1k | 218-826, p50 260 `[218 260 246 448 826]` | 1476-3110, p50 2437 `[1476 2437 3110 2513 1820]` |
-| all 15 | 174-826, p50 246 | 542-3110, p50 1476 |
+| run | prompt tokens | `low` reasoning | `high` reasoning |
+|---|---|---|---|
+| 1 | ~2.8k | 183-324, p50 199 `[183 199 242 193 324]` | 542-1047, p50 871 `[542 871 1013 730 1047]` |
+| 1 | ~7.2k | 174-466, p50 275 `[174 308 224 466 275]` | 1110-2270, p50 1543 `[1110 1890 2270 1543 1432]` |
+| 1 | ~16.1k | 218-826, p50 260 `[218 260 246 448 826]` | 1476-3110, p50 2437 `[1476 2437 3110 2513 1820]` |
+| 2 | ~3.1k | 164-381, p50 188 `[164 381 188 182 256]` | 517-1450, p50 836 `[517 1450 1131 836 804]` |
+| 2 | ~8.0k | 134-315, p50 233 `[266 134 218 315 233]` | 861-1689, p50 1529 `[966 861 1663 1529 1689]` |
+| 2 | ~20.0k | 254-400, p50 295 `[258 400 295 380 254]` | 1032-5166, p50 1322 `[1322 1265 2599 5166 1032]` |
 
-`low` hardly moves with input; `high` roughly triples from 3k to 16k. The
-profile sets `overhead: {low: 1024, high: 4096}`: `low` is the 15-draw max
-(nearest-rank p95 at n=15) rounded up to 512; `high` is the measured max 3110
-plus headroom for prompts past ~16k, which the probe did not cover and on which
-`high` keeps growing (production saw 17.5k). The one-word reading (`low` 0,
-`high` 11) said nothing about this. `max` was not sampled and keeps
-`DefaultReasoningOverhead`, as does the no-knob case, which resolves to the
-`max` default; both are known short.
+`low` hardly moves with input. `high` mostly sits at 0.5k-2.6k and grows with
+the prompt, then takes a deep pass: one draw in five on a 20k prompt reasoned
+5166, twice anything else seen. Run 1 alone would have set `high` at 3584 and
+missed it. The profile sets `overhead: {low: 1024, high: 5632, max: 5632}`:
+`low` and `high` are the max of the 30 clean draws rounded up to 512. `max` was
+not sampled; it is a floor at `high`'s figure, since the deeper level cannot be
+budgeted less than the shallower one and the 1024 default is known short at
+max (the notes: a 1024 cap produced zero content). The no-knob case resolves
+to the `max` default and reads the same figure. The one-word reading (`low` 0,
+`high` 11) said nothing about any of this.
+
+**Known limit: a fixed per-level allowance cannot follow input size.** `high`
+needs ~1.5k on a 3k prompt and was seen at 5k on a 20k one, so 5632 over-reserves
+short calls and still guarantees nothing past 20k, which was not measured.
 
 ### `mimo-v2.5-pro`
 
@@ -515,10 +526,13 @@ per-model tables a full `-run Probe` sweep is ~75 calls before the ladder probe'
 a harness failure rather than as the guard working. The USD breaker is unchanged
 and is what bounds real spend: a full sweep is about $0.10 against $0.50.
 
-The 2026-11-01 overhead run (`ZaiReasoningOverhead`) was **30 calls, 261748
-prompt and 48992 completion tokens, roughly $0.064** at the list rate, run
-under `LLMWIRE_EVAL_MAX_CALLS=30` and a 90-minute deadline: 878 seconds, 10-64
-seconds per call, the `high` calls on 16k prompts the slowest.
+The 2026-11-01 overhead runs (`ZaiReasoningOverhead`, opt-in through
+`LLMWIRE_EVAL_OVERHEAD=1`) were **60 calls in two runs of 30, roughly $0.134**
+at the list rate: run 1 261748 prompt and 48992 completion tokens, ~$0.064,
+878 seconds; run 2 310914 prompt and 47203 completion tokens, ~$0.070, 759
+seconds. 7-86 seconds per call, the deep `high` pass on a 20k prompt the
+slowest. Each ran alone under `LLMWIRE_EVAL_MAX_CALLS=30`, a raised
+`LLMWIRE_EVAL_DEADLINE` and `-timeout`.
 
 ## Still open
 
