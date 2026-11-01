@@ -1039,8 +1039,9 @@ func cacheProbePrompt() string {
 // Chat sends.
 //
 // The FINDING lines are min/p50/p95/max per cell and per level, nearest-rank,
-// so at n <= 20 the p95 IS the max: five or fifteen draws carry no tail
-// estimate beyond that.
+// so at n < 20 the p95 IS the max: five or fifteen draws carry no tail
+// estimate beyond that. The "this run's max rounded up to 512" line covers one
+// run only; the profile takes the max over every run recorded in FINDINGS.md.
 //
 // OPT-IN, beyond LLMWIRE_EVAL: 30 calls of 7-90 seconds each, 13-15
 // minutes, past the suite's default deadline and go test's default -timeout,
@@ -1085,7 +1086,11 @@ func TestProbe_ZaiReasoningOverhead(t *testing.T) {
 				var rs, ps, fs []int64
 				for _, d := range cells[key] {
 					rs = append(rs, d.reasoning)
-					ps = append(ps, d.prompt)
+					// An unreported prompt total says nothing about size; its
+					// reasoning count still stands.
+					if d.prompt >= 0 {
+						ps = append(ps, d.prompt)
+					}
 				}
 				for _, d := range cut[key] {
 					fs = append(fs, d.reasoning)
@@ -1096,9 +1101,14 @@ func TestProbe_ZaiReasoningOverhead(t *testing.T) {
 					t.Logf("FINDING %s effort=%s size=%s: no clean sample; cut (floors) %v", model, level, sz.name, fs)
 					continue
 				}
-				s, p := quantiles(rs), quantiles(ps)
-				t.Logf("FINDING %s effort=%s prompt %d-%d: reasoning n=%d min=%d p50=%d p95=%d max=%d raw=%v; "+
-					"cut at the cap (floors, not counted) %v", model, level, p.min, p.max, len(rs),
+				prompt := "unreported"
+				if len(ps) > 0 {
+					p := quantiles(ps)
+					prompt = fmt.Sprintf("%d-%d", p.min, p.max)
+				}
+				s := quantiles(rs)
+				t.Logf("FINDING %s effort=%s size=%s prompt %s: reasoning n=%d min=%d p50=%d p95=%d max=%d raw=%v; "+
+					"cut at the cap (floors, not counted) %v", model, level, sz.name, prompt, len(rs),
 					s.min, s.p50, s.p95, s.max, rs, fs)
 			}
 			if len(pooled) == 0 {
@@ -1106,7 +1116,8 @@ func TestProbe_ZaiReasoningOverhead(t *testing.T) {
 			}
 			s := quantiles(pooled)
 			t.Logf("FINDING %s effort=%s all sizes: reasoning n=%d min=%d p50=%d p95=%d max=%d; "+
-				"max rounded up to 512 = %d; cut (floors) %v", model, level, len(pooled),
+				"this run's max rounded up to 512 = %d (the profile takes the max over all runs in "+
+				"FINDINGS.md); cut (floors) %v", model, level, len(pooled),
 				s.min, s.p50, s.p95, s.max, (s.max+511)/512*512, floors)
 		}
 	}
@@ -1115,8 +1126,10 @@ func TestProbe_ZaiReasoningOverhead(t *testing.T) {
 	// Sample-major, so a run cut short by the spend guard still holds a draw
 	// in every cell rather than all of some and none of others.
 	for i := 0; i < samples; i++ {
-		for _, sz := range sizes {
-			system, user := memoryRefreshPrompt(sz.tokens, i)
+		for j, sz := range sizes {
+			// A seed per (sample, size), so the three sizes are independent
+			// transcripts rather than prefixes of one another.
+			system, user := memoryRefreshPrompt(sz.tokens, i*len(sizes)+j)
 			for _, level := range levels {
 				b := body{
 					"model": model,
@@ -1173,7 +1186,7 @@ func TestProbe_ZaiReasoningOverhead(t *testing.T) {
 			n += len(cells[level+"/"+sz.name])
 		}
 		if n == 0 {
-			t.Skipf("inconclusive: effort=%s produced no clean sample", level)
+			t.Errorf("effort=%s produced no clean sample: no figure to read", level)
 		}
 	}
 }

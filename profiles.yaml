@@ -125,13 +125,11 @@ profiles:
       # old 1024 allowance (>=2834, >=2923, prompts up to 17.5k). Nothing
       # past 20k was measured, and a fixed per-level figure cannot follow
       # the input size.
-      # max NOT measured, a FLOOR: max thinks at least as long as high, so
-      # it takes high's figure rather than the 1024 default, which the notes
-      # below show is short (a 1024 cap at max produced zero content). The
-      # no-knob case resolves to default_effort max and reads it too. Same
-      # move as mimo-v2.6-flash's `default: 8192`: a budget above what was
-      # seen, not a depth.
-      overhead: {low: 1024, high: 5632, max: 5632}
+      # max ABSENT, NOT measured: it and the no-knob case (default_effort max)
+      # fall back to DefaultReasoningOverhead (1024), known short there (the
+      # notes: a 1024 cap at max produced zero content). The consumer that
+      # prompted this asks Balanced, never max.
+      overhead: {low: 1024, high: 5632}
       # MEASURED: reasoning arrived on this delta field on every probe.
       stream_field: reasoning_content
 
