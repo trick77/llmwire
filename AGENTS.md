@@ -87,8 +87,8 @@ dead workaround labelled dead rather than deleted.
 
 ## Git & CI
 
-- Gate: `ship check` (`ship` is the `ship()` from ship's README). Fresh clone:
-  `ship hooks` before the first push; without the pre-push hook a push skips the gate.
+- Gate: `ship check` (`ship` is the `ship()` from ship's README).
+- Fresh clone: `ship hooks` before the first push (check, conform and init install it too); without the pre-push hook a push skips the gate.
 - Branch + PR, never push to `master`.
 - Commit subjects + PR titles: Go style `area: what` (`profiles: …`, `stream: …`),
   gated by ship; release notes list them by area.
