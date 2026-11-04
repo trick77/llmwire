@@ -1,5 +1,9 @@
 # llmwire
 
+> **Moved.** llmwire now lives in [github.com/trick77/toolkit/llmwire](https://github.com/trick77/toolkit/tree/master/llmwire)
+> (`go get github.com/trick77/toolkit@latest`, import `github.com/trick77/toolkit/llmwire`). This repository is
+> archived; v0.2.2 is its last release.
+
 A dependency-light Go library for talking to **OpenAI-compatible** inference
 endpoints, and to Claude over Anthropic's own protocol — chat, tools, vision and
 embeddings — with each model's quirks kept as data rather than scattered through
